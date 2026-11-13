@@ -1,0 +1,50 @@
+{
+  "name": "tam-diagrams",
+  "version": "0.1.0",
+  "description": "SAP TAM block diagrams and UML class, use case, activity, state machine and sequence diagrams (Mermaid syntax), laid out with ELK and drawn as standalone SVG.",
+  "keywords": [
+    "architecture",
+    "diagram",
+    "elk",
+    "fmc",
+    "mermaid",
+    "svg",
+    "tam",
+    "uml"
+  ],
+  "license": "MIT",
+  "author": "Christian Heller",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hellerchr/tam-diagrams.git"
+  },
+  "homepage": "https://github.com/hellerchr/tam-diagrams#readme",
+  "files": [
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": "./src/index.ts",
+    "./layout": "./src/layout.ts",
+    "./samples/tam-examples": "./src/samples/tam-examples.ts",
+    "./samples/uml-examples": "./src/samples/uml-examples.ts",
+    "./samples/fuzz": "./src/samples/fuzz.ts"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit -p ."
+  },
+  "dependencies": {
+    "elkjs": "^0.9.3"
+  },
+  "devDependencies": {
+    "@types/node": "^25.9.9",
+    "jsdom": "^26.1.0",
+    "mermaid": "^12.2.0",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.12"
+  }
+}
