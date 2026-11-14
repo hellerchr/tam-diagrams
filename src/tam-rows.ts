@@ -1,6 +1,6 @@
 /** TAM multiplicity after parsing: a multiple element becomes a row of copies, with dots and pointers between them. */
 
-import type { TamDiagram, TamEdge, TamNode } from "./tam";
+import type { TamDiagram, TamEdge, TamNode } from "./tam.ts";
 
 /**
  * `...` multiplicity: the element becomes two copies with three dots between them, wrapped in an

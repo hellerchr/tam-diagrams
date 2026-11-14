@@ -1,8 +1,8 @@
 /** Drawing a scene as standalone SVG in a color theme. */
 
-import { type Point, type Scene, type SceneShape, type SceneText, STACK } from "./scene";
-import { MARKER_TRIM, markerSvg, round1 } from "./markers";
-import { polygonOf } from "./outline";
+import { type Point, type Scene, type SceneShape, type SceneText, STACK } from "./scene.ts";
+import { MARKER_TRIM, markerSvg, round1 } from "./markers.ts";
+import { polygonOf } from "./outline.ts";
 
 /**
  * Shared drawing primitives of the house diagram style (introduced by the TAM block diagram

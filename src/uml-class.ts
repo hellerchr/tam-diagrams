@@ -1,6 +1,6 @@
-import type { Direction } from "./elk";
-import type { MarkerKind } from "./markers";
-import type { Box, Scene } from "./scene";
+import type { Direction } from "./elk.ts";
+import type { MarkerKind } from "./markers.ts";
+import type { Box, Scene } from "./scene.ts";
 import {
   accessibilityLines,
   labelText,
@@ -9,7 +9,7 @@ import {
   STYLING,
   UmlError,
   unsupported,
-} from "./uml";
+} from "./uml.ts";
 
 /**
  * Class diagrams from Mermaid `classDiagram` sources, drawn in the TAM style (TAM standard 2.1.2 and

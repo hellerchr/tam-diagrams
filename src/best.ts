@@ -1,7 +1,7 @@
 /** Picking the best layout: scene metrics, the ELK strategies tried, the score, and the layout cache. */
 
-import { type Scene, segmentsCross } from "./scene";
-import { around, auditScene, type Segment, segmentsOf, SpatialGrid } from "./audit";
+import { type Scene, segmentsCross } from "./scene.ts";
+import { around, auditScene, type Segment, segmentsOf, SpatialGrid } from "./audit.ts";
 
 /** Layout quality of a scene: what bestScene scores, lower is better. */
 export interface Metrics {

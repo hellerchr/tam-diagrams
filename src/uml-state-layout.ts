@@ -1,6 +1,6 @@
 /** State machine diagrams: the layout with ELK, composite states, concurrent regions and notes. */
 
-import type { StateDiagram, StateNote, UmlState } from "./uml-state";
+import type { StateDiagram, StateNote, UmlState } from "./uml-state.ts";
 import {
   addText,
   addTitleLines,
@@ -12,13 +12,13 @@ import {
   SMALL,
   SMALL_LINE,
   wrap,
-} from "./text";
-import { type ElkLayout, type GraphEdge, type GraphNode, layoutGraph, type Placement } from "./elk";
-import { type Box, emptyScene, type Scene, type SceneShape } from "./scene";
-import { dodgeTitles, hugLabels, placeGuardLabel, smallSize, wrapSmall } from "./labels";
-import { addVertexPorts, END_ROOM, reversePostorder } from "./uml";
-import { addWire, attachEnds, spreadVertices, straightenScene } from "./wires";
-import { bestScene, FLOW_STRATEGIES } from "./best";
+} from "./text.ts";
+import { type ElkLayout, type GraphEdge, type GraphNode, layoutGraph, type Placement } from "./elk.ts";
+import { type Box, emptyScene, type Scene, type SceneShape } from "./scene.ts";
+import { dodgeTitles, hugLabels, placeGuardLabel, smallSize, wrapSmall } from "./labels.ts";
+import { addVertexPorts, END_ROOM, reversePostorder } from "./uml.ts";
+import { addWire, attachEnds, spreadVertices, straightenScene } from "./wires.ts";
+import { bestScene, FLOW_STRATEGIES } from "./best.ts";
 
 const PAD = 12,
   RADIUS = 10,

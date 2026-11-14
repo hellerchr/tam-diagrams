@@ -1,9 +1,9 @@
 /** Use case diagram lines: curved or straight links between actors and use cases, their ends, loops and labels. */
 
-import { crossesBox, crossesShape } from "./audit";
-import { smallLines, smallSize } from "./labels";
-import { markerBounds, type MarkerKind, markerPoints } from "./markers";
-import { entryPoint } from "./outline";
+import { crossesBox, crossesShape } from "./audit.ts";
+import { smallLines, smallSize } from "./labels.ts";
+import { markerBounds, type MarkerKind, markerPoints } from "./markers.ts";
+import { entryPoint } from "./outline.ts";
 import {
   type Box,
   centerOf,
@@ -15,8 +15,8 @@ import {
   type SceneShape,
   straddles,
   unit,
-} from "./scene";
-import type { Measure } from "./text";
+} from "./scene.ts";
+import type { Measure } from "./text.ts";
 
 /** Aims beside the centers (in steps of 9px across the line), so lines into one shape keep their ends apart. */
 const AIMS = [

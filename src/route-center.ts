@@ -1,6 +1,6 @@
 /** Geometry passes that center elements, fans, pairs, ends and wires on each other, and align layers. */
 
-import { type Box, grow, overlaps, type Point, segmentHits } from "./scene";
+import { type Box, grow, overlaps, type Point, segmentHits } from "./scene.ts";
 import {
   anchored,
   type Axis,
@@ -18,9 +18,9 @@ import {
   straightAcross,
   straightenRoute,
   tryRoute,
-} from "./route";
-import { slideIntoContainer, slideMarker } from "./route-straighten";
-import { widen } from "./route-spread";
+} from "./route.ts";
+import { slideIntoContainer, slideMarker } from "./route-straighten.ts";
+import { widen } from "./route-spread.ts";
 
 /** Whether a box lies within a frame across `cross`. */
 const within = (item: Box, frame: Box, cross: Axis) =>

@@ -1,6 +1,6 @@
-import type { Direction } from "./elk";
-import type { MarkerKind } from "./markers";
-import { accessibilityLines, labelText, type Level, prepare, UmlError, unsupported } from "./uml";
+import type { Direction } from "./elk.ts";
+import type { MarkerKind } from "./markers.ts";
+import { accessibilityLines, labelText, type Level, prepare, UmlError, unsupported } from "./uml.ts";
 
 /**
  * Use case diagrams from Mermaid `usecase-beta` sources, drawn as in the TAM flyer and standard

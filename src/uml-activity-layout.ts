@@ -1,6 +1,6 @@
 /** Flowcharts as UML activity diagrams: the node shapes, and the layout with ELK. */
 
-import { addWire, attachEnds, spreadVertices, straightenScene } from "./wires";
+import { addWire, attachEnds, spreadVertices, straightenScene } from "./wires.ts";
 import {
   dodgeTitles,
   hugLabels,
@@ -8,10 +8,10 @@ import {
   placeGuardLabel,
   smallSize,
   wrapSmall,
-} from "./labels";
-import { type ElkLayout, type GraphEdge, type GraphNode, layoutGraph } from "./elk";
-import { addVertexPorts, END_ROOM, reversePostorder } from "./uml";
-import { bestScene, FLOW_STRATEGIES } from "./best";
+} from "./labels.ts";
+import { type ElkLayout, type GraphEdge, type GraphNode, layoutGraph } from "./elk.ts";
+import { addVertexPorts, END_ROOM, reversePostorder } from "./uml.ts";
+import { bestScene, FLOW_STRATEGIES } from "./best.ts";
 import {
   addText,
   addTitleLines,
@@ -21,10 +21,10 @@ import {
   type Measure,
   SMALL,
   wrap,
-} from "./text";
-import { type Box, emptyScene, type Scene, type ShapeKind } from "./scene";
-import { MARKER_LENGTH, type MarkerKind } from "./markers";
-import type { FlowEdge, Flowchart, FlowNode, Marker } from "./uml-activity";
+} from "./text.ts";
+import { type Box, emptyScene, type Scene, type ShapeKind } from "./scene.ts";
+import { MARKER_LENGTH, type MarkerKind } from "./markers.ts";
+import type { FlowEdge, Flowchart, FlowNode, Marker } from "./uml-activity.ts";
 
 /**
  * Layout and drawing of flowcharts as UML activity diagrams with ELK; swimlane diagrams have their

@@ -1,4 +1,4 @@
-import type { Direction } from "./elk";
+import type { Direction } from "./elk.ts";
 import {
   accessibilityLines,
   labelText,
@@ -7,7 +7,7 @@ import {
   STYLING,
   UmlError,
   unsupported,
-} from "./uml";
+} from "./uml.ts";
 
 /**
  * State machine diagrams from Mermaid `stateDiagram-v2` sources, drawn as in the TAM flyer and

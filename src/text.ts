@@ -1,6 +1,6 @@
 /** Text in a scene: fonts, measuring, wrapping, and placing text, titles and notes. */
 
-import type { Box, Scene, SceneMarker, SceneShape, SceneText } from "./scene";
+import type { Box, Scene, SceneMarker, SceneShape, SceneText } from "./scene.ts";
 
 /** Adds a text to the scene with its box. */
 export function addText(

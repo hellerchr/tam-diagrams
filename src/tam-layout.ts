@@ -5,17 +5,17 @@
  * collisions.
  */
 
-import { parseTam, type TamDiagram } from "./tam";
-import { type Measure, textMeasure } from "./text";
-import type { Scene } from "./scene";
-import { bundledElk, type ElkLayout } from "./elk";
-import { collectFallbacks } from "./route";
-import { type LayoutOptions, tamGraph } from "./tam-graph";
-import { tamScene } from "./tam-scene";
-import { tamGeometry } from "./tam-geometry";
-import { bestScene, cachedLayout, COFFMAN, STRAIGHT } from "./best";
+import { parseTam, type TamDiagram } from "./tam.ts";
+import { type Measure, textMeasure } from "./text.ts";
+import type { Scene } from "./scene.ts";
+import { bundledElk, type ElkLayout } from "./elk.ts";
+import { collectFallbacks } from "./route.ts";
+import { type LayoutOptions, tamGraph } from "./tam-graph.ts";
+import { tamScene } from "./tam-scene.ts";
+import { tamGeometry } from "./tam-geometry.ts";
+import { bestScene, cachedLayout, COFFMAN, STRAIGHT } from "./best.ts";
 import type { ElkNode } from "elkjs/lib/elk-api";
-import { type DiagramColors, drawScene } from "./draw";
+import { type DiagramColors, drawScene } from "./draw.ts";
 
 export type { Scene };
 

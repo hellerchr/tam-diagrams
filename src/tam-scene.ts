@@ -11,8 +11,8 @@ import {
   type SceneWire,
   simplifyPath,
   unit,
-} from "./scene";
-import { fallback, outline } from "./route";
+} from "./scene.ts";
+import { fallback, outline } from "./route.ts";
 import {
   addText,
   breaks,
@@ -23,11 +23,11 @@ import {
   type Measure,
   SMALL,
   SMALL_LINE,
-} from "./text";
-import type { TamEdge } from "./tam";
-import { smallLines } from "./labels";
-import { protocolBoundaries } from "./tam-protocols";
-import { SOCKET } from "./markers";
+} from "./text.ts";
+import type { TamEdge } from "./tam.ts";
+import { smallLines } from "./labels.ts";
+import { protocolBoundaries } from "./tam-protocols.ts";
+import { SOCKET } from "./markers.ts";
 import {
   ASIDE,
   BALL,
@@ -42,7 +42,7 @@ import {
   type TamGeometry,
   type TamGraph,
   TITLE_TOP,
-} from "./tam-graph";
+} from "./tam-graph.ts";
 
 const add = (a: Point, b: Point, scale = 1) => ({ x: a.x + b.x * scale, y: a.y + b.y * scale });
 

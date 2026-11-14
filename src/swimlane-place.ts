@@ -1,8 +1,8 @@
 /** Swimlane activities, first stage: the lanes, rows and items sized and placed, and the sides where wires leave them. */
 
-import type { Box, Point } from "./scene";
-import type { Flowchart, FlowEdge } from "./uml-activity";
-import { FONT, LINE, type Measure, wrap } from "./text";
+import type { Box, Point } from "./scene.ts";
+import type { Flowchart, FlowEdge } from "./uml-activity.ts";
+import { FONT, LINE, type Measure, wrap } from "./text.ts";
 import {
   degrees,
   MARKERS,
@@ -10,10 +10,10 @@ import {
   type NodeBox,
   splitDecisions,
   splitFinals,
-} from "./uml-activity-layout";
-import { reversePostorder } from "./uml";
-import { smallSize, wrapSmall } from "./labels";
-import { MARKER_LENGTH } from "./markers";
+} from "./uml-activity-layout.ts";
+import { reversePostorder } from "./uml.ts";
+import { smallSize, wrapSmall } from "./labels.ts";
+import { MARKER_LENGTH } from "./markers.ts";
 
 /**
  * Swimlane activity diagrams (`swimlane-beta`): one lane per top-level subgraph, as the TAM flyer

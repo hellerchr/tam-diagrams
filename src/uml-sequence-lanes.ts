@@ -1,10 +1,10 @@
 /** Sequence diagram lanes: participant headers and the lane positions solved from what messages and frames need. */
 
-import type { Box, Scene } from "./scene";
-import type { SequenceDiagram } from "./uml-sequence";
-import { addText, FONT, LINE, type Measure, SMALL, wrap } from "./text";
-import { smallSize } from "./labels";
-import { frameBoxes, type LaneFrame } from "./lane-frames";
+import type { Box, Scene } from "./scene.ts";
+import type { SequenceDiagram } from "./uml-sequence.ts";
+import { addText, FONT, LINE, type Measure, SMALL, wrap } from "./text.ts";
+import { smallSize } from "./labels.ts";
+import { frameBoxes, type LaneFrame } from "./lane-frames.ts";
 
 export const GAP = 30,
   BAR = 10,

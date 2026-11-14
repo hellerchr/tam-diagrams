@@ -58,7 +58,9 @@ img.src = svgUrl(svg);
   `{ measure }` to `renderUml`, or run under jsdom as the tests do.
 
 The package ships TypeScript sources: use it with a bundler or runtime that compiles TypeScript
-(Vite, esbuild, Bun, Deno, Node 23+ with type stripping).
+(Vite, esbuild, Bun, Deno). Node with type stripping (tested on Node 24) runs them from a source
+checkout, but does not strip types in files under `node_modules`, so a project that installs the
+package needs one of the others.
 
 ## API
 

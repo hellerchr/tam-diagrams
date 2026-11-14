@@ -3,7 +3,7 @@
  * are in outline.ts, text in text.ts, markers in markers.ts and the SVG drawer in draw.ts.
  */
 
-import type { MarkerKind } from "./markers";
+import type { MarkerKind } from "./markers.ts";
 
 /**
  * A laid-out diagram, independent of its type: positioned shapes, wires with end markers, decorative

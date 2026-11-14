@@ -1,14 +1,14 @@
 /** Swimlane activity diagrams: lanes, rows and a grid router of their own. */
 
-import type { Flowchart } from "./uml-activity";
-import { addText, finishBounds, FONT, LINE, type Measure } from "./text";
-import { emptyScene, type Scene, unit } from "./scene";
-import { drawNode, MARKERS } from "./uml-activity-layout";
-import type { Placement } from "./elk";
-import { hugLabels, smallLines } from "./labels";
-import { attachEnds, spreadVertices, straightenScene } from "./wires";
-import { placeSwimlanes } from "./swimlane-place";
-import { routeSwimlanes } from "./swimlane-routes";
+import type { Flowchart } from "./uml-activity.ts";
+import { addText, finishBounds, FONT, LINE, type Measure } from "./text.ts";
+import { emptyScene, type Scene, unit } from "./scene.ts";
+import { drawNode, MARKERS } from "./uml-activity-layout.ts";
+import type { Placement } from "./elk.ts";
+import { hugLabels, smallLines } from "./labels.ts";
+import { attachEnds, spreadVertices, straightenScene } from "./wires.ts";
+import { placeSwimlanes } from "./swimlane-place.ts";
+import { routeSwimlanes } from "./swimlane-routes.ts";
 
 export async function layoutSwimlanes(original: Flowchart, measure: Measure): Promise<Scene> {
   const placed = placeSwimlanes(original, measure);

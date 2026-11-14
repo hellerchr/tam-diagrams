@@ -1,11 +1,11 @@
 /** ELK layered layout for node-and-edge diagrams, and the wire, label and marker placement on top of it. */
 
 import type { ElkExtendedEdge, ElkLabel, ElkNode } from "elkjs/lib/elk-api";
-import type { Box, Point } from "./scene";
-import type { Geometry } from "./route";
-import { straighten } from "./route-straighten";
-import { balanceElements, spreadJogs } from "./route-spread";
-import { alignLayers, centerElements, centerEnds, centerFans, centerWires } from "./route-center";
+import type { Box, Point } from "./scene.ts";
+import type { Geometry } from "./route.ts";
+import { straighten } from "./route-straighten.ts";
+import { balanceElements, spreadJogs } from "./route-spread.ts";
+import { alignLayers, centerElements, centerEnds, centerFans, centerWires } from "./route-center.ts";
 
 /**
  * Layered graph layout with ELK for every graph-shaped diagram type, handling ELK's quirks the way

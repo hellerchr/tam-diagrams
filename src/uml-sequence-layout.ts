@@ -1,10 +1,10 @@
 /** Sequence diagrams: lane widths from a column solver, messages, activation bars, frames and notes. */
 
-import type { MessageEvent, SequenceDiagram } from "./uml-sequence";
-import { addText, drawNote, finishBounds, FONT, LINE, type Measure, SMALL } from "./text";
-import { type Box, emptyScene, overlaps, type Point, type Scene, unit } from "./scene";
-import { UmlError } from "./uml";
-import { smallLines, smallSize } from "./labels";
+import type { MessageEvent, SequenceDiagram } from "./uml-sequence.ts";
+import { addText, drawNote, finishBounds, FONT, LINE, type Measure, SMALL } from "./text.ts";
+import { type Box, emptyScene, overlaps, type Point, type Scene, unit } from "./scene.ts";
+import { UmlError } from "./uml.ts";
+import { smallLines, smallSize } from "./labels.ts";
 import {
   BADGE,
   BADGE_GAP,
@@ -14,7 +14,7 @@ import {
   NEST,
   SELF,
   sequenceLanes,
-} from "./uml-sequence-lanes";
+} from "./uml-sequence-lanes.ts";
 import {
   drawFrame,
   frameBoxes,
@@ -23,7 +23,7 @@ import {
   placeGuard,
   placeLabel,
   TAB,
-} from "./lane-frames";
+} from "./lane-frames.ts";
 
 export async function layoutSequenceDiagram(
   diagram: SequenceDiagram,

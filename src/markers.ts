@@ -1,6 +1,6 @@
 /** Arrowheads and other wire-end markers: their size, outline and SVG. */
 
-import type { Box, Point } from "./scene";
+import type { Box, Point } from "./scene.ts";
 
 export const round1 = (value: number) => Math.round(value * 10) / 10;
 

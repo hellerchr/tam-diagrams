@@ -10,14 +10,14 @@ import {
   type SceneWire,
   segmentsCross,
   unit,
-} from "./scene";
-import { clipToOutline, entryPoint, outlineOf } from "./outline";
-import { markerBounds, type MarkerKind } from "./markers";
-import { type Measure } from "./text";
-import type { Placement } from "./elk";
-import { followLabel, smallLines } from "./labels";
-import { crossesBox } from "./audit";
-import { bendCandidates, runsAlong } from "./route";
+} from "./scene.ts";
+import { clipToOutline, entryPoint, outlineOf } from "./outline.ts";
+import { markerBounds, type MarkerKind } from "./markers.ts";
+import { type Measure } from "./text.ts";
+import type { Placement } from "./elk.ts";
+import { followLabel, smallLines } from "./labels.ts";
+import { crossesBox } from "./audit.ts";
+import { bendCandidates, runsAlong } from "./route.ts";
 
 /**
  * Turns an ELK placement into scene wires: ends meet the real outline of round,
