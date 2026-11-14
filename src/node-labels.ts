@@ -1,7 +1,7 @@
 /** A node's own labels (ELK's outside labels, such as notes) and how they move with it. */
 
-import { type Box } from "./scene";
-import { type Axis, type Geometry, other, size, spanBox } from "./route";
+import { type Box, grow, overlaps, segmentHits } from "./scene";
+import { type Axis, type Geometry, other, segments, size, spanBox } from "./route";
 
 /** The smallest box around a node and its labels. */
 export function withLabels(box: Box, labels: Box[]): Box {
@@ -64,6 +64,52 @@ export function startAmong(
   }
   if (labels.length && low > high) return undefined;
   return Math.min(Math.max(target - box[size(axis)] / 2, low), high);
+}
+
+/**
+ * Whether a node's own labels, moved by `shift` along `axis` with it, would land on another element
+ * (at the node spacing), on text or on a wire of another connection (`own` are the node's connections),
+ * or leave a container they are inside.
+ */
+export function labelsBlocked(
+  geometry: Geometry,
+  id: string,
+  own: Set<string>,
+  axis: Axis,
+  shift: number,
+): boolean {
+  const labels = geometry.nodeLabels.get(id) ?? [];
+  if (!labels.length) return false;
+  const holders = geometry.ancestors.get(id) ?? [],
+    frames = holders
+      .filter((item) => geometry.containers.has(item))
+      .map((item) => geometry.boxes.get(item)!),
+    solids = [
+      ...[...geometry.leaves, ...geometry.markers].filter((item) => item !== id),
+      ...[...geometry.containers].filter((item) => !holders.includes(item)),
+    ].map((item) => geometry.boxes.get(item)!),
+    texts = [
+      ...geometry.titles,
+      ...[...geometry.nodeLabels].filter(([item]) => item !== id).flatMap(([, list]) => list),
+      ...[...geometry.edgeLabels].filter(([edge]) => !own.has(edge)).map(([, label]) => label),
+    ],
+    wires = [...geometry.routes]
+      .filter(([edge]) => !own.has(edge))
+      .flatMap(([, route]) => segments(route));
+  const inside = (label: Box, frame: Box) =>
+    label.x >= frame.x &&
+    label.y >= frame.y &&
+    label.x + label.width <= frame.x + frame.width &&
+    label.y + label.height <= frame.y + frame.height;
+  return labels.some((label) => {
+    const place = { ...label, [axis]: label[axis] + shift };
+    return (
+      solids.some((item) => overlaps(grow(place, geometry.spacing.node), item)) ||
+      texts.some((item) => overlaps(grow(place, 4), item)) ||
+      wires.some(([c, d]) => segmentHits(c, d, grow(place, 4))) ||
+      frames.some((frame) => inside(label, frame) && !inside(place, frame))
+    );
+  });
 }
 
 /** Moves a node's own labels by `shift` along `axis`, as the node itself moved. */
