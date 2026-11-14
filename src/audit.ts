@@ -12,7 +12,7 @@ import {
   type SceneText,
   type SceneWire,
   segmentsCross,
-} from "./scene";
+} from "./scene.ts";
 import {
   boxInsideOutline,
   insideOutline,
@@ -20,9 +20,9 @@ import {
   outlineOf,
   polygonOf,
   segmentDistance,
-} from "./outline";
-import { markerBounds, markerPoints } from "./markers";
-import { textGroupBox } from "./text";
+} from "./outline.ts";
+import { markerBounds, markerPoints } from "./markers.ts";
+import { textGroupBox } from "./text.ts";
 
 /**
  * Geometric checks on a laid-out scene (scene.ts): text that leaves its shape or collides
@@ -48,7 +48,10 @@ export interface Finding {
  */
 export class SpatialGrid<T> {
   private readonly cells = new Map<number, T[]>();
-  constructor(private readonly size = 64) {}
+  private readonly size: number;
+  constructor(size = 64) {
+    this.size = size;
+  }
   private keys(box: Box): number[] {
     const keys: number[] = [];
     const [x0, x1] = [Math.floor(box.x / this.size), Math.floor((box.x + box.width) / this.size)];

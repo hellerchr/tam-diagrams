@@ -1,4 +1,4 @@
-import type { Direction, GraphEdge, GraphNode, GraphPort } from "./elk";
+import type { Direction, GraphEdge, GraphNode, GraphPort } from "./elk.ts";
 
 /**
  * Shared parsing for the Mermaid diagram types the built-in UML renderer draws: header detection,
@@ -17,12 +17,12 @@ export type Level = "conceptual" | "design";
  * such diagrams are rendered by Mermaid instead.
  */
 export class UmlError extends Error {
-  constructor(
-    public line: number,
-    message: string,
-    public unsupported = false,
-  ) {
+  line: number;
+  unsupported: boolean;
+  constructor(line: number, message: string, unsupported = false) {
     super(line ? `Line ${line}: ${message}` : message);
+    this.line = line;
+    this.unsupported = unsupported;
   }
 }
 /** Throws the `unsupported` UmlError for valid Mermaid syntax the renderer leaves to Mermaid. */

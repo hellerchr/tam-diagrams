@@ -1,7 +1,7 @@
 /** Sequence diagrams, and the column (lifeline) solver they lay out with. */
 
-import type { MarkerKind } from "./markers";
-import { accessibilityLines, labelText, type Level, prepare, UmlError, unsupported } from "./uml";
+import type { MarkerKind } from "./markers.ts";
+import { accessibilityLines, labelText, type Level, prepare, UmlError, unsupported } from "./uml.ts";
 
 /**
  * Sequence diagrams from Mermaid `sequenceDiagram` sources, drawn as in the TAM flyer and standard

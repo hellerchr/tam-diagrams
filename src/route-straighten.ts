@@ -16,8 +16,8 @@ import {
   straightenRoute,
   tryRoute,
   zRoute,
-} from "./route";
-import { type Box, grow, overlaps, type Point, segmentHits } from "./scene";
+} from "./route.ts";
+import { type Box, grow, overlaps, type Point, segmentHits } from "./scene.ts";
 
 export function straighten(geometry: Geometry, vertical: boolean) {
   const main: Axis = vertical ? "y" : "x";

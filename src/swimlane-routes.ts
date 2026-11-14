@@ -1,11 +1,11 @@
 /** Swimlane activities, second stage: wires routed through the free channels between items, then their labels and guards. */
 
-import type { Measure } from "./text";
-import { type Box, grow, overlaps, type Point, segmentHits, simplifyPath, unit } from "./scene";
-import { markerBounds } from "./markers";
-import { guardText, isDecision, MARKERS } from "./uml-activity-layout";
-import { besideSegments, longestFirst, smallSize, wrapSmall } from "./labels";
-import type { FlowEdge } from "./uml-activity";
+import type { Measure } from "./text.ts";
+import { type Box, grow, overlaps, type Point, segmentHits, simplifyPath, unit } from "./scene.ts";
+import { markerBounds } from "./markers.ts";
+import { guardText, isDecision, MARKERS } from "./uml-activity-layout.ts";
+import { besideSegments, longestFirst, smallSize, wrapSmall } from "./labels.ts";
+import type { FlowEdge } from "./uml-activity.ts";
 import {
   BEND,
   CLEAR,
@@ -14,7 +14,7 @@ import {
   type Side,
   type SwimlanePlacement,
   type SwimlaneRoutes,
-} from "./swimlane-place";
+} from "./swimlane-place.ts";
 
 /** Routes every wire through the free channels between items, then places the wire labels and guards. */
 export function routeSwimlanes(placed: SwimlanePlacement, measure: Measure): SwimlaneRoutes {

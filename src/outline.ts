@@ -1,6 +1,6 @@
 /** Shape outlines: the polygon of each shape kind, inside tests, and where a wire enters a shape. */
 
-import { type Box, type Point, type ShapeKind, unit } from "./scene";
+import { type Box, type Point, type ShapeKind, unit } from "./scene.ts";
 
 /** Shapes whose outline is not their bounding box. */
 type Outline = "box" | "ellipse" | "diamond" | "polygon";

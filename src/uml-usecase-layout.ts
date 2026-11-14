@@ -1,7 +1,7 @@
 /** Use case diagrams: actors and use cases in rows inside their system boundaries, laid out from the longest paths. */
 
-import { dodgeTitles, smallSize, wrapSmall } from "./labels";
-import { type Box, centerOf, distance, emptyScene, type Scene } from "./scene";
+import { dodgeTitles, smallSize, wrapSmall } from "./labels.ts";
+import { type Box, centerOf, distance, emptyScene, type Scene } from "./scene.ts";
 import {
   addText,
   addTitleLines,
@@ -12,10 +12,10 @@ import {
   type Measure,
   SMALL,
   wrap,
-} from "./text";
-import { reversePostorder } from "./uml";
-import type { Boundary, UseCaseDiagram } from "./uml-usecase";
-import { drawLine, drawLoop, labelLine, type Link } from "./uml-usecase-lines";
+} from "./text.ts";
+import { reversePostorder } from "./uml.ts";
+import type { Boundary, UseCaseDiagram } from "./uml-usecase.ts";
+import { drawLine, drawLoop, labelLine, type Link } from "./uml-usecase-lines.ts";
 
 const FIGURE = { width: 26, height: 42 };
 

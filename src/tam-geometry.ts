@@ -1,12 +1,12 @@
 /** TAM layout, second stage: ELK's result read into boxes and routes, then the geometry passes that straighten wires. */
 
-import { type Box, grow, type Point } from "./scene";
-import { crossesBox as crossesOpenBox } from "./audit";
+import { type Box, grow, type Point } from "./scene.ts";
+import { crossesBox as crossesOpenBox } from "./audit.ts";
 import type { ElkNode } from "elkjs/lib/elk-api";
-import { FONT, LINE, type Measure, SMALL } from "./text";
-import { readLayout } from "./elk";
-import { alignDelegations, alignProtocols, straighten } from "./route-straighten";
-import { balanceElements, spreadJogs } from "./route-spread";
+import { FONT, LINE, type Measure, SMALL } from "./text.ts";
+import { readLayout } from "./elk.ts";
+import { alignDelegations, alignProtocols, straighten } from "./route-straighten.ts";
+import { balanceElements, spreadJogs } from "./route-spread.ts";
 import {
   alignLayers,
   centerElements,
@@ -14,8 +14,8 @@ import {
   centerFans,
   centerPairs,
   centerWires,
-} from "./route-center";
-import { outline } from "./route";
+} from "./route-center.ts";
+import { outline } from "./route.ts";
 import {
   BULGE,
   EDGE_SPACING,
@@ -25,7 +25,7 @@ import {
   SHADOW,
   type TamGeometry,
   type TamGraph,
-} from "./tam-graph";
+} from "./tam-graph.ts";
 
 /** Whether a segment passes through the box, not just along its border. */
 const crossesBox = (a: Point, b: Point, box: Box) => crossesOpenBox(a, b, grow(box, -1));

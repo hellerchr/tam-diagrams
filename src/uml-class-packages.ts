@@ -1,6 +1,6 @@
 /** Class diagram layout helpers: packages as folders, straight runs of relations, end labels and merged inheritance trees. */
 
-import { crossesBox } from "./audit";
+import { crossesBox } from "./audit.ts";
 import {
   type Graph,
   type GraphEdge,
@@ -11,10 +11,10 @@ import {
   type LayoutOptions,
   orthogonal,
   type Placement,
-} from "./elk";
-import { smallLines, smallSize } from "./labels";
-import { MARKER_LENGTH, markerBounds } from "./markers";
-import { runsAlong } from "./route";
+} from "./elk.ts";
+import { smallLines, smallSize } from "./labels.ts";
+import { MARKER_LENGTH, markerBounds } from "./markers.ts";
+import { runsAlong } from "./route.ts";
 import {
   type Box,
   distance,
@@ -26,8 +26,8 @@ import {
   segmentsCross,
   simplifyPath,
   unit,
-} from "./scene";
-import type { Measure } from "./text";
+} from "./scene.ts";
+import type { Measure } from "./text.ts";
 
 /**
  * Packages side by side: each top-level container is laid out on its own along the flow, then the

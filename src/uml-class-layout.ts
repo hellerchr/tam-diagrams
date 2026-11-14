@@ -1,6 +1,6 @@
 /** Class diagrams: measuring classes and laying them out with ELK, with notes, lollipops and self-relations. */
 
-import { bestScene, STRATEGIES } from "./best";
+import { bestScene, STRATEGIES } from "./best.ts";
 import {
   type ElkLayout,
   type Graph,
@@ -8,10 +8,10 @@ import {
   type GraphNode,
   layoutGraph,
   type LayoutOptions,
-} from "./elk";
-import { dodgeTitles, hugLabels, smallSize, wrapSmall } from "./labels";
-import { MARKER_LENGTH, type MarkerKind } from "./markers";
-import { emptyScene, type Scene, type SceneShape } from "./scene";
+} from "./elk.ts";
+import { dodgeTitles, hugLabels, smallSize, wrapSmall } from "./labels.ts";
+import { MARKER_LENGTH, type MarkerKind } from "./markers.ts";
+import { emptyScene, type Scene, type SceneShape } from "./scene.ts";
 import {
   addText,
   addTitleLines,
@@ -22,8 +22,8 @@ import {
   type Measure,
   SMALL,
   wrap,
-} from "./text";
-import { addWire, attachEnds, straightenScene } from "./wires";
+} from "./text.ts";
+import { addWire, attachEnds, straightenScene } from "./wires.ts";
 import {
   type ClassDiagram,
   type ClassMember,
@@ -31,8 +31,8 @@ import {
   generics,
   type Relation,
   type UmlClass,
-} from "./uml-class";
-import { type EndLabel, layoutPackages, mergeTrees, placeEndLabels } from "./uml-class-packages";
+} from "./uml-class.ts";
+import { type EndLabel, layoutPackages, mergeTrees, placeEndLabels } from "./uml-class-packages.ts";
 
 const PAD = 10,
   MEMBER_LINE = 16,

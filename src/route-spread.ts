@@ -1,6 +1,6 @@
 /** Geometry passes that spread wire jogs apart and balance elements in their containers. */
 
-import { type Box, grow, overlaps, type Point, segmentHits } from "./scene";
+import { type Box, grow, overlaps, type Point, segmentHits } from "./scene.ts";
 import {
   anchored,
   type Axis,
@@ -16,8 +16,8 @@ import {
   size,
   spanBox,
   straightAcross,
-} from "./route";
-import { clearTitles, slideIntoContainer, slideMarker } from "./route-straighten";
+} from "./route.ts";
+import { clearTitles, slideIntoContainer, slideMarker } from "./route-straighten.ts";
 
 /** A step this close to a container's border counts as lying on it. */
 const BORDER_REACH = 6;

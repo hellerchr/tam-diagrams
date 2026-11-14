@@ -4,7 +4,7 @@
  * and the best-of-several-strategies search, and the shared parsing of Mermaid sources. Also the
  * TAM layout steps renderTam runs.
  */
-export { addWire, attachEnds, straightenScene } from "./wires";
+export { addWire, attachEnds, straightenScene } from "./wires.ts";
 export {
   type Direction,
   type Graph,
@@ -16,12 +16,12 @@ export {
   type LayoutOptions,
   orthogonal,
   type Placement,
-} from "./elk";
-export { dodgeTitles, hugLabels, smallLines, smallSize, wrapSmall } from "./labels";
-export { runsAlong } from "./route";
-export { bestScene, cachedLayout, STRATEGIES } from "./best";
-export { crossesBox, crossesShape } from "./audit";
-export { addText, addTitleLines, drawNote, finishBounds, FONT, LINE, SMALL, wrap } from "./text";
+} from "./elk.ts";
+export { dodgeTitles, hugLabels, smallLines, smallSize, wrapSmall } from "./labels.ts";
+export { runsAlong } from "./route.ts";
+export { bestScene, cachedLayout, STRATEGIES } from "./best.ts";
+export { crossesBox, crossesShape } from "./audit.ts";
+export { addText, addTitleLines, drawNote, finishBounds, FONT, LINE, SMALL, wrap } from "./text.ts";
 export {
   type Box,
   centerOf,
@@ -33,10 +33,10 @@ export {
   type SceneShape,
   segmentsCross,
   unit,
-} from "./scene";
-export { entryPoint } from "./outline";
-export { MARKER_LENGTH, markerBounds, type MarkerKind, markerPoints } from "./markers";
-export { mix, tones } from "./draw";
+} from "./scene.ts";
+export { entryPoint } from "./outline.ts";
+export { MARKER_LENGTH, markerBounds, type MarkerKind, markerPoints } from "./markers.ts";
+export { mix, tones } from "./draw.ts";
 export {
   accessibilityLines,
   labelText,
@@ -45,5 +45,5 @@ export {
   reversePostorder,
   STYLING,
   unsupported,
-} from "./uml";
-export { bestLayout, layoutTam } from "./tam-layout";
+} from "./uml.ts";
+export { bestLayout, layoutTam } from "./tam-layout.ts";

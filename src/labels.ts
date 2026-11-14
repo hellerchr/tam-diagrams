@@ -10,10 +10,10 @@ import {
   type SceneText,
   straddles,
   unit,
-} from "./scene";
-import { breaks, type Measure, SMALL, SMALL_LINE, textBox, textGroupBox, wrap } from "./text";
-import { markerBounds } from "./markers";
-import { crossesBox } from "./audit";
+} from "./scene.ts";
+import { breaks, type Measure, SMALL, SMALL_LINE, textBox, textGroupBox, wrap } from "./text.ts";
+import { markerBounds } from "./markers.ts";
+import { crossesBox } from "./audit.ts";
 
 /** A small label of one or more lines centered on `y`, with a halo. */
 export function smallLines(

@@ -1,8 +1,8 @@
 /** Frames spanning lanes (fragments of a sequence, regions of an activity), their guards, notes and labels beside connections. */
 
-import type { Box, Point, Scene } from "./scene";
-import { besideSegments, longestFirst } from "./labels";
-import { addText, type Measure, SMALL, SMALL_LINE } from "./text";
+import type { Box, Point, Scene } from "./scene.ts";
+import { besideSegments, longestFirst } from "./labels.ts";
+import { addText, type Measure, SMALL, SMALL_LINE } from "./text.ts";
 
 /**
  * A spot for a label beside a connection: along its segments (longest first, or in the given

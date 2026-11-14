@@ -3,39 +3,39 @@
  * and sequence diagrams of Mermaid, laid out with ELK and drawn as standalone SVG in one style.
  * Depends only on elkjs. See README.md.
  */
-import { cachedLayout } from "./best";
-import type { ElkLayout } from "./elk";
-import { type DiagramColors, drawScene } from "./draw";
-import { type Measure, textMeasure } from "./text";
-import { type Scene } from "./scene";
-import { detectUml, UmlError, type UmlKind } from "./uml";
-import { layoutStateDiagram } from "./uml-state-layout";
-import { parseStateDiagram } from "./uml-state";
-import { parseFlowchart } from "./uml-activity";
-import { layoutFlowchart } from "./uml-activity-layout";
-import { layoutSwimlanes } from "./uml-swimlanes";
-import { layoutSequenceDiagram } from "./uml-sequence-layout";
-import { parseSequenceDiagram } from "./uml-sequence";
+import { cachedLayout } from "./best.ts";
+import type { ElkLayout } from "./elk.ts";
+import { type DiagramColors, drawScene } from "./draw.ts";
+import { type Measure, textMeasure } from "./text.ts";
+import { type Scene } from "./scene.ts";
+import { detectUml, UmlError, type UmlKind } from "./uml.ts";
+import { layoutStateDiagram } from "./uml-state-layout.ts";
+import { parseStateDiagram } from "./uml-state.ts";
+import { parseFlowchart } from "./uml-activity.ts";
+import { layoutFlowchart } from "./uml-activity-layout.ts";
+import { layoutSwimlanes } from "./uml-swimlanes.ts";
+import { layoutSequenceDiagram } from "./uml-sequence-layout.ts";
+import { parseSequenceDiagram } from "./uml-sequence.ts";
 import {
   type ClassDiagram,
   type ClassView,
   foldClassDiagram,
   overview,
   parseClassDiagram,
-} from "./uml-class";
-import { layoutClassDiagram } from "./uml-class-layout";
-import { parseUseCaseDiagram } from "./uml-usecase";
-import { layoutUseCaseDiagram } from "./uml-usecase-layout";
+} from "./uml-class.ts";
+import { layoutClassDiagram } from "./uml-class-layout.ts";
+import { parseUseCaseDiagram } from "./uml-usecase.ts";
+import { layoutUseCaseDiagram } from "./uml-usecase-layout.ts";
 
-export { parseTam, TamError, type TamDiagram } from "./tam";
-export { renderTam, type TamPicture } from "./tam-layout";
-export { detectUml, UmlError, type UmlKind } from "./uml";
-export { drawScene, type DiagramColors } from "./draw";
-export { textMeasure, type Measure } from "./text";
-export { type Scene } from "./scene";
-export { auditScene, type Finding } from "./audit";
-export { measureScene, type Metrics } from "./best";
-export { bundledElk, elkWorkerPool, type ElkLayout } from "./elk";
+export { parseTam, TamError, type TamDiagram } from "./tam.ts";
+export { renderTam, type TamPicture } from "./tam-layout.ts";
+export { detectUml, UmlError, type UmlKind } from "./uml.ts";
+export { drawScene, type DiagramColors } from "./draw.ts";
+export { textMeasure, type Measure } from "./text.ts";
+export { type Scene } from "./scene.ts";
+export { auditScene, type Finding } from "./audit.ts";
+export { measureScene, type Metrics } from "./best.ts";
+export { bundledElk, elkWorkerPool, type ElkLayout } from "./elk.ts";
 export {
   classPartAt,
   classPartBox,
@@ -44,7 +44,7 @@ export {
   type ClassDiagram,
   type ClassPart,
   type ClassView,
-} from "./uml-class";
+} from "./uml-class.ts";
 
 /** A rendered SVG as an image source; SVG is shown in an image context, never inserted into the page. */
 export const svgUrl = (svg: string) =>

@@ -1,12 +1,12 @@
 /** TAM layout, first stage: the diagram's sizes and spacing, its channel and connector nodes, and the ELK graph built from them. */
 
-import { type Box, type Point, STACK } from "./scene";
-import type { TamDiagram, TamNode } from "./tam";
-import { edgeOwner, type ElkLayout, layeredOptions } from "./elk";
+import { type Box, type Point, STACK } from "./scene.ts";
+import type { TamDiagram, TamNode } from "./tam.ts";
+import { edgeOwner, type ElkLayout, layeredOptions } from "./elk.ts";
 import type { ElkExtendedEdge, ElkLabel, ElkNode } from "elkjs/lib/elk-api";
-import { FONT, LINE, type Measure, SMALL, wrap } from "./text";
-import { MARKER_LENGTH } from "./markers";
-import { smallSize } from "./labels";
+import { FONT, LINE, type Measure, SMALL, wrap } from "./text.ts";
+import { MARKER_LENGTH } from "./markers.ts";
+import { smallSize } from "./labels.ts";
 
 export const PAD = 14,
   WRAP = 168,

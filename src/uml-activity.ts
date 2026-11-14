@@ -1,6 +1,6 @@
 /** Flowcharts and activity diagrams: the Mermaid syntax. uml-activity-layout.ts lays flowcharts out, uml-swimlanes.ts swimlane diagrams. */
 
-import type { Direction } from "./elk";
+import type { Direction } from "./elk.ts";
 import {
   accessibilityLines,
   labelText,
@@ -9,7 +9,7 @@ import {
   STYLING,
   UmlError,
   unsupported,
-} from "./uml";
+} from "./uml.ts";
 
 /**
  * Mermaid flowcharts (`flowchart`, `graph`) and swimlane activity diagrams (`swimlane-beta`) read

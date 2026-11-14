@@ -1,10 +1,10 @@
 /** SAP TAM protocol boundaries: dashed lines through the channels that use one protocol. */
 
-import { type Box, grow, overlaps, type Point, type Scene, type SceneShape } from "./scene";
-import { type Measure, SMALL, textBox } from "./text";
-import { SOCKET } from "./markers";
-import { fallback } from "./route";
-import type { TamDiagram } from "./tam";
+import { type Box, grow, overlaps, type Point, type Scene, type SceneShape } from "./scene.ts";
+import { type Measure, SMALL, textBox } from "./text.ts";
+import { SOCKET } from "./markers.ts";
+import { fallback } from "./route.ts";
+import type { TamDiagram } from "./tam.ts";
 
 /** Shapes that mark connections rather than stand for elements. */
 const MARKS = new Set<SceneShape["kind"]>(["circle", "pointer", "dots"]);

@@ -1,5 +1,5 @@
-import { type Box, distance, grow, overlaps, type Point, segmentHits } from "./scene";
-import { MARKER_LENGTH } from "./markers";
+import { type Box, distance, grow, overlaps, type Point, segmentHits } from "./scene.ts";
+import { MARKER_LENGTH } from "./markers.ts";
 
 /**
  * Geometry passes after ELK, shared by every diagram type: connections become single straight
