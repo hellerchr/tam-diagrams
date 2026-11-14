@@ -179,7 +179,11 @@ const unquote = (text: string) => text.trim().replace(/^"(.*)"$/, "$1");
 
 /** Parses a TAM source (docs/tam.md); throws TamError with the line of the first error. */
 export function parseTam(source: string): TamDiagram {
-  if (source.length > MAX_TAM_CHARS || source.split("\n").length > 400)
+  // CRLF and a lone CR end a line like LF (as in uml.ts); `.` stops at `\r`, so a CRLF line would
+  // keep its `%%` comment.
+  // A final newline ends the last line; it does not start another one.
+  const lines = source.replace(/\r\n?/g, "\n").replace(/\n$/, "").split("\n");
+  if (source.length > MAX_TAM_CHARS || lines.length > 400)
     throw new TamError(0, "Diagram exceeds the limit of 20,000 characters or 400 lines.");
   const diagram: TamDiagram = { direction: "TB", nodes: new Map(), roots: [], edges: [] };
   const stack: TamNode[] = [];
@@ -203,7 +207,7 @@ export function parseTam(source: string): TamDiagram {
     else diagram.roots.push(node.id);
   };
 
-  source.split("\n").forEach((text, index) => {
+  lines.forEach((text, index) => {
     const line = index + 1;
     const statement = text.replace(/%%.*$/, "").trim();
     if (!statement) return;

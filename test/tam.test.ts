@@ -3,7 +3,7 @@ import { parseTam } from "../src/tam";
 import { renderTam } from "../src/tam-layout";
 import { TAM_EXAMPLES } from "../src/samples/tam-examples";
 import { auditScene } from "../src/audit";
-import { colors } from "./fixtures";
+import { colors, parseError } from "./fixtures";
 
 const kinds = (source: string) =>
   parseTam(source).edges.map((edge) => `${edge.source} ${edge.kind} ${edge.target}`);
@@ -239,6 +239,32 @@ cart requires IStock`);
 
   it("limits diagram size", () => {
     expect(() => parseTam("agent a\n".repeat(401))).toThrow("exceeds the limit");
+  });
+
+  it.each([
+    ["with a trailing newline", "\n"],
+    ["without one", ""],
+  ])("accepts exactly 400 lines %s and rejects 401", (_name, ending) => {
+    const lines = (count: number) => Array(count).fill("%% note").join("\n") + ending;
+    expect(parseTam(lines(400)).nodes.size).toBe(0);
+    expect(() => parseTam(lines(401))).toThrow("exceeds the limit");
+  });
+
+  it("limits a lone-CR source like its LF twin", () => {
+    const lf = "agent a\n".repeat(401);
+    expect(() => parseTam(lf.replaceAll("\n", "\r"))).toThrow(parseError(parseTam, lf).message);
+  });
+
+  it.each([
+    ["CRLF", "\r\n"],
+    ["lone CR", "\r"],
+  ])("reads %s sources, with comments, like their LF versions", (_name, ending) => {
+    const lf = "title Shop %% the title\nagent a[A] %% note\nstorage s[S]\na -- reads --> s %% edge";
+    const crlf = lf.replaceAll("\n", ending);
+    const [expected, actual] = [parseTam(lf), parseTam(crlf)];
+    expect([...actual.nodes]).toEqual([...expected.nodes]);
+    expect(actual.edges).toEqual(expected.edges);
+    expect(actual).toMatchObject({ title: "Shop", roots: ["a", "s"] });
   });
 });
 

@@ -1,6 +1,6 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import * as examples from "../src/samples/uml-examples";
-import { renderUml } from "../src/index";
+import { parseUml, renderUml } from "../src/index";
 import { auditScene } from "../src/audit";
 import { emptyScene } from "../src/scene";
 
@@ -132,5 +132,16 @@ describe("audit", () => {
       width: 1,
     });
     expect(checks(scene)).toContain("badge-overlap");
+  });
+});
+
+describe("size limit", () => {
+  it.each([
+    ["with a trailing newline", "\n"],
+    ["without one", ""],
+  ])("counts statement lines: 600 pass %s, 601 fail", (_name, ending) => {
+    const lines = (count: number) => ["stateDiagram-v2", ...Array(count - 1).fill("A --> B")];
+    expect(parseUml(lines(600).join("\n") + ending).kind).toBe("state");
+    expect(() => parseUml(lines(601).join("\n") + ending)).toThrow("limit of 600 lines");
   });
 });
