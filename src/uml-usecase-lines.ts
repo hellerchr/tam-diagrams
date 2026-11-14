@@ -1,22 +1,9 @@
-/** Use case diagram lines: curved or straight links between actors and use cases, their ends, loops and labels. */
+/** Use case diagram lines: curved or straight links between actors and use cases, their ends and loops. */
 
 import { crossesBox, crossesShape } from "./audit.ts";
-import { smallLines, smallSize } from "./labels.ts";
 import { markerBounds, type MarkerKind, markerPoints } from "./markers.ts";
 import { entryPoint } from "./outline.ts";
-import {
-  type Box,
-  centerOf,
-  distance,
-  grow,
-  overlaps,
-  type Point,
-  type Scene,
-  type SceneShape,
-  straddles,
-  unit,
-} from "./scene.ts";
-import type { Measure } from "./text.ts";
+import { centerOf, distance, grow, type Point, type Scene, type SceneShape, unit } from "./scene.ts";
 
 /** Aims beside the centers (in steps of 9px across the line), so lines into one shape keep their ends apart. */
 const AIMS = [
@@ -287,78 +274,4 @@ function crossings(scene: Scene, points: Point[]): number {
 function distanceToLine(point: Point, a: Point, b: Point): number {
   const length = Math.hypot(b.x - a.x, b.y - a.y) || 1;
   return Math.abs((b.x - a.x) * (a.y - point.y) - (a.x - point.x) * (b.y - a.y)) / length;
-}
-
-/**
- * A label beside the middle of its line (straight or curved), on whichever side is free: clear of
- * shapes, text, markers and wires, a clear gap from other labels, and either inside a boundary or
- * outside it, never across its edge.
- */
-export function labelLine(scene: Scene, measure: Measure, id: string, text: string) {
-  const wire = scene.wires.find((item) => item.edge === id);
-  if (!wire) return;
-  const size = smallSize(text, measure),
-    points = wire.points;
-  const lengths = points.slice(1).map((point, index) => distance(points[index], point)),
-    total = lengths.reduce((sum, value) => sum + value, 0);
-  /** The point at a fraction of the line's length, and the line's direction there. */
-  const at = (t: number) => {
-    let rest = t * total,
-      k = 0;
-    while (k < lengths.length - 1 && rest > lengths[k]) rest -= lengths[k++];
-    const a = points[k],
-      b = points[k + 1],
-      f = lengths[k] ? rest / lengths[k] : 0;
-    return { point: { x: a.x + (b.x - a.x) * f, y: a.y + (b.y - a.y) * f }, d: unit(a, b) };
-  };
-  const candidates = [6, 12, 20, 30].flatMap((gap) =>
-    [0.5, 0.42, 0.58, 0.34, 0.66, 0.26, 0.74, 0.18, 0.82].flatMap((t) => {
-      const { point, d } = at(t),
-        n = { x: -d.y, y: d.x };
-      return [1, -1].map((side) => {
-        // The box's nearest corner keeps `gap` from the line.
-        const reach = (Math.abs(n.x) * size.width) / 2 + (Math.abs(n.y) * size.height) / 2 + gap;
-        return {
-          x: point.x + n.x * side * reach - size.width / 2,
-          y: point.y + n.y * side * reach - size.height / 2,
-          ...size,
-        };
-      });
-    }),
-  );
-  const free = (box: Box) =>
-    !scene.shapes.some((shape) =>
-      shape.container ? straddles(grow(box, 2), shape.box) : overlaps(grow(box, 3), shape.box),
-    ) &&
-    !scene.texts.some((other) => overlaps(grow(box, other.role === "label" ? 10 : 2), other.box)) &&
-    !scene.markers.some((marker) =>
-      overlaps(grow(box, 2), markerBounds(marker.kind, marker.tip, marker.direction, marker.small)),
-    ) &&
-    !scene.wires.some((other) =>
-      other.points
-        .slice(1)
-        .some((point, index) =>
-          crossesBox(other.points[index], point, grow(box, other === wire ? 4 : 2)),
-        ),
-    );
-  // Nothing free: the spot that runs into the fewest things, other wires above all.
-  const conflicts = (box: Box) =>
-    scene.shapes.filter((shape) =>
-      shape.container ? straddles(box, shape.box) : overlaps(box, shape.box),
-    ).length *
-      2 +
-    scene.texts.filter((other) => overlaps(box, other.box)).length * 2 +
-    scene.wires.filter(
-      (other) =>
-        other !== wire &&
-        other.points.slice(1).some((point, index) => crossesBox(other.points[index], point, box)),
-    ).length *
-      3;
-  const box =
-    candidates.find(free) ??
-    candidates.reduce((best, item) => (conflicts(item) < conflicts(best) ? item : best));
-  smallLines(scene, measure, text, box.x + box.width / 2, box.y + box.height / 2, {
-    role: "label",
-    owner: id,
-  });
 }

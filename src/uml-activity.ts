@@ -332,18 +332,25 @@ function withPipe(
   return edge;
 }
 
+/** Header directions: long forms in any case, Mermaid's shorthands as written (`V` is no `v`). */
+const DIRECTIONS = new Map<string, Direction>(
+  Object.entries({ TB: "TB", TD: "TB", BT: "BT", LR: "LR", RL: "RL", "": "TB" } as const),
+);
+const SHORTHANDS = new Map<string, Direction>(
+  Object.entries({ "<": "RL", ">": "LR", "^": "BT", v: "TB" } as const),
+);
+
 export function parseFlowchart(source: string): Flowchart {
   const prepared = prepare(source);
   if (prepared.kind !== "flowchart" && prepared.kind !== "swimlane")
     throw new UmlError(prepared.headerLine, "Not a flowchart.");
-  const directionText = prepared.rest.split(/[\s;]/)[0]?.toUpperCase() ?? "";
-  const direction = (
-    { TB: "TB", TD: "TB", BT: "BT", LR: "LR", RL: "RL", "": "TB" } as Record<string, Direction>
-  )[directionText];
+  const [directionWord = ""] = prepared.rest.split(/[\s;]/);
+  const directionText = directionWord.toUpperCase();
+  const direction = SHORTHANDS.get(directionWord) ?? DIRECTIONS.get(directionText);
   if (!direction)
     throw new UmlError(
       prepared.headerLine,
-      `Unknown direction \`${directionText}\`; use TB, TD, BT, LR or RL.`,
+      `Unknown direction \`${directionText}\`; use TB, TD, BT, LR, RL or one of < > ^ v.`,
     );
   const chart: Flowchart = {
     kind: prepared.kind,
@@ -393,6 +400,7 @@ export function parseFlowchart(source: string): Flowchart {
     for (const text of statements(whole)) {
       if (accessibility(text)) continue;
       let match: RegExpMatchArray | null;
+      // Mermaid takes no shorthand in a `direction` statement, so neither do we.
       if (/^direction\s+(TB|TD|BT|LR|RL)$/i.test(text)) continue;
       if (text === "end") {
         if (!stack.pop()) throw new UmlError(line, "Unmatched `end`.");

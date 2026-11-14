@@ -33,13 +33,19 @@ export const unsupported = (line: number, what: string): never => {
 const MAX_UML_CHARS = 20_000;
 const MAX_LINES = 600;
 
+// A header line ends after its keyword, or continues with whitespace and arguments (`TD`, `LR:`,
+// `title Pets`). A TAM statement that starts with an id and whitespace is not one: a link
+// (`graph -- calls --> api`, `graph <-- calls --> api`), several ends (`graph & api -- …`) or an
+// interface (`graph provides IApi`). A bare `<` is none of these: `graph <` is a flowchart's.
+export const HEADER_END = String.raw`(?=[:;]*$|\s+(?!(?:provides|requires)\s)(?!<[-=])[^-&\s])`;
+
 const HEADERS: [RegExp, UmlKind][] = [
-  [/^classDiagram(-v2)?\b/, "class"],
-  [/^stateDiagram(-v2)?\b/, "state"],
-  [/^(flowchart|graph)\b/, "flowchart"],
-  [/^swimlane-beta\b/, "swimlane"],
-  [/^usecase-beta\b/, "usecase"],
-  [/^sequenceDiagram\b/, "sequence"],
+  [new RegExp(String.raw`^classDiagram(-v2)?${HEADER_END}`), "class"],
+  [new RegExp(String.raw`^stateDiagram(-v2)?${HEADER_END}`), "state"],
+  [new RegExp(String.raw`^(flowchart(-elk)?|graph)${HEADER_END}`), "flowchart"],
+  [new RegExp(String.raw`^swimlane-beta${HEADER_END}`), "swimlane"],
+  [new RegExp(String.raw`^usecase-beta${HEADER_END}`), "usecase"],
+  [new RegExp(String.raw`^sequenceDiagram${HEADER_END}`), "sequence"],
 ];
 
 interface SourceLine {
@@ -57,8 +63,15 @@ interface Prepared {
   level?: Level;
 }
 
+/** The line closing the `%%{ … }%%` directive that opens at `index`; `index` when none does. */
+function directiveEnd(all: string[], index: number): number {
+  if (!all[index].trim().startsWith("%%{")) return index;
+  const end = all.slice(index).findIndex((text) => text.trim().endsWith("}%%"));
+  return end < 0 ? index : index + end;
+}
+
 /** Statement lines of a source, without frontmatter, comments and `%%{ }%%` directives. */
-function scan(source: string): { lines: SourceLine[]; title?: string; level?: Level } {
+export function scan(source: string): { lines: SourceLine[]; title?: string; level?: Level } {
   const all = source.replace(/\r\n?/g, "\n").split("\n");
   let start = 0,
     title: string | undefined,
@@ -80,6 +93,7 @@ function scan(source: string): { lines: SourceLine[]; title?: string; level?: Le
     const text = all[index].trim();
     if (!text) continue;
     if (text.startsWith("%%")) {
+      index = directiveEnd(all, index);
       // `%% level conceptual` sets the TAM abstraction level; Mermaid reads it as a comment.
       const match = text.match(/^%%\s*level\s*:?\s*(conceptual|design)\s*$/i);
       if (match) level = match[1].toLowerCase() as Level;

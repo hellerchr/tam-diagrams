@@ -2,6 +2,7 @@
 
 import type { MarkerKind } from "./markers.ts";
 import { accessibilityLines, labelText, type Level, prepare, UmlError, unsupported } from "./uml.ts";
+import { checkActivations } from "./uml-sequence-activation.ts";
 
 /**
  * Sequence diagrams from Mermaid `sequenceDiagram` sources, drawn as in the TAM flyer and standard
@@ -270,5 +271,6 @@ export function parseSequenceDiagram(source: string): SequenceDiagram {
         `Object ${created.type === "create" ? "creation" : "destruction"} belongs to the design level in TAM.`,
       );
   }
+  checkActivations(diagram.events);
   return diagram;
 }

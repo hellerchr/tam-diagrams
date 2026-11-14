@@ -87,9 +87,9 @@ export const around = (a: Point, b: Point, pad = 0): Box => ({
   height: Math.abs(a.y - b.y) + 2 * pad,
 });
 
-/** Whether segment a-b passes through the open box (Liang-Barsky clipping). */
-export function crossesBox(a: Point, b: Point, box: Box): boolean {
-  if (box.width <= 0 || box.height <= 0) return false;
+/** The share of segment a-b inside the open box, 0 to 1 (Liang-Barsky clipping). */
+export function insideFraction(a: Point, b: Point, box: Box): number {
+  if (box.width <= 0 || box.height <= 0) return 0;
   let t0 = 0,
     t1 = 1;
   const dx = b.x - a.x,
@@ -101,19 +101,24 @@ export function crossesBox(a: Point, b: Point, box: Box): boolean {
     [dy, box.y + box.height - a.y],
   ]) {
     if (p === 0) {
-      if (q <= 0) return false;
+      if (q <= 0) return 0;
       continue;
     }
     const t = q / p;
     if (p < 0) {
-      if (t > t1) return false;
+      if (t > t1) return 0;
       if (t > t0) t0 = t;
     } else {
-      if (t < t0) return false;
+      if (t < t0) return 0;
       if (t < t1) t1 = t;
     }
   }
-  return t1 - t0 > 1e-6;
+  return Math.max(0, t1 - t0);
+}
+
+/** Whether segment a-b passes through the open box. */
+export function crossesBox(a: Point, b: Point, box: Box): boolean {
+  return insideFraction(a, b, box) > 1e-6;
 }
 
 /** Whether segment a-b passes through the shape's real outline, shrunk by `inset`. */

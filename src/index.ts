@@ -9,6 +9,7 @@ import { type DiagramColors, drawScene } from "./draw.ts";
 import { type Measure, textMeasure } from "./text.ts";
 import { type Scene } from "./scene.ts";
 import { detectUml, UmlError, type UmlKind } from "./uml.ts";
+import { rejectUnsupported } from "./uml-header.ts";
 import { layoutStateDiagram } from "./uml-state-layout.ts";
 import { parseStateDiagram } from "./uml-state.ts";
 import { parseFlowchart } from "./uml-activity.ts";
@@ -32,6 +33,7 @@ export { renderTam, type TamPicture } from "./tam-layout.ts";
 export { detectUml, UmlError, type UmlKind } from "./uml.ts";
 export { drawScene, type DiagramColors } from "./draw.ts";
 export { textMeasure, type Measure } from "./text.ts";
+export { arialMeasure } from "./arial-measure.ts";
 export { type Scene } from "./scene.ts";
 export { auditScene, type Finding } from "./audit.ts";
 export { measureScene, type Metrics } from "./best.ts";
@@ -131,6 +133,7 @@ export function parseUml(source: string): ParsedUml {
       };
     }
     case null:
+      rejectUnsupported(source);
       throw new UmlError(
         0,
         "This diagram type is drawn by Mermaid, not the built-in renderer.",
@@ -180,13 +183,14 @@ export interface ClassPicture extends UmlPicture {
 
 /**
  * A class diagram with some packages collapsed and some classes without members (`view`; by
- * default the overview of a large diagram). Layouts are cached per source and view.
+ * default the overview of a large diagram). Layouts are cached per source and view. `measure`
+ * replaces the canvas text metrics (Node); such layouts are not cached.
  */
 export async function renderClassView(
   source: string,
   colors: DiagramColors,
   view: ClassView | null,
-  options: { layout?: ElkLayout } = {},
+  options: { layout?: ElkLayout; measure?: Measure } = {},
 ): Promise<ClassPicture> {
   const full = parseClassDiagram(source);
   const shown = view ?? overview(full);
@@ -198,9 +202,11 @@ export async function renderClassView(
     [...shown.collapsed].sort().join(","),
     [...shown.bare].sort().join(","),
   ].join("\u0000");
-  const scene = await cachedLayout(key, () =>
-    layoutClassDiagram(diagram, textMeasure(colors.font), { layout: options.layout }),
-  );
+  const scene = await (options.measure
+    ? layoutClassDiagram(diagram, options.measure, { layout: options.layout })
+    : cachedLayout(key, () =>
+        layoutClassDiagram(diagram, textMeasure(colors.font), { layout: options.layout }),
+      ));
   return {
     ...picture(scene, colors, full.title || UML_NAMES.class, "class"),
     diagram,

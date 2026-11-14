@@ -1,10 +1,17 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
 import { parseError, umlColors } from "./fixtures.ts";
-import { parseSequenceDiagram, type MessageEvent } from "../src/uml-sequence.ts";
-import { renderUml } from "../src/index.ts";
+import {
+  parseSequenceDiagram,
+  type MessageEvent,
+  type SequenceDiagram,
+} from "../src/uml-sequence.ts";
+import { checkActivations } from "../src/uml-sequence-activation.ts";
+import { layoutSequenceDiagram } from "../src/uml-sequence-layout.ts";
+import { arialMeasure, parseUml, renderUml, UmlError } from "../src/index.ts";
 import { auditScene } from "../src/audit.ts";
 import { generateSequenceDiagram } from "../src/samples/fuzz.ts";
+import { SEQUENCE_EXAMPLES } from "../src/samples/uml-examples.ts";
 
 const error = (source: string) => parseError(parseSequenceDiagram, source);
 const messages = (source: string) =>
@@ -163,5 +170,76 @@ describe("sequence diagram rendering", () => {
   it.each([1015, 1034])("renders generated diagram %i without defects", async (seed) => {
     const { scene } = await renderUml(generateSequenceDiagram(seed), umlColors);
     expect(auditScene(scene).filter((finding) => !finding.note)).toEqual([]);
+  });
+});
+
+// What `run` throws, or "drawn" when it does not.
+const outcome = async (run: () => unknown) => {
+  try {
+    await run();
+    return "drawn";
+  } catch (reason) {
+    return (reason as Error).message;
+  }
+};
+
+// What `run` throws; fails when it does not.
+const rejection = async (run: () => unknown) => {
+  try {
+    await run();
+  } catch (reason) {
+    return reason as UmlError;
+  }
+  throw new Error("resolved");
+};
+// Drops every opening of a bar, so the closings of a parsed diagram close bars never opened.
+const withoutOpenings = (diagram: SequenceDiagram) => {
+  diagram.events = diagram.events.filter((event) => event.type !== "activate");
+  for (const event of diagram.events) if (event.type === "message") event.activate = false;
+  return diagram;
+};
+
+describe("activation errors", () => {
+  const sources = [...SEQUENCE_EXAMPLES.map(([, source]) => source)];
+  for (let seed = 1; seed <= 12; seed++) sources.push(generateSequenceDiagram(seed));
+
+  it.each(sources.map((source, index) => [index, source] as const))(
+    "parses and renders sequence source %i alike",
+    async (_index, source) => {
+      expect(await outcome(() => parseUml(source))).toBe("drawn");
+      expect(await outcome(() => renderUml(source, umlColors))).toBe("drawn");
+    },
+  );
+
+  it.each([
+    ["deactivate without a message", "A->>B: hi\ndeactivate B", "Line 3: `B` is not active."],
+    ["activation already closed", "activate A\ndeactivate A\ndeactivate A", "Line 4"],
+    ["`-` on a plain sender", "A->>-B: hi", "Line 2: `A` is not active."],
+    ["`-` on a self message", "A->>-A: hi", "Line 2: `A` is not active."],
+    ["`-` after the bar closed", "A->>+B: a\nB-->>-A: b\nB-->>-A: c", "Line 4"],
+    ["`-` on a created participant's sender", "create participant B\nA->>-B: new", "Line 3"],
+    ["deactivate inside a fragment", "alt x\nA->>B: m\ndeactivate B\nend", "Line 4"],
+  ])("parseUml rejects %s as renderUml does", async (_name, body, message) => {
+    const source = `sequenceDiagram\n${body}`;
+    const parsed = await outcome(() => parseUml(source));
+    expect(parsed).toContain(message);
+    expect(parsed).toContain("is not active");
+    expect(parsed).toBe(await outcome(() => renderUml(source, umlColors)));
+  });
+
+  // The parser runs checkActivations, so a parsed source never reaches the layout's own throws.
+  it.each([
+    ["a `deactivate` event", "activate B\ndeactivate B", 3],
+    ["a `-` on a plain message", "A->>+B: a\nB-->>-A: b", 3],
+    ["a `-` on a self message", "A->>+A: a\nA->>-A: b", 3],
+    ["a `-` on a creating message", "activate A\ncreate participant B\nA->>-B: new", 4],
+  ])("the layout and checkActivations reject %s alike", async (_name, body, line) => {
+    const diagram = withoutOpenings(parseSequenceDiagram(`sequenceDiagram\n${body}`));
+    const checked = await rejection(() => checkActivations(diagram.events));
+    const laidOut = await rejection(() => layoutSequenceDiagram(diagram, arialMeasure));
+    expect(checked).toBeInstanceOf(UmlError);
+    expect(laidOut).toBeInstanceOf(UmlError);
+    expect(laidOut.line).toBe(line);
+    expect([laidOut.line, laidOut.message]).toEqual([checked.line, checked.message]);
   });
 });

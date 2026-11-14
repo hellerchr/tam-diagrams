@@ -19,8 +19,12 @@
     "url": "git+https://github.com/hellerchr/tam-diagrams.git"
   },
   "homepage": "https://github.com/hellerchr/tam-diagrams#readme",
+  "bin": {
+    "tam-diagrams": "dist/cli.js"
+  },
   "files": [
     "src",
+    "dist",
     "README.md",
     "LICENSE"
   ],
@@ -34,6 +38,8 @@
     "./samples/fuzz": "./src/samples/fuzz.ts"
   },
   "scripts": {
+    "build": "rolldown -c",
+    "prepare": "npm run build",
     "test": "vitest run",
     "typecheck": "tsc --noEmit -p ."
   },
@@ -44,6 +50,7 @@
     "@types/node": "^25.9.9",
     "jsdom": "^26.1.0",
     "mermaid": "^12.2.0",
+    "rolldown": "^1.2.19",
     "typescript": "^7.0.2",
     "vitest": "^4.1.12"
   }
