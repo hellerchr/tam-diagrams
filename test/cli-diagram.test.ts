@@ -79,9 +79,18 @@ describe("checkSource", () => {
   it.each([
     ["TAM", TAM],
     ["UML", UML],
-    ["an empty source", ""],
   ])("accepts %s", async (_kind, source) => {
     await expect(checkSource(source)).resolves.toBeUndefined();
+  });
+
+  it.each([
+    ["an empty source", ""],
+    ["a comment-only source", "%% todo\n%% later"],
+    ["a title without elements", "title Shop\n"],
+  ])("rejects %s with a TamError on no line", async (_kind, source) => {
+    const error = await rejection(() => checkSource(source));
+    expect(error).toBeInstanceOf(TamError);
+    expect(error).toMatchObject({ line: 0, message: "the diagram has no elements" });
   });
 
   it("rejects what renderSource rejects, layout errors included", async () => {

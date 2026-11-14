@@ -92,9 +92,10 @@ repos:
 
 The `files:` pattern matches whatever extensions the project uses for diagram sources.
 
-Exit codes: `0` success, `1` a diagram error, `2` a usage or I/O error. The command line measures
-text with Arial/Helvetica widths and names that font stack in the SVG, so the picture is exact where
-those fonts are installed.
+Exit codes: `0` success, `1` a diagram error, `2` a usage or I/O error, `3` an internal error (a
+bug in tam-diagrams; `check` still checks the other files). A source with no elements, such as an
+empty or comment-only file, is a diagram error. The command line measures text with Arial/Helvetica
+widths and names that font stack in the SVG, so the picture is exact where those fonts are installed.
 
 ## API
 

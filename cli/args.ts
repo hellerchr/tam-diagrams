@@ -18,7 +18,7 @@ Options:
   -o, --output <file>   write the SVG to a file (render only)
   -h, --help            show this text
 
-Exit codes: 0 success, 1 diagram error, 2 usage or I/O error.
+Exit codes: 0 success, 1 diagram error, 2 usage or I/O error, 3 internal error.
 `;
 
 /**

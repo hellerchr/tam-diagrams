@@ -1,6 +1,6 @@
 import { type Command, parseCommand, USAGE, UsageError } from "./args.ts";
 import { checkSource, isDiagramError, renderSource } from "./diagram.ts";
-import { diagramMessage, inputName, ioMessage } from "./report.ts";
+import { diagramMessage, inputName, internalMessage, ioMessage } from "./report.ts";
 
 /** What the CLI needs from its surroundings; node-io.ts implements it, tests substitute it. */
 export interface CliIo {
@@ -13,7 +13,8 @@ export interface CliIo {
 
 const OK = 0,
   DIAGRAM_ERROR = 1,
-  USAGE_OR_IO_ERROR = 2;
+  USAGE_OR_IO_ERROR = 2,
+  INTERNAL_ERROR = 3;
 
 const readSource = (input: string, io: CliIo) =>
   input === "-" ? io.readStdin() : io.readFile(input);
@@ -28,10 +29,18 @@ async function load(input: string, io: CliIo): Promise<string | undefined> {
   }
 }
 
-/** Reports a problem in the diagram; anything else is a fault of the program and is rethrown. */
-function reportDiagramError(error: unknown, input: string, io: CliIo): void {
-  if (!isDiagramError(error)) throw error;
-  io.stderr(`${diagramMessage(inputName(input), error).join("\n")}\n`);
+/**
+ * Reports a failed render and gives its exit code: 1 for a problem in the diagram, 3 for a fault of
+ * the program, so a script or hook can tell a broken diagram from a crash.
+ */
+function reportFailure(error: unknown, input: string, io: CliIo): number {
+  const name = inputName(input);
+  if (isDiagramError(error)) {
+    io.stderr(`${diagramMessage(name, error).join("\n")}\n`);
+    return DIAGRAM_ERROR;
+  }
+  io.stderr(`${internalMessage(name, error)}\n`);
+  return INTERNAL_ERROR;
 }
 
 /** Writes the SVG to the file or stdout; a write failure is reported. */
@@ -53,8 +62,7 @@ async function runRender(command: Extract<Command, { kind: "render" }>, io: CliI
   try {
     svg = await renderSource(source);
   } catch (error) {
-    reportDiagramError(error, command.input, io);
-    return DIAGRAM_ERROR;
+    return reportFailure(error, command.input, io);
   }
   return emit(`${svg}\n`, command.output, io);
 }
@@ -71,8 +79,7 @@ async function runCheck(command: Extract<Command, { kind: "check" }>, io: CliIo)
     try {
       await checkSource(source);
     } catch (error) {
-      reportDiagramError(error, input, io);
-      worst = Math.max(worst, DIAGRAM_ERROR);
+      worst = Math.max(worst, reportFailure(error, input, io));
     }
   }
   return worst;

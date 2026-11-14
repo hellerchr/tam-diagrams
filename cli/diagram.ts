@@ -1,6 +1,7 @@
 import {
   arialMeasure,
   detectUml,
+  parseTam,
   renderTam,
   renderUml,
   TamError,
@@ -21,13 +22,16 @@ const CLI_COLORS: DiagramColors = {
   dark: false,
 };
 
-/** Draws a diagram source as SVG: UML if it starts with a supported Mermaid header, else TAM. */
+/**
+ * Draws a diagram source as SVG: UML if it starts with a supported Mermaid header, else TAM. A
+ * source with no elements, such as an empty or comment-only file, is an error here, as in Mermaid;
+ * the library itself draws it as an empty picture, which suits a live preview.
+ */
 export async function renderSource(source: string): Promise<string> {
   const options = { measure: arialMeasure };
-  const picture = detectUml(source)
-    ? await renderUml(source, CLI_COLORS, options)
-    : await renderTam(source, CLI_COLORS, options);
-  return picture.svg;
+  if (detectUml(source)) return (await renderUml(source, CLI_COLORS, options)).svg;
+  if (parseTam(source).nodes.size === 0) throw new TamError(0, "the diagram has no elements");
+  return (await renderTam(source, CLI_COLORS, options)).svg;
 }
 
 /**

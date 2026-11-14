@@ -24,3 +24,9 @@ export function diagramMessage(name: string, error: TamError | UmlError): string
 export function ioMessage(error: unknown): string {
   return `tam-diagrams: ${error instanceof Error ? error.message : String(error)}`;
 }
+
+/** A fault of the program while drawing an input, with the stack when there is one. */
+export function internalMessage(name: string, error: unknown): string {
+  const detail = error instanceof Error ? (error.stack ?? error.message) : String(error);
+  return `tam-diagrams: internal error while drawing ${name}: ${detail}`;
+}

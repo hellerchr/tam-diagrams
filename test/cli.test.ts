@@ -79,9 +79,18 @@ describe("render", () => {
 
 describe("check", () => {
   it("is silent and exits 0 for valid diagrams", async () => {
-    const port = memoryIo({ "a.tam": TAM, "empty.tam": "" });
-    expect(await main(["check", "a.tam", "empty.tam"], port.io)).toBe(0);
+    const port = memoryIo({ "a.tam": TAM, "b.tam": TAM });
+    expect(await main(["check", "a.tam", "b.tam"], port.io)).toBe(0);
     expect(port.stdout() + port.stderr()).toBe("");
+  });
+
+  it.each([
+    ["empty", ""],
+    ["comment-only", "%% nothing yet\n"],
+  ])("exits 1 for an %s source, as Mermaid rejects it", async (_kind, source) => {
+    const port = memoryIo({ "e.mmd": source });
+    expect(await main(["check", "e.mmd"], port.io)).toBe(1);
+    expect(port.stderr()).toBe("e.mmd: the diagram has no elements\n");
   });
 
   it("exits 1 with <name>:<line>: for a parse error", async () => {
