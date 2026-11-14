@@ -5,6 +5,7 @@ import { renderUml } from "../src/index";
 import { auditScene } from "../src/audit";
 import { forbidden, type Tier } from "../src/swimlane-tiers";
 import { generateFlowchart } from "../src/samples/fuzz";
+import { SWIMLANE_EXAMPLES } from "../src/samples/uml-examples";
 
 /** Text widths without a font: the same estimate the browser-less tests use, scaled by `scale`. */
 const estimate = (scale: number) => (text: string, size: number, weight: number) =>
@@ -33,15 +34,29 @@ describe("swimlane routing", () => {
   }, 60_000);
 });
 
+describe("swimlane routes found without reservations", () => {
+  it("are kept exactly as found when they pass through no point another wire turns at", async () => {
+    const source = SWIMLANE_EXAMPLES.find(([name]) => name === "swimlane: two lanes ping-pong")![1];
+    const { scene } = await renderUml(source, umlColors, { measure: estimate(1.1) });
+    // Searching with the points reserved from the start would run this wire at y = 449 instead.
+    expect(scene.wires.find((wire) => wire.edge === "e9")!.points).toEqual([
+      { x: 122.5, y: 430 },
+      { x: 122.5, y: 454.5 },
+      { x: 358.5, y: 454.5 },
+      { x: 358.5, y: 476 },
+    ]);
+  });
+});
+
 describe("the router's tiers", () => {
-  // Cells: on a used line, in a label area, at a foreign terminal.
+  // Cells: on a used line, in a label area, on a point another wire turns or ends at.
   const cells: [number, number, boolean][] = [
     [1, 0, false],
     [0, 1, false],
     [0, 0, true],
   ];
   const verdicts = (tier: Tier) =>
-    cells.map(([shared, label, foreign]) => forbidden(tier, shared, label, foreign));
+    cells.map(([shared, label, onPoint]) => forbidden(tier, shared, label, onPoint));
 
   it("forbid every such cell in strict, but not a free one", () => {
     expect(verdicts("strict")).toEqual([true, true, true]);

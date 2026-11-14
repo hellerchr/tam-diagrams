@@ -120,6 +120,7 @@ these rules and reports the line of a broken one.
 | `src/uml-swimlanes.ts`       | Swimlane activity diagrams: `layoutSwimlanes` and the drawing                        |
 | `src/swimlane-place.ts`      | Swimlanes stage 1: lanes, rows and items sized and placed                            |
 | `src/swimlane-routes.ts`     | Swimlanes stage 2: the grid router, wire labels and guards                           |
+| `src/swimlane-points.ts`     | The points swimlane wires end or turn at, kept free of other wires' routes           |
 | `src/swimlane-tiers.ts`      | What each search of the swimlane router may step on, strictest first                 |
 | `src/uml-state.ts`           | State machine diagrams: the parser                                                   |
 | `src/uml-state-layout.ts`    | State machine layout: composite states, concurrent regions, notes                    |
@@ -134,6 +135,7 @@ these rules and reports the line of a broken one.
 | `src/draw.ts`                | The SVG drawer and color tones                                                       |
 | `src/elk.ts`                 | ELK layout of nested graphs and the worker pool                                      |
 | `src/wires.ts`               | Wires from ELK's routes: ends, spreading and straightening                           |
+| `src/wire-touch.ts`          | Two wires touching at a bend, where they would read as joined                        |
 | `src/labels.ts`              | Label placement beside wires and shapes                                              |
 | `src/route.ts`               | Geometry passes after ELK: shared state, segment and clearance helpers               |
 | `src/route-straighten.ts`    | Passes that straighten wires and slide markers                                       |

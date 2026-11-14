@@ -19,6 +19,7 @@ import { smallLines } from "./labels";
 import { crossesBox } from "./audit";
 import { followLabelClear } from "./marker-clear";
 import { bendCandidates, runsAlong } from "./route";
+import { touchesOtherWire } from "./wire-touch";
 
 /**
  * Turns an ELK placement into scene wires: ends meet the real outline of round,
@@ -506,7 +507,12 @@ export function straightenScene(scene: Scene, gap = 9) {
       if (!a || !b || a.container || b.container) continue;
       const candidates = [...straightCandidates(wire.points, a, b), ...bendCandidates(wire.points)];
       for (const points of candidates) {
-        if (!clearRoute(scene, wire, points) || crowded(scene, wire, points, gap)) continue;
+        if (
+          !clearRoute(scene, wire, points) ||
+          crowded(scene, wire, points, gap) ||
+          touchesOtherWire(scene.wires, wire, points)
+        )
+          continue;
         const before = wire.points;
         reroute(scene, wire, points);
         if (followLabelClear(scene, wire)) break;

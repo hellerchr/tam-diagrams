@@ -16,6 +16,7 @@ import {
   type SwimlaneRoutes,
 } from "./swimlane-place";
 import { forbidden, type Tier } from "./swimlane-tiers";
+import { occupiedPoints } from "./swimlane-points";
 
 /** Routes every wire through the free channels between items, then places the wire labels and guards. */
 export function routeSwimlanes(placed: SwimlanePlacement, measure: Measure): SwimlaneRoutes {
@@ -148,13 +149,10 @@ export function routeSwimlanes(placed: SwimlanePlacement, measure: Measure): Swi
   });
   stubs.forEach((stretch) => mark(stretch));
   // Where a stub ends its wire turns onto the grid: other wires keep off that point, or it cannot get out.
-  const terminals = new Uint8Array(xs.length * ys.length);
-  stubs.forEach(([a, b], index) => {
-    const point = index % 2 ? a : b,
-      i = ix(point.x),
-      j = iy(point.y);
-    if (i >= 0 && j >= 0) terminals[j * xs.length + i] = 1;
-  });
+  // A route found through the points other wires end or turn at (where the two would read as joined)
+  // is searched again with those points reserved.
+  const occupied = occupiedPoints(xs, ys);
+  stubs.forEach(([a, b], index) => occupied.terminal(index % 2 ? a : b));
   // Forward wires first; among them labelled ones, so their labels claim room beside them before
   // wires that need none fill the gaps; short wires before long ones.
   const span = (edge: FlowEdge) =>
@@ -183,11 +181,15 @@ export function routeSwimlanes(placed: SwimlanePlacement, measure: Measure): Swi
     ] as const;
     // Strictly apart from other wires if possible, else apart from their lines only (past a label or
     // another wire's terminal at a price), else sharing a line at a high price.
-    const path =
-      search(...args, "strict") ?? search(...args, "apart") ?? search(...args, "relaxed");
+    const route = (reserved: boolean) =>
+      search(...args, "strict", reserved) ??
+      search(...args, "apart", reserved) ??
+      search(...args, "relaxed", reserved);
+    const path = occupied.settle(route(false), () => route(true));
     const points = simplifyPath([pa, ...(path ?? [from, { x: to.x, y: from.y }, to]), pb]);
     routes.set(edge.id, points);
     mark(points);
+    points.forEach((point) => occupied.bend(point));
     const text = labelText.get(edge.id);
     if (text) {
       const size = smallSize(text, measure),
@@ -352,8 +354,10 @@ export function routeSwimlanes(placed: SwimlanePlacement, measure: Measure): Swi
     startDir: number,
     endDir: number,
     tier: Tier,
+    reserved: boolean,
   ): Point[] | null {
     if (sx < 0 || sy < 0 || tx < 0 || ty < 0) return null;
+    const taken = occupied.view(reserved, tier);
     const W = xs.length,
       H = ys.length,
       key = (i: number, j: number, d: number) => (j * W + i) * 3 + d;
@@ -433,7 +437,7 @@ export function routeSwimlanes(placed: SwimlanePlacement, measure: Measure): Swi
         if (horizontal ? hBlocked[j][si] : vBlocked[i][sj]) continue;
         const shared = horizontal ? hUsed[j][si] : vUsed[i][sj],
           label = horizontal ? hLabel[j][si] : vLabel[i][sj];
-        const foreign = terminals[nj * W + ni] === 1 && !(ni === tx && nj === ty);
+        const foreign = taken(ni, nj) && !(ni === tx && nj === ty);
         if (forbidden(tier, shared, label, foreign)) continue;
         let step =
           (horizontal ? Math.abs(xs[ni] - xs[i]) : Math.abs(ys[nj] - ys[j])) +
