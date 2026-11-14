@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { colors } from "./fixtures";
+import { colors } from "./fixtures.ts";
 
 const run = promisify(execFile);
 const sourceUrl = (file: string) =>

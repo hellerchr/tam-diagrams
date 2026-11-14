@@ -15,9 +15,11 @@ import { clipToOutline, entryPoint, outlineOf } from "./outline.ts";
 import { markerBounds, type MarkerKind } from "./markers.ts";
 import { type Measure } from "./text.ts";
 import type { Placement } from "./elk.ts";
-import { followLabel, smallLines } from "./labels.ts";
-import { crossesBox } from "./audit.ts";
+import { smallLines } from "./labels.ts";
+import { crossesBox, END_OFF_OUTLINE, offOutline, offVertices } from "./audit.ts";
+import { followLabelClear } from "./marker-clear.ts";
 import { bendCandidates, runsAlong } from "./route.ts";
+import { touchesOtherWire } from "./wire-touch.ts";
 
 /**
  * Turns an ELK placement into scene wires: ends meet the real outline of round,
@@ -505,14 +507,34 @@ export function straightenScene(scene: Scene, gap = 9) {
       if (!a || !b || a.container || b.container) continue;
       const candidates = [...straightCandidates(wire.points, a, b), ...bendCandidates(wire.points)];
       for (const points of candidates) {
-        if (!clearRoute(scene, wire, points) || crowded(scene, wire, points, gap)) continue;
+        if (
+          !clearRoute(scene, wire, points) ||
+          crowded(scene, wire, points, gap) ||
+          touchesOtherWire(scene.wires, wire, points)
+        )
+          continue;
         const before = wire.points;
         reroute(scene, wire, points);
-        if (followLabel(scene, wire)) break;
+        if (followLabelClear(scene, wire)) break;
         reroute(scene, wire, before);
       }
     }
   }
+}
+
+/**
+ * The route with its end `end` moved onto the shape's outline; null when the line misses the
+ * outline and its end would be off the shape, or meets a diamond off its vertices (as the audit
+ * measures it, on the clipped end). A line that only grazes the outline (at a polygon's corner)
+ * keeps its end.
+ */
+function clipEnd(points: Point[], end: number, shape: SceneShape): Point[] | null {
+  const clipped =
+    clipToOutline(points, end, shape.kind, shape.box, endRadius(shape)) ??
+    (offOutline(points[end], shape) <= END_OFF_OUTLINE ? points : null);
+  return clipped && shape.kind === "diamond" && offVertices(clipped[end], shape.box)
+    ? null
+    : clipped;
 }
 
 /** Straight segments between two shapes along each axis where they overlap; symbols only through their center. */
@@ -556,21 +578,14 @@ function straightCandidates(route: Point[], a: SceneShape, b: SceneShape): Point
         axis === "x" ? { x: at, y: value } : { x: value, y: at };
       const start = point(first.box[along] + first.box[alongSize]),
         end = point(second.box[along]);
-      let points = first === a ? [start, end] : [end, start];
+      let points: Point[] | null = first === a ? [start, end] : [end, start];
       // Onto the real outlines.
       for (const [end, shape] of [
         [0, a],
         [1, b],
       ] as const)
-        points =
-          clipToOutline(
-            points,
-            end,
-            shape.kind,
-            shape.box,
-            shape.kind === "round" ? (shape.radius ?? 10) : 0,
-          ) ?? points;
-      result.push(points);
+        points = points && clipEnd(points, end, shape);
+      if (points) result.push(points);
     }
   }
   return result;

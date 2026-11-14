@@ -1,11 +1,11 @@
 // @vitest-environment node
 // The parser's rules and the layout, checked on diagrams generated from fixed seeds (samples/fuzz.ts).
 import { describe, expect, it } from "vitest";
-import { parseTam } from "../src/tam";
-import { renderTam } from "../src/tam-layout";
-import { auditScene } from "../src/audit";
-import { generateTam, VIOLATIONS } from "../src/samples/fuzz";
-import { colors } from "./fixtures";
+import { parseTam } from "../src/tam.ts";
+import { renderTam } from "../src/tam-layout.ts";
+import { auditScene } from "../src/audit.ts";
+import { generateTam, VIOLATIONS } from "../src/samples/fuzz.ts";
+import { colors } from "./fixtures.ts";
 
 describe("TAM rules on generated diagrams", () => {
   it.each(VIOLATIONS.map((violation) => [violation.name, violation] as const))(

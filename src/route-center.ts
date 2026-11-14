@@ -20,6 +20,7 @@ import {
   tryRoute,
 } from "./route.ts";
 import { slideIntoContainer, slideMarker } from "./route-straighten.ts";
+import { labelsBlocked, shiftLabels } from "./node-labels.ts";
 import { widen } from "./route-spread.ts";
 
 /** Whether a box lies within a frame across `cross`. */
@@ -148,6 +149,8 @@ function shiftAlong(
     ].some((label) => overlaps(grow(place, 4), label))
   )
     return false;
+  // Its own labels (notes) move with it, so they must find room too.
+  if (labelsBlocked(geometry, id, own, main, shift)) return false;
   geometry.boxes.set(id, place);
   if (
     !moved.every(({ edge, points }) =>
@@ -158,6 +161,7 @@ function shiftAlong(
     return false;
   }
   for (const { edge, points } of moved) geometry.routes.set(edge, points);
+  shiftLabels(geometry, id, main, shift);
   return true;
 }
 

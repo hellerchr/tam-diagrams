@@ -1,12 +1,12 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
-import { parseError, umlColors } from "./fixtures";
-import { parseFlowchart } from "../src/uml-activity";
-import { renderUml } from "../src/index";
-import { auditScene } from "../src/audit";
-import { nodeBox } from "../src/uml-activity-layout";
-import { generateFlowchart } from "../src/samples/fuzz";
-import type { Scene } from "../src/scene";
+import { parseError, umlColors } from "./fixtures.ts";
+import { parseFlowchart } from "../src/uml-activity.ts";
+import { renderUml } from "../src/index.ts";
+import { auditScene } from "../src/audit.ts";
+import { nodeBox } from "../src/uml-activity-layout.ts";
+import { generateFlowchart } from "../src/samples/fuzz.ts";
+import type { Scene } from "../src/scene.ts";
 
 const error = (source: string) => parseError(parseFlowchart, source);
 const defects = (scene: Scene) => auditScene(scene).filter((finding) => !finding.note);

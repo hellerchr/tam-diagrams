@@ -8,13 +8,15 @@ import { besideSegments, longestFirst, smallSize, wrapSmall } from "./labels.ts"
 import type { FlowEdge } from "./uml-activity.ts";
 import {
   BEND,
-  CLEAR,
   CROSS,
   round,
   type Side,
   type SwimlanePlacement,
   type SwimlaneRoutes,
 } from "./swimlane-place.ts";
+import { forbidden, type Tier } from "./swimlane-tiers.ts";
+import { occupiedPoints } from "./swimlane-points.ts";
+import { type BlockedGrid, segmentBlocker, stubClearGrid } from "./swimlane-stub-clear.ts";
 
 /** Routes every wire through the free channels between items, then places the wire labels and guards. */
 export function routeSwimlanes(placed: SwimlanePlacement, measure: Measure): SwimlaneRoutes {
@@ -103,10 +105,7 @@ export function routeSwimlanes(placed: SwimlanePlacement, measure: Measure): Swi
       kind ? [grow(markerBounds(MARKERS[kind], point, inward[side]), 1)] : [],
     );
   });
-  const blocked = (a: Point, b: Point) =>
-    obstacles.some((box) => segmentHits(a, b, grow(box, CLEAR))) ||
-    heads.some((box) => segmentHits(a, b, box)) ||
-    headerBoxes.some((box) => segmentHits(a, b, box));
+  const blocked = segmentBlocker(obstacles, heads, headerBoxes);
   // Unit segments: horizontal ones between xs[i] and xs[i+1] on ys[j], vertical ones between ys[j] and ys[j+1] on xs[i].
   const hBlocked = ys.map((y) =>
     xs.slice(0, -1).map((x, i) => blocked({ x, y }, { x: xs[i + 1], y })),
@@ -147,13 +146,10 @@ export function routeSwimlanes(placed: SwimlanePlacement, measure: Measure): Swi
   });
   stubs.forEach((stretch) => mark(stretch));
   // Where a stub ends its wire turns onto the grid: other wires keep off that point, or it cannot get out.
-  const terminals = new Uint8Array(xs.length * ys.length);
-  stubs.forEach(([a, b], index) => {
-    const point = index % 2 ? a : b,
-      i = ix(point.x),
-      j = iy(point.y);
-    if (i >= 0 && j >= 0) terminals[j * xs.length + i] = 1;
-  });
+  // A route found through the points other wires end or turn at (where the two would read as joined)
+  // is searched again with those points reserved.
+  const occupied = occupiedPoints(xs, ys);
+  stubs.forEach(([a, b], index) => occupied.terminal(index % 2 ? a : b));
   // Forward wires first; among them labelled ones, so their labels claim room beside them before
   // wires that need none fill the gaps; short wires before long ones.
   const span = (edge: FlowEdge) =>
@@ -180,11 +176,23 @@ export function routeSwimlanes(placed: SwimlanePlacement, measure: Measure): Swi
       sa === "top" || sa === "bottom" ? 2 : 1,
       sb === "top" || sb === "bottom" ? 2 : 1,
     ] as const;
-    // Strictly apart from other wires if possible, else sharing a line at a high price.
-    const path = search(...args, true) ?? search(...args, false);
+    // Strictly apart from other wires if possible, else apart from their lines only (past a label or
+    // another wire's terminal at a price), else sharing a line at a high price.
+    const route = (reserved: boolean, grid?: BlockedGrid) => {
+      const within = (tier: Tier) => search(...args, tier, reserved, grid);
+      return within("strict") ?? within("apart") ?? within("relaxed");
+    };
+    // A stub end closer than CLEAR to a shape blocks every segment out of it: only a wire that found
+    // no route at all may then run closer to shapes, and only at its own stub ends.
+    const lastResort = () => {
+      const grid = stubClearGrid(placed, edge.id, xs, ys, blocked);
+      return occupied.settle(route(false, grid), () => route(true, grid));
+    };
+    const path = occupied.settle(route(false), () => route(true)) ?? lastResort();
     const points = simplifyPath([pa, ...(path ?? [from, { x: to.x, y: from.y }, to]), pb]);
     routes.set(edge.id, points);
     mark(points);
+    points.forEach((point) => occupied.bend(point));
     const text = labelText.get(edge.id);
     if (text) {
       const size = smallSize(text, measure),
@@ -292,7 +300,7 @@ export function routeSwimlanes(placed: SwimlanePlacement, measure: Measure): Swi
     );
   }
 
-  /** Makes the grid avoid a box (a placed label): strictly in the first search, at a price in the second. */
+  /** Makes the grid avoid a box (a placed label): strictly in the first search, at a price in the others. */
   function block(box: Box) {
     const area = grow(box, 4);
     ys.forEach((y, j) =>
@@ -337,7 +345,10 @@ export function routeSwimlanes(placed: SwimlanePlacement, measure: Measure): Swi
     }
   }
 
-  /** Cheapest grid path from one stub to another: length, bends and crossings; never along a used line. */
+  /**
+   * Cheapest grid path from one stub to another: length, bends and crossings; never along a used line.
+   * What the `tier` does not forbid is allowed at a price.
+   */
   function search(
     sx: number,
     sy: number,
@@ -345,9 +356,12 @@ export function routeSwimlanes(placed: SwimlanePlacement, measure: Measure): Swi
     ty: number,
     startDir: number,
     endDir: number,
-    strict: boolean,
+    tier: Tier,
+    reserved: boolean,
+    grid: BlockedGrid = { h: hBlocked, v: vBlocked },
   ): Point[] | null {
     if (sx < 0 || sy < 0 || tx < 0 || ty < 0) return null;
+    const taken = occupied.view(reserved, tier);
     const W = xs.length,
       H = ys.length,
       key = (i: number, j: number, d: number) => (j * W + i) * 3 + d;
@@ -424,11 +438,11 @@ export function routeSwimlanes(placed: SwimlanePlacement, measure: Measure): Swi
         const horizontal = nd === 1,
           si = Math.min(i, ni),
           sj = Math.min(j, nj);
-        if (horizontal ? hBlocked[j][si] : vBlocked[i][sj]) continue;
+        if (horizontal ? grid.h[j][si] : grid.v[i][sj]) continue;
         const shared = horizontal ? hUsed[j][si] : vUsed[i][sj],
           label = horizontal ? hLabel[j][si] : vLabel[i][sj];
-        const foreign = terminals[nj * W + ni] === 1 && !(ni === tx && nj === ty);
-        if ((shared || label || foreign) && strict) continue;
+        const foreign = taken(ni, nj) && !(ni === tx && nj === ty);
+        if (forbidden(tier, shared, label, foreign)) continue;
         let step =
           (horizontal ? Math.abs(xs[ni] - xs[i]) : Math.abs(ys[nj] - ys[j])) +
           (shared || foreign ? 600 : 0) +

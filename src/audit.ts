@@ -34,6 +34,10 @@ import { textGroupBox } from "./text.ts";
 
 /** The least space between a note and any other element. */
 const NOTE_GAP = 16;
+/** Px a wire end may be off its outline before it is a defect. */
+export const END_OFF_OUTLINE = 1.5;
+/** Px a wire end may be off its nearest diamond vertex (in a straight line) before it is a defect. */
+export const DIAMOND_VERTEX_OFF = 0.5;
 
 /** Defects must not occur; notes are compromises the renderer makes when there is no better spot. */
 export interface Finding {
@@ -159,7 +163,7 @@ function shared(a: Point, b: Point, c: Point, d: Point): number {
 }
 
 /** Distance from a point to a shape's outline (0 on it, positive outside or inside). */
-function offOutline(point: Point, shape: SceneShape): number {
+export function offOutline(point: Point, shape: SceneShape): number {
   const { x, y, width, height } = shape.box;
   const kind = outlineOf(shape.kind);
   const radius =
@@ -199,6 +203,17 @@ function offOutline(point: Point, shape: SceneShape): number {
     ny = (point.y - cy) / b;
   const value = kind === "ellipse" ? Math.hypot(nx, ny) : Math.abs(nx) + Math.abs(ny);
   return Math.abs(value - 1) * Math.min(a, b);
+}
+
+/** Whether a point is further than DIAMOND_VERTEX_OFF from all four vertices of the diamond in `box`. */
+export function offVertices(point: Point, { x, y, width, height }: Box): boolean {
+  const vertices = [
+    { x: x + width / 2, y },
+    { x: x + width, y: y + height / 2 },
+    { x: x + width / 2, y: y + height },
+    { x, y: y + height / 2 },
+  ];
+  return !vertices.some((v) => Math.hypot(v.x - point.x, v.y - point.y) <= DIAMOND_VERTEX_OFF);
 }
 
 export interface Segment {
@@ -385,7 +400,7 @@ export function auditScene(scene: Scene): Finding[] {
     for (const [end, point] of wireEnds(wire)) {
       const shape = end ? byId.get(end) : undefined;
       const off = shape ? offOutline(point, shape) : 0;
-      if (shape && off > 1.5)
+      if (shape && off > END_OFF_OUTLINE)
         report("wire-end-off-shape", `${wire.edge} ends ${Math.round(off)}px from ${shape.id}`);
     }
     // A label's halo stays off its own connection, or it cuts notches into the line.
@@ -495,7 +510,7 @@ export function auditScene(scene: Scene): Finding[] {
       );
     const reach = markerBounds(marker.kind, marker.tip, marker.direction, marker.small);
     for (const text of texts.near(reach))
-      if (overlaps(reach, text.box, 0.5) && text.role !== "heading")
+      if (coversText(reach, text))
         report("marker-on-text", `${marker.kind} of ${marker.wire} covers ${name(text)}`);
   }
   // Other connections' wires stay off a marker.
@@ -541,14 +556,7 @@ export function auditScene(scene: Scene): Finding[] {
     for (const [end, point] of wireEnds(wire)) {
       const shape = end ? byId.get(end) : undefined;
       if (shape?.kind !== "diamond") continue;
-      const { x, y, width, height } = shape.box,
-        vertices = [
-          { x: x + width / 2, y },
-          { x: x + width, y: y + height / 2 },
-          { x: x + width / 2, y: y + height },
-          { x, y: y + height / 2 },
-        ];
-      if (!vertices.some((vertex) => Math.hypot(vertex.x - point.x, vertex.y - point.y) <= 0.5))
+      if (offVertices(point, shape.box))
         report("diamond-off-vertex", `${wire.edge} meets ${shape.id} off its vertices`);
     }
   }
@@ -715,8 +723,13 @@ function avoidable(
   return null;
 }
 
+/** Whether a marker's reach covers text other than a heading: the marker-on-text check. */
+export function coversText(reach: Box, text: SceneText): boolean {
+  return overlaps(reach, text.box, 0.5) && text.role !== "heading";
+}
+
 /** Whether segment a-b crosses or lies inside the polygon (a marker's outline). */
-function touchesPolygon(a: Point, b: Point, polygon: Point[]): boolean {
+export function touchesPolygon(a: Point, b: Point, polygon: Point[]): boolean {
   const inside = (point: Point) => insidePolygon(point, polygon);
   return (
     inside(a) ||

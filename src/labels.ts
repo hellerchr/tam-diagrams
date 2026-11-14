@@ -137,26 +137,28 @@ export function hugLabels(scene: Scene) {
       .map((point, index) => [wire.points[index], point] as const)
       .filter(([a, b]) => distance(a, b) >= 24)
       .toSorted((a, b) => distance(b[0], b[1]) - distance(a[0], a[1]));
+    // The segment ends come last, after the inner points of every segment: a free spot beside a
+    // shorter segment beats a longer one's end, and an end beats leaving the label on a wire.
+    const spots = [[0.5, 0.3, 0.7, 0.15, 0.85], [1, 0]].flatMap((ts) =>
+      segments.flatMap(([a, b]) => ts.map((t) => ({ a, b, t }))),
+    );
     let placed: Box | undefined;
     for (const away of [8, 16, 28]) {
-      for (const [a, b] of segments) {
-        for (const t of [0.5, 0.3, 0.7, 0.15, 0.85]) {
-          const at = { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t },
-            upright = Math.abs(a.x - b.x) < 0.5;
-          const candidates = upright
-            ? [
-                { x: at.x + away, y: at.y - box.height / 2 },
-                { x: at.x - away - box.width, y: at.y - box.height / 2 },
-              ]
-            : [
-                { x: at.x - box.width / 2, y: at.y - away + 2 - box.height },
-                { x: at.x - box.width / 2, y: at.y + away - 2 },
-              ];
-          placed = candidates
-            .map((place) => ({ ...box, ...place }))
-            .find((candidate) => labelFree(hidden, candidate));
-          if (placed) break;
-        }
+      for (const { a, b, t } of spots) {
+        const at = { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t },
+          upright = Math.abs(a.x - b.x) < 0.5;
+        const candidates = upright
+          ? [
+              { x: at.x + away, y: at.y - box.height / 2 },
+              { x: at.x - away - box.width, y: at.y - box.height / 2 },
+            ]
+          : [
+              { x: at.x - box.width / 2, y: at.y - away + 2 - box.height },
+              { x: at.x - box.width / 2, y: at.y + away - 2 },
+            ];
+        placed = candidates
+          .map((place) => ({ ...box, ...place }))
+          .find((candidate) => labelFree(hidden, candidate));
         if (placed) break;
       }
       if (placed) break;

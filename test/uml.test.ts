@@ -1,8 +1,8 @@
 import { beforeAll, describe, expect, it } from "vitest";
-import * as examples from "../src/samples/uml-examples";
-import { renderUml } from "../src/index";
-import { auditScene } from "../src/audit";
-import { emptyScene } from "../src/scene";
+import * as examples from "../src/samples/uml-examples.ts";
+import { renderUml } from "../src/index.ts";
+import { auditScene } from "../src/audit.ts";
+import { emptyScene } from "../src/scene.ts";
 
 const light = {
   background: "#ffffff",

@@ -1,10 +1,10 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
-import { parseError, umlColors } from "./fixtures";
-import { parseSequenceDiagram, type MessageEvent } from "../src/uml-sequence";
-import { renderUml } from "../src/index";
-import { auditScene } from "../src/audit";
-import { generateSequenceDiagram } from "../src/samples/fuzz";
+import { parseError, umlColors } from "./fixtures.ts";
+import { parseSequenceDiagram, type MessageEvent } from "../src/uml-sequence.ts";
+import { renderUml } from "../src/index.ts";
+import { auditScene } from "../src/audit.ts";
+import { generateSequenceDiagram } from "../src/samples/fuzz.ts";
 
 const error = (source: string) => parseError(parseSequenceDiagram, source);
 const messages = (source: string) =>

@@ -1,10 +1,10 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
-import { parseError, umlColors } from "./fixtures";
-import { parseUseCaseDiagram } from "../src/uml-usecase";
-import { USECASE_EXAMPLES } from "../src/samples/uml-examples";
-import { renderUml } from "../src/index";
-import { auditScene } from "../src/audit";
+import { parseError, umlColors } from "./fixtures.ts";
+import { parseUseCaseDiagram } from "../src/uml-usecase.ts";
+import { USECASE_EXAMPLES } from "../src/samples/uml-examples.ts";
+import { renderUml } from "../src/index.ts";
+import { auditScene } from "../src/audit.ts";
 
 const error = (source: string) => parseError(parseUseCaseDiagram, source);
 

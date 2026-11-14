@@ -122,6 +122,9 @@ these rules and reports the line of a broken one.
 | `src/uml-swimlanes.ts`       | Swimlane activity diagrams: `layoutSwimlanes` and the drawing                        |
 | `src/swimlane-place.ts`      | Swimlanes stage 1: lanes, rows and items sized and placed                            |
 | `src/swimlane-routes.ts`     | Swimlanes stage 2: the grid router, wire labels and guards                           |
+| `src/swimlane-points.ts`     | The points swimlane wires end or turn at, kept free of other wires' routes           |
+| `src/swimlane-tiers.ts`      | What each search of the swimlane router may step on, strictest first                 |
+| `src/swimlane-stub-clear.ts` | What blocks the router's grid, and its last resort at a wire's own stub ends         |
 | `src/uml-state.ts`           | State machine diagrams: the parser                                                   |
 | `src/uml-state-layout.ts`    | State machine layout: composite states, concurrent regions, notes                    |
 | `src/uml-sequence.ts`        | Sequence diagrams: the parser                                                        |
@@ -135,12 +138,15 @@ these rules and reports the line of a broken one.
 | `src/draw.ts`                | The SVG drawer and color tones                                                       |
 | `src/elk.ts`                 | ELK layout of nested graphs and the worker pool                                      |
 | `src/wires.ts`               | Wires from ELK's routes: ends, spreading and straightening                           |
+| `src/wire-touch.ts`          | Two wires touching at a bend, where they would read as joined                        |
 | `src/labels.ts`              | Label placement beside wires and shapes                                              |
 | `src/route.ts`               | Geometry passes after ELK: shared state, segment and clearance helpers               |
 | `src/route-straighten.ts`    | Passes that straighten wires and slide markers                                       |
 | `src/route-center.ts`        | Passes that center elements, fans, pairs and ends                                    |
 | `src/route-spread.ts`        | Passes that spread jogs and balance elements                                         |
+| `src/node-labels.ts`         | A node's own labels (notes) and how they move with it                                |
 | `src/audit.ts`               | Layout checks: overlaps, wires through shapes, ...                                   |
+| `src/marker-clear.ts`        | The audit's marker-on-text and wire-on-marker checks, for a wire's own markers       |
 | `src/best.ts`                | Scene metrics, the best-layout portfolio and the layout cache                        |
 | `test/`                      | Tests; `tam.fuzz.test.ts` is a stress run gated by `HARNESS=1`                       |
 

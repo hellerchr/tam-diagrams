@@ -2,11 +2,11 @@
 // Stress run over generated TAM diagrams, gated by HARNESS=1: FROM, COUNT, ELEMENTS, DIRECTION, DESIGN and OUT (JSON results).
 import { it } from "vitest";
 import { writeFileSync } from "node:fs";
-import { generateTam } from "../src/samples/fuzz";
-import { renderTam } from "../src/tam-layout";
-import { auditScene } from "../src/audit";
-import { measureScene } from "../src/best";
-import { colors } from "./fixtures";
+import { generateTam } from "../src/samples/fuzz.ts";
+import { renderTam } from "../src/tam-layout.ts";
+import { auditScene } from "../src/audit.ts";
+import { measureScene } from "../src/best.ts";
+import { colors } from "./fixtures.ts";
 
 it.runIf(process.env.HARNESS)(
   "fuzzes",

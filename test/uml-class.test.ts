@@ -1,13 +1,13 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
-import { parseError, umlColors } from "./fixtures";
+import { parseError, umlColors } from "./fixtures.ts";
 import {
   type ClassView,
   foldClassDiagram,
   generics,
   parseClassDiagram,
   parseMember,
-} from "../src/uml-class";
+} from "../src/uml-class.ts";
 import {
   classPartAt,
   classPartBox,
@@ -15,8 +15,8 @@ import {
   renderClassView,
   renderUml,
   toggleClassPart,
-} from "../src/index";
-import { auditScene } from "../src/audit";
+} from "../src/index.ts";
+import { auditScene } from "../src/audit.ts";
 
 const error = (source: string) => parseError(parseClassDiagram, source);
 

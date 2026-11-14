@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { parseTam } from "../src/tam";
-import { renderTam } from "../src/tam-layout";
-import { TAM_EXAMPLES } from "../src/samples/tam-examples";
-import { auditScene } from "../src/audit";
-import { colors } from "./fixtures";
+import { parseTam } from "../src/tam.ts";
+import { renderTam } from "../src/tam-layout.ts";
+import { TAM_EXAMPLES } from "../src/samples/tam-examples.ts";
+import { auditScene } from "../src/audit.ts";
+import { colors } from "./fixtures.ts";
 
 const kinds = (source: string) =>
   parseTam(source).edges.map((edge) => `${edge.source} ${edge.kind} ${edge.target}`);

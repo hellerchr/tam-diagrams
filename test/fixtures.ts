@@ -1,4 +1,4 @@
-import type { UmlError } from "../src/uml";
+import type { UmlError } from "../src/uml.ts";
 
 // Shared test fixtures for the diagram engine tests.
 export const colors = {
