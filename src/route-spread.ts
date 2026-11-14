@@ -18,6 +18,7 @@ import {
   straightAcross,
 } from "./route";
 import { clearTitles, slideIntoContainer, slideMarker } from "./route-straighten";
+import { type Obstacle, shiftLabels, startAmong } from "./node-labels";
 
 /** A step this close to a container's border counts as lying on it. */
 const BORDER_REACH = 6;
@@ -253,38 +254,34 @@ export function balanceElements(geometry: Geometry, vertical: boolean) {
     // Elements keep ELK's node spacing (room for the dots between multiples, too), wires its wire spacing.
     const { node: apart, edge: wireGap } = geometry.spacing;
     const inset = inner(geometry, parentId, cross);
-    let low = frame ? frame[cross] + inset.low : -Infinity,
-      high = frame ? frame[cross] + frame[size(cross)] - inset.high : Infinity;
-    const beside = (item: Box, gap: number) =>
-      item[main] < box[main] + box[size(main)] + gap &&
-      item[main] + item[size(main)] > box[main] - gap;
-    const obstacles: [Box, number][] = [
+    // Its own labels (notes) move with it, so each of them limits the move as the box does.
+    const labels = geometry.nodeLabels.get(id) ?? [];
+    const obstacles: Obstacle[] = [
       ...[...geometry.leaves, ...geometry.markers]
         .filter((other) => !own.has(other))
-        .map((other) => [geometry.boxes.get(other)!, apart] as [Box, number]),
+        .map((other) => [geometry.boxes.get(other)!, apart] as Obstacle),
       ...[...geometry.containers]
         .filter(
           (container) => container !== parentId && !geometry.ancestors.get(id)?.includes(container),
         )
-        .map((container) => [geometry.boxes.get(container)!, apart] as [Box, number]),
+        .map((container) => [geometry.boxes.get(container)!, apart] as Obstacle),
       ...[
         ...geometry.titles,
         ...[...geometry.nodeLabels].filter(([node]) => !own.has(node)).flatMap(([, list]) => list),
         ...[...geometry.edgeLabels].filter(([edge]) => !own.has(edge)).map(([, label]) => label),
-      ].map((label) => [label, 8] as [Box, number]),
+      ].map((label) => [label, 8] as Obstacle),
       ...[...geometry.routes]
         .filter(([edge]) => !own.has(edge))
         .flatMap(([, route]) =>
-          segments(route).map(([p, q]) => [spanBox([p, q]), wireGap] as [Box, number]),
+          segments(route).map(([p, q]) => [spanBox([p, q]), wireGap] as Obstacle),
         ),
-    ].filter(([item, gap]) => item && beside(item, gap));
-    for (const [item, gap] of obstacles) {
-      if (item[cross] + item[size(cross)] <= box[cross] + 0.5)
-        low = Math.max(low, item[cross] + item[size(cross)] + gap);
-      else if (item[cross] >= box[cross] + box[size(cross)] - 0.5)
-        high = Math.min(high, item[cross] - gap);
-    }
-    const start = Math.min(Math.max(target - box[size(cross)] / 2, low), high - box[size(cross)]);
+    ].filter(([item]) => item);
+    const frameLimits = {
+      low: frame ? frame[cross] + inset.low : -Infinity,
+      high: frame ? frame[cross] + frame[size(cross)] - inset.high : Infinity,
+    };
+    const start = startAmong(box, labels, obstacles, frameLimits, cross, target);
+    if (start === undefined) continue;
     const shift = start - box[cross];
     if (!Number.isFinite(shift) || Math.abs(shift) < 4) continue;
     // Moves the element, then each connection onto its shifted line; undoes everything if one fails.
@@ -295,6 +292,7 @@ export function balanceElements(geometry: Geometry, vertical: boolean) {
       edgeLabels: new Map(geometry.edgeLabels),
     };
     geometry.boxes.set(id, { ...box, [cross]: start });
+    shiftLabels(geometry, id, cross, shift);
     const moved = links.every((link) => {
       // A straight connection moves along; a bent one runs straight at the middle of the shared overlap.
       const placed = geometry.boxes.get(id)!,
