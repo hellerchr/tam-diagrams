@@ -105,17 +105,20 @@ export function bestLayout(
 
 /**
  * Parses, lays out and draws a TAM source. Layouts are cached per source and font, so redrawing in
- * other colors is cheap.
+ * other colors is cheap. `measure` replaces the canvas text metrics (Node); such layouts are not
+ * cached.
  */
 export async function renderTam(
   source: string,
   colors: DiagramColors,
-  options: { layout?: ElkLayout } = {},
+  options: { layout?: ElkLayout; measure?: Measure } = {},
 ): Promise<TamPicture> {
   const diagram = parseTam(source);
-  const scene = await cachedLayout(`tam\u0000${colors.font}\u0000${source}`, () =>
-    bestLayout(diagram, textMeasure(colors.font), options.layout),
-  );
+  const scene = await (options.measure
+    ? bestLayout(diagram, options.measure, options.layout)
+    : cachedLayout(`tam\u0000${colors.font}\u0000${source}`, () =>
+        bestLayout(diagram, textMeasure(colors.font), options.layout),
+      ));
   const description = diagram.title || "TAM block diagram";
   const svg = drawScene(scene, colors, description, "tam");
   return { svg, width: scene.bounds.width, height: scene.bounds.height, description, scene };

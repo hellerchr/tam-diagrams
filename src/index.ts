@@ -32,6 +32,7 @@ export { renderTam, type TamPicture } from "./tam-layout";
 export { detectUml, UmlError, type UmlKind } from "./uml";
 export { drawScene, type DiagramColors } from "./draw";
 export { textMeasure, type Measure } from "./text";
+export { arialMeasure } from "./arial-measure";
 export { type Scene } from "./scene";
 export { auditScene, type Finding } from "./audit";
 export { measureScene, type Metrics } from "./best";
@@ -180,13 +181,14 @@ export interface ClassPicture extends UmlPicture {
 
 /**
  * A class diagram with some packages collapsed and some classes without members (`view`; by
- * default the overview of a large diagram). Layouts are cached per source and view.
+ * default the overview of a large diagram). Layouts are cached per source and view. `measure`
+ * replaces the canvas text metrics (Node); such layouts are not cached.
  */
 export async function renderClassView(
   source: string,
   colors: DiagramColors,
   view: ClassView | null,
-  options: { layout?: ElkLayout } = {},
+  options: { layout?: ElkLayout; measure?: Measure } = {},
 ): Promise<ClassPicture> {
   const full = parseClassDiagram(source);
   const shown = view ?? overview(full);
@@ -198,9 +200,11 @@ export async function renderClassView(
     [...shown.collapsed].sort().join(","),
     [...shown.bare].sort().join(","),
   ].join("\u0000");
-  const scene = await cachedLayout(key, () =>
-    layoutClassDiagram(diagram, textMeasure(colors.font), { layout: options.layout }),
-  );
+  const scene = await (options.measure
+    ? layoutClassDiagram(diagram, options.measure, { layout: options.layout })
+    : cachedLayout(key, () =>
+        layoutClassDiagram(diagram, textMeasure(colors.font), { layout: options.layout }),
+      ));
   return {
     ...picture(scene, colors, full.title || UML_NAMES.class, "class"),
     diagram,
