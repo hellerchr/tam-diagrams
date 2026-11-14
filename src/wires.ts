@@ -15,8 +15,9 @@ import { clipToOutline, entryPoint, outlineOf } from "./outline";
 import { markerBounds, type MarkerKind } from "./markers";
 import { type Measure } from "./text";
 import type { Placement } from "./elk";
-import { followLabel, smallLines } from "./labels";
+import { smallLines } from "./labels";
 import { crossesBox } from "./audit";
+import { followLabelClear } from "./marker-clear";
 import { bendCandidates, runsAlong } from "./route";
 
 /**
@@ -508,7 +509,7 @@ export function straightenScene(scene: Scene, gap = 9) {
         if (!clearRoute(scene, wire, points) || crowded(scene, wire, points, gap)) continue;
         const before = wire.points;
         reroute(scene, wire, points);
-        if (followLabel(scene, wire)) break;
+        if (followLabelClear(scene, wire)) break;
         reroute(scene, wire, before);
       }
     }

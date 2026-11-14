@@ -141,6 +141,7 @@ these rules and reports the line of a broken one.
 | `src/route-spread.ts`        | Passes that spread jogs and balance elements                                         |
 | `src/node-labels.ts`         | A node's own labels (notes) and how they move with it                                |
 | `src/audit.ts`               | Layout checks: overlaps, wires through shapes, ...                                   |
+| `src/marker-clear.ts`        | The audit's marker-on-text and wire-on-marker checks, for a wire's own markers       |
 | `src/best.ts`                | Scene metrics, the best-layout portfolio and the layout cache                        |
 | `test/`                      | Tests; `tam.fuzz.test.ts` is a stress run gated by `HARNESS=1`                       |
 

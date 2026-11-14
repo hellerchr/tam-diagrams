@@ -492,7 +492,7 @@ export function auditScene(scene: Scene): Finding[] {
       );
     const reach = markerBounds(marker.kind, marker.tip, marker.direction, marker.small);
     for (const text of texts.near(reach))
-      if (overlaps(reach, text.box, 0.5) && text.role !== "heading")
+      if (coversText(reach, text))
         report("marker-on-text", `${marker.kind} of ${marker.wire} covers ${name(text)}`);
   }
   // Other connections' wires stay off a marker.
@@ -712,8 +712,13 @@ function avoidable(
   return null;
 }
 
+/** Whether a marker's reach covers text other than a heading: the marker-on-text check. */
+export function coversText(reach: Box, text: SceneText): boolean {
+  return overlaps(reach, text.box, 0.5) && text.role !== "heading";
+}
+
 /** Whether segment a-b crosses or lies inside the polygon (a marker's outline). */
-function touchesPolygon(a: Point, b: Point, polygon: Point[]): boolean {
+export function touchesPolygon(a: Point, b: Point, polygon: Point[]): boolean {
   const inside = (point: Point) => insidePolygon(point, polygon);
   return (
     inside(a) ||
