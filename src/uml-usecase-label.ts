@@ -1,6 +1,6 @@
 /** Use case line labels: a label beside the middle of its line, on whichever side has room. */
 
-import { crossesBox } from "./audit";
+import { crossesBox, insideFraction } from "./audit";
 import { smallLines, smallSize } from "./labels";
 import { markerBounds } from "./markers";
 import {
@@ -94,6 +94,49 @@ function crowding(scene: Scene, wire: SceneWire, box: Box): number {
   );
 }
 
+/**
+ * Where the halo (stroke-width 7 in draw.ts) erases a wire, relative to a label box, from
+ * rasterised labels over wires: sideways it reaches 2.5px past the box, under it 1px for the
+ * descenders of p, y and g. The top 2px of the box are not counted: a wire only that deep (all the
+ * audit lets through there) meets the ascenders alone, and counting the nick a sloped wire cuts
+ * from a corner moved labels that had lost nothing.
+ */
+const HALO_REACH = { side: 2.5, bottom: 1, topSkipped: 2 };
+
+/** Lengths this close are equal: the pieces of a wire sum to a different last digit per spot. */
+const SAME_LENGTH = 1e-6;
+
+/** Length of other wires inside the halo's reach round `box`: what the label would erase. */
+function wireUnderHalo(scene: Scene, wire: SceneWire, box: Box): number {
+  const halo: Box = {
+    x: box.x - HALO_REACH.side,
+    y: box.y + HALO_REACH.topSkipped,
+    width: box.width + 2 * HALO_REACH.side,
+    height: box.height - HALO_REACH.topSkipped + HALO_REACH.bottom,
+  };
+  let length = 0;
+  for (const other of scene.wires) {
+    if (other === wire) continue;
+    other.points.slice(1).forEach((point, index) => {
+      const from = other.points[index];
+      length += insideFraction(from, point, halo) * distance(from, point);
+    });
+  }
+  return length;
+}
+
+/** Of the spots the audit accepts, the one that hides the least wire; ties keep the earlier. */
+export function leastHiding(scene: Scene, wire: SceneWire, spots: Box[]): Box | undefined {
+  let best: Box | undefined,
+    least = Infinity;
+  for (const spot of spots) {
+    if (!hasRoom(scene, wire, spot, ACCEPTED)) continue;
+    const hidden = wireUnderHalo(scene, wire, spot);
+    if (hidden < least - SAME_LENGTH) [best, least] = [spot, hidden];
+  }
+  return best;
+}
+
 /** Boxes of `size` beside the middle of a line, on both sides, the nearest and middlest first. */
 function labelSpots(points: Point[], size: Pick<Box, "width" | "height">): Box[] {
   const lengths = points.slice(1).map((point, index) => distance(points[index], point)),
@@ -134,13 +177,14 @@ export function labelLine(scene: Scene, measure: Measure, id: string, text: stri
   const wire = scene.wires.find((item) => item.edge === id);
   if (!wire) return;
   const spots = labelSpots(wire.points, smallSize(text, measure));
-  // Three tiers: a spot with room all round; else the first the audit accepts, which lets a wire
-  // graze the box; else the one that runs into the fewest things. Counting alone would score a
-  // wire grazing the box like one through its middle, and shape overlaps below wires, though the
-  // audit reports every overlap and only the wire through the box.
+  // Three tiers: a spot with room all round; else, of the spots the audit accepts, the one whose
+  // halo erases the least other wire (the audit lets a wire graze the box, but the halo would
+  // cut it under the whole word); else the one that runs into the fewest things. Counting alone
+  // would score a wire grazing the box like one through its middle, and shape overlaps below
+  // wires, though the audit reports every overlap and only the wire through the box.
   const box =
     spots.find((spot) => hasRoom(scene, wire, spot, WANTED)) ??
-    spots.find((spot) => hasRoom(scene, wire, spot, ACCEPTED)) ??
+    leastHiding(scene, wire, spots) ??
     spots.reduce((best, spot) =>
       crowding(scene, wire, spot) < crowding(scene, wire, best) ? spot : best,
     );

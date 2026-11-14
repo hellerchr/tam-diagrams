@@ -4,9 +4,24 @@ import { parseError, umlColors } from "./fixtures";
 import { parseUseCaseDiagram } from "../src/uml-usecase";
 import { USECASE_EXAMPLES } from "../src/samples/uml-examples";
 import { arialMeasure, renderUml } from "../src/index";
-import { auditScene } from "../src/audit";
+import { auditScene, insideFraction } from "../src/audit";
+import { distance, type Scene, type SceneText } from "../src/scene";
 
 const error = (source: string) => parseError(parseUseCaseDiagram, source);
+
+/**
+ * The length of each other wire inside the drawn box of a label, its segments summed: a curve is
+ * a polyline of pieces a few pixels long, none of which alone is as long as the curve runs there.
+ */
+const insideLabel = (scene: Scene, label: SceneText) =>
+  scene.wires
+    .filter((wire) => wire.edge !== label.owner)
+    .map(({ points }) =>
+      points.slice(1).reduce((sum, point, index) => {
+        const from = points[index];
+        return sum + insideFraction(from, point, label.box) * distance(from, point);
+      }, 0),
+    );
 
 describe("use case diagram syntax", () => {
   it("reads actors, machine actors, boundaries, use cases and relations", () => {
@@ -106,6 +121,41 @@ describe("use case diagram syntax", () => {
       expect(auditScene(scene).filter((finding) => !finding.note)).toEqual([]);
     },
   );
+
+  // A label's halo erases the wire under its word, so no other wire may run along a label, though
+  // the audit lets one graze the box.
+  const relationLabels = async (name: string) => {
+    const [, source] = USECASE_EXAMPLES.find(([title]) => title.includes(name))!;
+    const { scene } = await renderUml(source, umlColors, { measure: arialMeasure });
+    return {
+      scene,
+      labels: scene.texts.filter((text) => text.role === "label" && /^«/.test(text.text)),
+    };
+  };
+
+  it.each(["figure 2-7", "bank (large)"])(
+    "has no other wire running along a label of %s left to right under the Arial measure",
+    async (name) => {
+      const { scene, labels } = await relationLabels(name);
+      expect(labels.length).toBeGreaterThan(0);
+      for (const label of labels)
+        expect(Math.max(...insideLabel(scene, label))).toBeLessThan(label.box.height);
+    },
+  );
+
+  // Where no wire is lost under a label, the label stays where it is: moving it only costs the
+  // distance to its line.
+  it.each([
+    ["figure 2-7", "BT", "r6", 280.6004822496276, -201.33010164768348],
+    ["bank (large)", "LR", "r15", 334.4716521670419, 188.60079527413748],
+  ])("keeps the label of %s %s where no wire runs along it", async (name, direction, owner, x, y) => {
+    const [, source] = USECASE_EXAMPLES.find(([title]) => title.includes(name))!;
+    const { scene } = await renderUml(source.replace("direction LR", `direction ${direction}`), umlColors, {
+      measure: arialMeasure,
+    });
+    const { box } = scene.texts.find((text) => text.role === "label" && text.owner === owner)!;
+    expect([box.x, box.y]).toEqual([expect.closeTo(x, 6), expect.closeTo(y, 6)]);
+  });
 
   it("puts a use case shared by two actors between them", async () => {
     // Check balance is used by the customer and, through the statement that extends it, by the teller.

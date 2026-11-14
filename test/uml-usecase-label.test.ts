@@ -10,7 +10,7 @@ import {
   type SceneText,
   type SceneWire,
 } from "../src/scene";
-import { ACCEPTED, hasRoom, labelLine } from "../src/uml-usecase-label";
+import { ACCEPTED, hasRoom, labelLine, leastHiding } from "../src/uml-usecase-label";
 
 const line = (edge: string, a: Point, b: Point): SceneWire => ({
   edge,
@@ -33,6 +33,16 @@ describe("label placement beside a line", () => {
     labelLine(scene, measure, "own", "x");
     expect(scene.texts).toHaveLength(1);
     expect(scene.texts[0].y).toBeLessThan(100);
+  });
+
+  it("keeps the first spot with room all round, though its halo would cut a wire", () => {
+    // The foreign wire at x 112.25 lies right of the first spot (x 90-110, y 106-123) outside its
+    // 2px of room, but within the 2.5px a halo reaches sideways. The spot above hides nothing, yet
+    // the roomy spot comes first.
+    const scene = emptyScene();
+    scene.wires.push(wire("own", 100), line("other", { x: 112.25, y: 104 }, { x: 112.25, y: 130 }));
+    labelLine(scene, measure, "own", "x");
+    expect(scene.texts[0].y).toBeGreaterThan(100);
   });
 
   it("takes the spot crossed by the fewest wires when every spot is crossed", () => {
@@ -175,5 +185,66 @@ describe("the room a label is accepted with", () => {
       scene.texts.push(label(BOX, "label", "own"));
       expect(auditScene(scene).some((finding) => finding.check === check)).toBe(!accepted);
     }
+  });
+});
+
+describe("the spot a label takes among those the audit accepts", () => {
+  // Two spots a screen apart, each with its own stretch of other wire to hide; the label's own
+  // wire runs far below both.
+  const A: Box = BOX;
+  const B: Box = { ...BOX, x: 400 };
+  const across = (edge: string, from: number, to: number, y: number) =>
+    line(edge, { x: from, y }, { x: to, y });
+  const sceneWith = (...others: SceneWire[]) => {
+    const scene = emptyScene();
+    scene.wires.push(line("own", { x: 0, y: 300 }, { x: 600, y: 300 }), ...others);
+    return scene;
+  };
+  const choose = (scene: Scene, spots: Box[]) => leastHiding(scene, scene.wires[0], spots);
+
+  const upright = (edge: string, x: number, from: number, to: number) =>
+    line(edge, { x, y: from }, { x, y: to });
+
+  it("takes the spot that hides less wire, though it comes later", () => {
+    // Both wires graze their box 1px above its bottom edge (y 117), which the audit accepts; the
+    // one at A is 25px of box and halo long, the one at B 17.5px.
+    const scene = sceneWith(across("a", 0, 200, 116), across("b", 395, 415, 116));
+    expect(choose(scene, [A, B])).toBe(B);
+    expect(choose(scene, [B, A])).toBe(B);
+  });
+
+  // Halo reach: 2.5px beside the box (rasterised: 3.8px cut at 1.5px, none at 2.5px), 1px under it
+  // for descenders, the top 2px not counted. Only A has a wire: B wins where it counts, else A.
+  it.each([
+    ["counts a wire 2.25px beside the box", upright("a", 122.25, 90, 130), B],
+    ["ignores a wire 2.75px beside the box", upright("a", 122.75, 90, 130), A],
+    ["counts a wire 0.8px under the box", across("a", 0, 200, 117.8), B],
+    ["ignores a wire 1.5px under the box", across("a", 0, 200, 118.5), A],
+    ["ignores a wire grazing the top of the box", across("a", 0, 200, 101), A],
+  ])("%s", (_name, other, expected) => {
+    expect(choose(sceneWith(other), [A, B])).toBe(expected);
+  });
+
+  it("keeps the earlier spot when two hide the same, though rounding tells them apart", () => {
+    // A steep wire passes the left of each spot, the second a translate of the first: equal in
+    // exact arithmetic, but in floating point the later spot's sum is a last digit smaller.
+    const near: Box = { x: 101.2, y: 102.8, width: 20, height: 17 };
+    const far: Box = { ...near, x: near.x + 218.1 };
+    const past = (edge: string, box: Box) =>
+      line(edge, { x: box.x - 2.4, y: box.y - 5.3 }, { x: box.x - 0.7, y: box.y + 30.6 });
+    const scene = sceneWith(past("a", near), past("b", far));
+    expect(choose(scene, [near, far])).toBe(near);
+    expect(choose(scene, [far, near])).toBe(far);
+  });
+
+  it("never takes a spot the audit does not accept, however little it hides", () => {
+    const scene = sceneWith(across("a", 0, 200, 116));
+    scene.shapes.push({ id: "s", kind: "rect", box: B, container: false, depth: 0, fill: "page" });
+    expect(choose(scene, [A, B])).toBe(A);
+  });
+
+  it("finds nothing when no spot is accepted", () => {
+    const scene = sceneWith(across("a", 0, 200, 110));
+    expect(choose(scene, [A])).toBeUndefined();
   });
 });
