@@ -20,7 +20,7 @@ block diagrams and the UML class, use case, activity, state machine and sequence
 import { renderTam, renderUml, detectUml, svgUrl } from "tam-diagrams";
 
 const colors = {
-  background: "#fff",
+  background: "#ffffff",
   text: "#1b1c1f",
   secondary: "#3f4146",
   series: ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#6250d6", "#e34948"],
@@ -56,17 +56,51 @@ img.src = svgUrl(svg);
 - **Showing the result.** `svgUrl(svg)` gives a `data:` URL for an `<img>`; never insert the SVG into
   the page.
 - **Text metrics.** Rendering measures text with a canvas. Without one (Node), pass
-  `{ measure }` to `renderUml`, or run under jsdom as the tests do.
+  `{ measure }` to `renderTam`, `renderUml` or `renderClassView`: `arialMeasure` is a ready measure
+  for Node, or run under jsdom as the tests do.
 
 The package ships TypeScript sources: use it with a bundler or runtime that compiles TypeScript
-(Vite, esbuild, Bun, Deno, Node 23+ with type stripping).
+(Vite, esbuild, Bun, Deno). Node cannot load them, because their relative imports have no file
+extensions; on Node, use the command line, which runs from the bundled `dist/cli.js`.
+
+## Command line
+
+With the package installed in a project (`npm install --save-dev tam-diagrams`, or from git),
+`npx tam-diagrams` runs the command line. It tells TAM from Mermaid by content, not by file extension.
+
+```sh
+npx tam-diagrams render diagram.tam -o diagram.svg
+cat diagram.tam | npx tam-diagrams render - > diagram.svg
+npx tam-diagrams check docs/*.tam docs/*.mmd
+```
+
+`render` writes the SVG to the file given with `-o`, or to stdout. `check` reads every file, prints
+nothing when they are valid and a `<file>:<line>: <message>` for each broken file (`<stdin>` for
+`-`). To check diagram sources before each commit, add a local hook to `.pre-commit-config.yaml`:
+
+```yaml
+repos:
+  - repo: local
+    hooks:
+      - id: tam-diagrams
+        name: check diagrams
+        entry: npx tam-diagrams check
+        language: system
+        files: \.(tam|mmd)$
+```
+
+The `files:` pattern matches whatever extensions the project uses for diagram sources.
+
+Exit codes: `0` success, `1` a diagram error, `2` a usage or I/O error. The command line measures
+text with Arial/Helvetica widths and names that font stack in the SVG, so the picture is exact where
+those fonts are installed.
 
 ## API
 
 - `tam-diagrams`: `renderTam`, `parseTam`, `TamError`; `renderUml`, `parseUml`, `detectUml`,
   `UmlError`; `renderClassView`, `overview`, `classPartAt`, `classPartBox`, `toggleClassPart`;
-  `drawScene`, `textMeasure`, `auditScene`, `measureScene`, `svgUrl`; `elkWorkerPool`,
-  `bundledElk`; and their types.
+  `drawScene`, `textMeasure`, `arialMeasure`, `auditScene`, `measureScene`, `svgUrl`;
+  `elkWorkerPool`, `bundledElk`; and their types.
 - `tam-diagrams/layout`: building blocks for further diagram types (`layoutGraph`, `addWire`,
   `attachEnds`, `hugLabels`, `straightenScene`, `bestScene`, scene helpers, `prepare`, ...) and the
   TAM layout steps (`layoutTam`, `bestLayout`).
@@ -131,6 +165,8 @@ these rules and reports the line of a broken one.
 | `src/scene.ts`               | The scene model all layouts produce and its box and point geometry                   |
 | `src/outline.ts`             | Shape outlines: polygons, inside tests, where wires enter shapes                     |
 | `src/text.ts`                | Type scale, text measuring and wrapping, text, titles, notes and scene bounds        |
+| `src/arial-measure.ts`       | `arialMeasure`: text widths from Arial/Helvetica metrics, for Node without a canvas  |
+| `src/font-widths.ts`         | Advance width tables (Liberation Sans, metric-compatible with Arial) for the measure |
 | `src/markers.ts`             | Wire-end markers: size, outline and SVG                                              |
 | `src/draw.ts`                | The SVG drawer and color tones                                                       |
 | `src/elk.ts`                 | ELK layout of nested graphs and the worker pool                                      |
@@ -142,12 +178,21 @@ these rules and reports the line of a broken one.
 | `src/route-spread.ts`        | Passes that spread jogs and balance elements                                         |
 | `src/audit.ts`               | Layout checks: overlaps, wires through shapes, ...                                   |
 | `src/best.ts`                | Scene metrics, the best-layout portfolio and the layout cache                        |
+| `cli/bin.ts`                 | The executable's entry: runs `main` and sets the exit code                           |
+| `cli/main.ts`                | The `render` and `check` commands, their exit codes, and the I/O port they use       |
+| `cli/args.ts`                | Command line parsing and the usage text                                              |
+| `cli/diagram.ts`             | Source to SVG with `arialMeasure`: TAM or Mermaid by content; the CLI's colors       |
+| `cli/report.ts`              | Error messages as `<file>:<line>: <message>`                                         |
+| `cli/node-io.ts`             | The I/O port on `node:fs` and the process streams                                    |
+| `rolldown.config.mjs`        | The build: bundles `cli/bin.ts` into `dist/cli.js`, the package's `bin`              |
 | `test/`                      | Tests; `tam.fuzz.test.ts` is a stress run gated by `HARNESS=1`                       |
 
 ## Checks
 
 `npm install && npm test` runs the tests: every sample must render with no audit defects, and the
-Mermaid samples must also parse with Mermaid. To stress-test with generated diagrams:
+Mermaid samples must also parse with Mermaid. `npm run build` bundles the command line into
+`dist/cli.js` (`npm install` runs it too); the command line's smoke test builds the bundle itself,
+into a temporary directory, and runs it as a process. To stress-test with generated diagrams:
 `HARNESS=1 COUNT=200 OUT=/tmp/fuzz.json npx vitest run test/tam.fuzz.test.ts`.
 
 ## License
