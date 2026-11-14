@@ -34,6 +34,8 @@ import { textGroupBox } from "./text";
 
 /** The least space between a note and any other element. */
 const NOTE_GAP = 16;
+/** Px a wire end may be off its outline before it is a defect. */
+export const END_OFF_OUTLINE = 1.5;
 
 /** Defects must not occur; notes are compromises the renderer makes when there is no better spot. */
 export interface Finding {
@@ -156,7 +158,7 @@ function shared(a: Point, b: Point, c: Point, d: Point): number {
 }
 
 /** Distance from a point to a shape's outline (0 on it, positive outside or inside). */
-function offOutline(point: Point, shape: SceneShape): number {
+export function offOutline(point: Point, shape: SceneShape): number {
   const { x, y, width, height } = shape.box;
   const kind = outlineOf(shape.kind);
   const radius =
@@ -382,7 +384,7 @@ export function auditScene(scene: Scene): Finding[] {
     for (const [end, point] of wireEnds(wire)) {
       const shape = end ? byId.get(end) : undefined;
       const off = shape ? offOutline(point, shape) : 0;
-      if (shape && off > 1.5)
+      if (shape && off > END_OFF_OUTLINE)
         report("wire-end-off-shape", `${wire.edge} ends ${Math.round(off)}px from ${shape.id}`);
     }
     // A label's halo stays off its own connection, or it cuts notches into the line.

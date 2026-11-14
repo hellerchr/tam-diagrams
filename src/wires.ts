@@ -16,7 +16,7 @@ import { markerBounds, type MarkerKind } from "./markers";
 import { type Measure } from "./text";
 import type { Placement } from "./elk";
 import { smallLines } from "./labels";
-import { crossesBox } from "./audit";
+import { crossesBox, END_OFF_OUTLINE, offOutline } from "./audit";
 import { followLabelClear } from "./marker-clear";
 import { bendCandidates, runsAlong } from "./route";
 import { touchesOtherWire } from "./wire-touch";
@@ -522,6 +522,18 @@ export function straightenScene(scene: Scene, gap = 9) {
   }
 }
 
+/**
+ * The route with its end `end` moved onto the shape's outline; null when the line misses the
+ * outline and its end would be off the shape. A line that only grazes the outline (at a polygon's
+ * corner) keeps its end.
+ */
+function clipEnd(points: Point[], end: number, shape: SceneShape): Point[] | null {
+  return (
+    clipToOutline(points, end, shape.kind, shape.box, endRadius(shape)) ??
+    (offOutline(points[end], shape) <= END_OFF_OUTLINE ? points : null)
+  );
+}
+
 /** Straight segments between two shapes along each axis where they overlap; symbols only through their center. */
 function straightCandidates(route: Point[], a: SceneShape, b: SceneShape): Point[][] {
   const result: Point[][] = [];
@@ -563,21 +575,14 @@ function straightCandidates(route: Point[], a: SceneShape, b: SceneShape): Point
         axis === "x" ? { x: at, y: value } : { x: value, y: at };
       const start = point(first.box[along] + first.box[alongSize]),
         end = point(second.box[along]);
-      let points = first === a ? [start, end] : [end, start];
+      let points: Point[] | null = first === a ? [start, end] : [end, start];
       // Onto the real outlines.
       for (const [end, shape] of [
         [0, a],
         [1, b],
       ] as const)
-        points =
-          clipToOutline(
-            points,
-            end,
-            shape.kind,
-            shape.box,
-            shape.kind === "round" ? (shape.radius ?? 10) : 0,
-          ) ?? points;
-      result.push(points);
+        points = points && clipEnd(points, end, shape);
+      if (points) result.push(points);
     }
   }
   return result;
