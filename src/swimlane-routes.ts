@@ -15,6 +15,7 @@ import {
   type SwimlanePlacement,
   type SwimlaneRoutes,
 } from "./swimlane-place";
+import { forbidden, type Tier } from "./swimlane-tiers";
 
 /** Routes every wire through the free channels between items, then places the wire labels and guards. */
 export function routeSwimlanes(placed: SwimlanePlacement, measure: Measure): SwimlaneRoutes {
@@ -180,8 +181,10 @@ export function routeSwimlanes(placed: SwimlanePlacement, measure: Measure): Swi
       sa === "top" || sa === "bottom" ? 2 : 1,
       sb === "top" || sb === "bottom" ? 2 : 1,
     ] as const;
-    // Strictly apart from other wires if possible, else sharing a line at a high price.
-    const path = search(...args, true) ?? search(...args, false);
+    // Strictly apart from other wires if possible, else apart from their lines only (past a label or
+    // another wire's terminal at a price), else sharing a line at a high price.
+    const path =
+      search(...args, "strict") ?? search(...args, "apart") ?? search(...args, "relaxed");
     const points = simplifyPath([pa, ...(path ?? [from, { x: to.x, y: from.y }, to]), pb]);
     routes.set(edge.id, points);
     mark(points);
@@ -292,7 +295,7 @@ export function routeSwimlanes(placed: SwimlanePlacement, measure: Measure): Swi
     );
   }
 
-  /** Makes the grid avoid a box (a placed label): strictly in the first search, at a price in the second. */
+  /** Makes the grid avoid a box (a placed label): strictly in the first search, at a price in the others. */
   function block(box: Box) {
     const area = grow(box, 4);
     ys.forEach((y, j) =>
@@ -337,7 +340,10 @@ export function routeSwimlanes(placed: SwimlanePlacement, measure: Measure): Swi
     }
   }
 
-  /** Cheapest grid path from one stub to another: length, bends and crossings; never along a used line. */
+  /**
+   * Cheapest grid path from one stub to another: length, bends and crossings; never along a used line.
+   * What the `tier` does not forbid is allowed at a price.
+   */
   function search(
     sx: number,
     sy: number,
@@ -345,7 +351,7 @@ export function routeSwimlanes(placed: SwimlanePlacement, measure: Measure): Swi
     ty: number,
     startDir: number,
     endDir: number,
-    strict: boolean,
+    tier: Tier,
   ): Point[] | null {
     if (sx < 0 || sy < 0 || tx < 0 || ty < 0) return null;
     const W = xs.length,
@@ -428,7 +434,7 @@ export function routeSwimlanes(placed: SwimlanePlacement, measure: Measure): Swi
         const shared = horizontal ? hUsed[j][si] : vUsed[i][sj],
           label = horizontal ? hLabel[j][si] : vLabel[i][sj];
         const foreign = terminals[nj * W + ni] === 1 && !(ni === tx && nj === ty);
-        if ((shared || label || foreign) && strict) continue;
+        if (forbidden(tier, shared, label, foreign)) continue;
         let step =
           (horizontal ? Math.abs(xs[ni] - xs[i]) : Math.abs(ys[nj] - ys[j])) +
           (shared || foreign ? 600 : 0) +

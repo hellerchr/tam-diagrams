@@ -120,6 +120,7 @@ these rules and reports the line of a broken one.
 | `src/uml-swimlanes.ts`       | Swimlane activity diagrams: `layoutSwimlanes` and the drawing                        |
 | `src/swimlane-place.ts`      | Swimlanes stage 1: lanes, rows and items sized and placed                            |
 | `src/swimlane-routes.ts`     | Swimlanes stage 2: the grid router, wire labels and guards                           |
+| `src/swimlane-tiers.ts`      | What each search of the swimlane router may step on, strictest first                 |
 | `src/uml-state.ts`           | State machine diagrams: the parser                                                   |
 | `src/uml-state-layout.ts`    | State machine layout: composite states, concurrent regions, notes                    |
 | `src/uml-sequence.ts`        | Sequence diagrams: the parser                                                        |
