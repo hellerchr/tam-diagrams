@@ -38,6 +38,7 @@ img.src = svgUrl(svg);
 
 - **Errors.** Invalid sources throw `TamError` or `UmlError` with the line. A `UmlError` marked
   `unsupported` means valid Mermaid this package does not draw (ER, pie, ...): hand those to Mermaid.js.
+  `renderUml` and `renderTam` (and the parsers) both raise it for a source that starts with such a type.
 - **Class diagrams to explore.** `renderClassView(source, colors, view)` draws a class diagram with
   some packages collapsed into folders and some classes without members; with `view` null it uses
   `overview(diagram)`, which folds a large diagram to its packages and class names. On the result,

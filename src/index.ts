@@ -9,6 +9,7 @@ import { type DiagramColors, drawScene } from "./draw";
 import { type Measure, textMeasure } from "./text";
 import { type Scene } from "./scene";
 import { detectUml, UmlError, type UmlKind } from "./uml";
+import { rejectUnsupported } from "./uml-header";
 import { layoutStateDiagram } from "./uml-state-layout";
 import { parseStateDiagram } from "./uml-state";
 import { parseFlowchart } from "./uml-activity";
@@ -132,6 +133,7 @@ export function parseUml(source: string): ParsedUml {
       };
     }
     case null:
+      rejectUnsupported(source);
       throw new UmlError(
         0,
         "This diagram type is drawn by Mermaid, not the built-in renderer.",

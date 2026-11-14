@@ -2,6 +2,7 @@
 
 import type { Direction } from "./elk";
 import { expandMultiples, rowDots, rowPointers } from "./tam-rows";
+import { rejectUnsupported } from "./uml-header";
 
 /**
  * Parser for SAP TAM (Technical Architecture Modeling) Component/Block diagrams in ```tam fences.
@@ -177,8 +178,12 @@ const article = (kind: string) => `${/^[aeiou]/.test(kind) ? "an" : "a"} ${kind}
 
 const unquote = (text: string) => text.trim().replace(/^"(.*)"$/, "$1");
 
-/** Parses a TAM source (docs/tam.md); throws TamError with the line of the first error. */
+/**
+ * Parses a TAM source (docs/tam.md); throws TamError with the line of the first error, or the
+ * `unsupported` UmlError for a Mermaid source this package does not draw.
+ */
 export function parseTam(source: string): TamDiagram {
+  rejectUnsupported(source);
   // CRLF and a lone CR end a line like LF (as in uml.ts); `.` stops at `\r`, so a CRLF line would
   // keep its `%%` comment.
   // A final newline ends the last line; it does not start another one.
