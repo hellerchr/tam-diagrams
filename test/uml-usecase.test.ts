@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { parseError, umlColors } from "./fixtures";
 import { parseUseCaseDiagram } from "../src/uml-usecase";
 import { USECASE_EXAMPLES } from "../src/samples/uml-examples";
-import { renderUml } from "../src/index";
+import { arialMeasure, renderUml } from "../src/index";
 import { auditScene } from "../src/audit";
 
 const error = (source: string) => parseError(parseUseCaseDiagram, source);
@@ -84,6 +84,26 @@ describe("use case diagram syntax", () => {
         // One Bézier curve (quadratic, or cubic for a loop), no line segments.
         expect(wire.path).toMatch(/^M[-\d. ]+[QC][-\d. ]+$/);
       }
+    },
+  );
+
+  it("keeps the labels of a crowded diagram off shapes and wires when no spot is free", async () => {
+    // Top to bottom, the label spots around the «include» of editItem are all taken; the least
+    // clutter by count would put «include» over editLink.
+    const [, source] = USECASE_EXAMPLES.find(([name]) => name.includes("figure 2-7"))!;
+    const { scene } = await renderUml(source.replace("direction LR", "direction TB"), umlColors);
+    expect(auditScene(scene).filter((finding) => !finding.note)).toEqual([]);
+  });
+
+  // Arial widths differ from the estimate, so the spots that are free differ too.
+  it.each(["figure 2-7", "bank (large)"])(
+    "keeps the labels of %s clear top to bottom under the Arial measure",
+    async (name) => {
+      const [, source] = USECASE_EXAMPLES.find(([title]) => title.includes(name))!;
+      const { scene } = await renderUml(source.replace("direction LR", "direction TB"), umlColors, {
+        measure: arialMeasure,
+      });
+      expect(auditScene(scene).filter((finding) => !finding.note)).toEqual([]);
     },
   );
 

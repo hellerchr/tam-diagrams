@@ -15,7 +15,8 @@ import {
 } from "./text";
 import { reversePostorder } from "./uml";
 import type { Boundary, UseCaseDiagram } from "./uml-usecase";
-import { drawLine, drawLoop, labelLine, type Link } from "./uml-usecase-lines";
+import { labelLine } from "./uml-usecase-label";
+import { drawLine, drawLoop, type Link } from "./uml-usecase-lines";
 
 const FIGURE = { width: 26, height: 42 };
 

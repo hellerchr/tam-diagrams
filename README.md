@@ -114,7 +114,8 @@ these rules and reports the line of a broken one.
 | `src/uml-class-packages.ts`  | Class diagram packages side by side, end labels and merged inheritance trees         |
 | `src/uml-usecase.ts`         | Use case diagrams: the parser                                                        |
 | `src/uml-usecase-layout.ts`  | Use case layout: actors and use cases in columns inside their system boundaries      |
-| `src/uml-usecase-lines.ts`   | Use case lines: straight or curved links, loops and labels                           |
+| `src/uml-usecase-lines.ts`   | Use case lines: straight or curved links and loops                                   |
+| `src/uml-usecase-label.ts`   | Use case line labels: beside the middle of the line, on the side with room           |
 | `src/uml-activity.ts`        | Flowcharts and activity diagrams: the parser                                         |
 | `src/uml-activity-layout.ts` | Flowchart layout with ELK and the node shapes swimlanes share                        |
 | `src/uml-swimlanes.ts`       | Swimlane activity diagrams: `layoutSwimlanes` and the drawing                        |
