@@ -92,9 +92,8 @@ describe("a TAM source whose first statement continues after the id", () => {
     for (const header of ["graph <", "flowchart <"]) {
       const source = `${header}\n  a --> b`;
       expect(detectUml(source)).toBe("flowchart");
-      const error = await rejection(() => renderUml(source, umlColors));
-      expect(error).toBeInstanceOf(UmlError);
-      expect(error.message).toBe("Line 1: Unknown direction `<`; use TB, TD, BT, LR or RL.");
+      // `<` is Mermaid's right-to-left: a drawn flowchart, neither TAM nor an unsupported type.
+      expect((await renderUml(source, umlColors)).kind).toBe("flowchart");
     }
   });
 });
