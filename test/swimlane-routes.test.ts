@@ -34,6 +34,48 @@ describe("swimlane routing", () => {
   }, 60_000);
 });
 
+describe("a wire whose stub end sits close to a neighbouring shape", () => {
+  it("is routed around the shapes instead of drawn straight through them", async () => {
+    // Seed 70, e25: every grid segment out of the target's stub end is within CLEAR of a neighbour.
+    const scene = await render(70, 1);
+    expect(auditScene(scene).filter((finding) => !finding.note)).toEqual([]);
+    // The route the last-resort search finds: strict tier, no reservations (x = 768 otherwise).
+    expect(scene.wires.find((wire) => wire.edge === "e25")!.points).toEqual([
+      { x: 1422.5, y: 825 },
+      { x: 856, y: 825 },
+      { x: 856, y: 352 },
+      { x: 773, y: 352 },
+      { x: 773, y: 326 },
+      { x: 792, y: 326 },
+    ]);
+  });
+
+  it("does not change a wire that finds a route within the clearance", async () => {
+    // Seed 2, e2: dropping the clearance at stub ends from the first search would run it at y = 222.5.
+    const scene = await render(2, 1);
+    expect(scene.wires.find((wire) => wire.edge === "e2")!.points).toEqual([
+      { x: 459.5, y: 195 },
+      { x: 459.5, y: 221 },
+      { x: 92, y: 221 },
+      { x: 92, y: 244 },
+    ]);
+  });
+
+  it("is searched again past the points other wires turn at when the route it found crosses one", async () => {
+    // Seed 40377, e18: the last-resort route found first bends at x = 1069, on such a point.
+    const scene = await render(40377, 1);
+    expect(auditScene(scene).filter((finding) => !finding.note)).toEqual([]);
+    expect(scene.wires.find((wire) => wire.edge === "e18")!.points).toEqual([
+      { x: 1391.5, y: 251 },
+      { x: 1391.5, y: 272 },
+      { x: 1076, y: 272 },
+      { x: 1076, y: 279.5 },
+      { x: 975, y: 279.5 },
+      { x: 975, y: 251 },
+    ]);
+  });
+});
+
 describe("swimlane routes found without reservations", () => {
   it("are kept exactly as found when they pass through no point another wire turns at", async () => {
     const source = SWIMLANE_EXAMPLES.find(([name]) => name === "swimlane: two lanes ping-pong")![1];

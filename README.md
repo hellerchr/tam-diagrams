@@ -122,6 +122,7 @@ these rules and reports the line of a broken one.
 | `src/swimlane-routes.ts`     | Swimlanes stage 2: the grid router, wire labels and guards                           |
 | `src/swimlane-points.ts`     | The points swimlane wires end or turn at, kept free of other wires' routes           |
 | `src/swimlane-tiers.ts`      | What each search of the swimlane router may step on, strictest first                 |
+| `src/swimlane-stub-clear.ts` | What blocks the router's grid, and its last resort at a wire's own stub ends         |
 | `src/uml-state.ts`           | State machine diagrams: the parser                                                   |
 | `src/uml-state-layout.ts`    | State machine layout: composite states, concurrent regions, notes                    |
 | `src/uml-sequence.ts`        | Sequence diagrams: the parser                                                        |

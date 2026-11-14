@@ -8,7 +8,6 @@ import { besideSegments, longestFirst, smallSize, wrapSmall } from "./labels";
 import type { FlowEdge } from "./uml-activity";
 import {
   BEND,
-  CLEAR,
   CROSS,
   round,
   type Side,
@@ -17,6 +16,7 @@ import {
 } from "./swimlane-place";
 import { forbidden, type Tier } from "./swimlane-tiers";
 import { occupiedPoints } from "./swimlane-points";
+import { type BlockedGrid, segmentBlocker, stubClearGrid } from "./swimlane-stub-clear";
 
 /** Routes every wire through the free channels between items, then places the wire labels and guards. */
 export function routeSwimlanes(placed: SwimlanePlacement, measure: Measure): SwimlaneRoutes {
@@ -105,10 +105,7 @@ export function routeSwimlanes(placed: SwimlanePlacement, measure: Measure): Swi
       kind ? [grow(markerBounds(MARKERS[kind], point, inward[side]), 1)] : [],
     );
   });
-  const blocked = (a: Point, b: Point) =>
-    obstacles.some((box) => segmentHits(a, b, grow(box, CLEAR))) ||
-    heads.some((box) => segmentHits(a, b, box)) ||
-    headerBoxes.some((box) => segmentHits(a, b, box));
+  const blocked = segmentBlocker(obstacles, heads, headerBoxes);
   // Unit segments: horizontal ones between xs[i] and xs[i+1] on ys[j], vertical ones between ys[j] and ys[j+1] on xs[i].
   const hBlocked = ys.map((y) =>
     xs.slice(0, -1).map((x, i) => blocked({ x, y }, { x: xs[i + 1], y })),
@@ -181,11 +178,17 @@ export function routeSwimlanes(placed: SwimlanePlacement, measure: Measure): Swi
     ] as const;
     // Strictly apart from other wires if possible, else apart from their lines only (past a label or
     // another wire's terminal at a price), else sharing a line at a high price.
-    const route = (reserved: boolean) =>
-      search(...args, "strict", reserved) ??
-      search(...args, "apart", reserved) ??
-      search(...args, "relaxed", reserved);
-    const path = occupied.settle(route(false), () => route(true));
+    const route = (reserved: boolean, grid?: BlockedGrid) => {
+      const within = (tier: Tier) => search(...args, tier, reserved, grid);
+      return within("strict") ?? within("apart") ?? within("relaxed");
+    };
+    // A stub end closer than CLEAR to a shape blocks every segment out of it: only a wire that found
+    // no route at all may then run closer to shapes, and only at its own stub ends.
+    const lastResort = () => {
+      const grid = stubClearGrid(placed, edge.id, xs, ys, blocked);
+      return occupied.settle(route(false, grid), () => route(true, grid));
+    };
+    const path = occupied.settle(route(false), () => route(true)) ?? lastResort();
     const points = simplifyPath([pa, ...(path ?? [from, { x: to.x, y: from.y }, to]), pb]);
     routes.set(edge.id, points);
     mark(points);
@@ -355,6 +358,7 @@ export function routeSwimlanes(placed: SwimlanePlacement, measure: Measure): Swi
     endDir: number,
     tier: Tier,
     reserved: boolean,
+    grid: BlockedGrid = { h: hBlocked, v: vBlocked },
   ): Point[] | null {
     if (sx < 0 || sy < 0 || tx < 0 || ty < 0) return null;
     const taken = occupied.view(reserved, tier);
@@ -434,7 +438,7 @@ export function routeSwimlanes(placed: SwimlanePlacement, measure: Measure): Swi
         const horizontal = nd === 1,
           si = Math.min(i, ni),
           sj = Math.min(j, nj);
-        if (horizontal ? hBlocked[j][si] : vBlocked[i][sj]) continue;
+        if (horizontal ? grid.h[j][si] : grid.v[i][sj]) continue;
         const shared = horizontal ? hUsed[j][si] : vUsed[i][sj],
           label = horizontal ? hLabel[j][si] : vLabel[i][sj];
         const foreign = taken(ni, nj) && !(ni === tx && nj === ty);
