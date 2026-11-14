@@ -20,10 +20,20 @@ export interface DiagramColors {
   dark: boolean;
 }
 
-/** Mix two `#rrggbb` colors; `weight` is the share of `a`. */
+/** `#rgb` as `#rrggbb`; throws for any other color. */
+const expandHex = (hex: string) => {
+  if (!/^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i.test(hex))
+    throw new Error(`Cannot mix the color \`${hex}\`: colors are mixed as #rgb or #rrggbb.`);
+  return hex.length === 4 ? `#${[...hex.slice(1)].map((digit) => digit + digit).join("")}` : hex;
+};
+
+/**
+ * Mix two `#rrggbb` or `#rgb` colors; `weight` is the share of `a`. Any other form (`#rrggbbaa`,
+ * `rgb()`, a name) throws an Error naming the first one, instead of drawing a broken fill.
+ */
 export function mix(a: string, b: string, weight: number): string {
   const channels = (hex: string) =>
-    [1, 3, 5].map((index) => parseInt(hex.slice(index, index + 2), 16));
+    [1, 3, 5].map((index) => parseInt(expandHex(hex).slice(index, index + 2), 16));
   const [left, right] = [channels(a), channels(b)];
   return `#${left
     .map((value, index) =>
