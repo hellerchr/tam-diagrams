@@ -16,7 +16,7 @@ import { markerBounds, type MarkerKind } from "./markers";
 import { type Measure } from "./text";
 import type { Placement } from "./elk";
 import { smallLines } from "./labels";
-import { crossesBox, END_OFF_OUTLINE, offOutline } from "./audit";
+import { crossesBox, END_OFF_OUTLINE, offOutline, offVertices } from "./audit";
 import { followLabelClear } from "./marker-clear";
 import { bendCandidates, runsAlong } from "./route";
 import { touchesOtherWire } from "./wire-touch";
@@ -524,14 +524,17 @@ export function straightenScene(scene: Scene, gap = 9) {
 
 /**
  * The route with its end `end` moved onto the shape's outline; null when the line misses the
- * outline and its end would be off the shape. A line that only grazes the outline (at a polygon's
- * corner) keeps its end.
+ * outline and its end would be off the shape, or meets a diamond off its vertices (as the audit
+ * measures it, on the clipped end). A line that only grazes the outline (at a polygon's corner)
+ * keeps its end.
  */
 function clipEnd(points: Point[], end: number, shape: SceneShape): Point[] | null {
-  return (
+  const clipped =
     clipToOutline(points, end, shape.kind, shape.box, endRadius(shape)) ??
-    (offOutline(points[end], shape) <= END_OFF_OUTLINE ? points : null)
-  );
+    (offOutline(points[end], shape) <= END_OFF_OUTLINE ? points : null);
+  return clipped && shape.kind === "diamond" && offVertices(clipped[end], shape.box)
+    ? null
+    : clipped;
 }
 
 /** Straight segments between two shapes along each axis where they overlap; symbols only through their center. */

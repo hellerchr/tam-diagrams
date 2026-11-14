@@ -36,6 +36,8 @@ import { textGroupBox } from "./text";
 const NOTE_GAP = 16;
 /** Px a wire end may be off its outline before it is a defect. */
 export const END_OFF_OUTLINE = 1.5;
+/** Px a wire end may be off its nearest diamond vertex (in a straight line) before it is a defect. */
+export const DIAMOND_VERTEX_OFF = 0.5;
 
 /** Defects must not occur; notes are compromises the renderer makes when there is no better spot. */
 export interface Finding {
@@ -198,6 +200,17 @@ export function offOutline(point: Point, shape: SceneShape): number {
     ny = (point.y - cy) / b;
   const value = kind === "ellipse" ? Math.hypot(nx, ny) : Math.abs(nx) + Math.abs(ny);
   return Math.abs(value - 1) * Math.min(a, b);
+}
+
+/** Whether a point is further than DIAMOND_VERTEX_OFF from all four vertices of the diamond in `box`. */
+export function offVertices(point: Point, { x, y, width, height }: Box): boolean {
+  const vertices = [
+    { x: x + width / 2, y },
+    { x: x + width, y: y + height / 2 },
+    { x: x + width / 2, y: y + height },
+    { x, y: y + height / 2 },
+  ];
+  return !vertices.some((v) => Math.hypot(v.x - point.x, v.y - point.y) <= DIAMOND_VERTEX_OFF);
 }
 
 export interface Segment {
@@ -540,14 +553,7 @@ export function auditScene(scene: Scene): Finding[] {
     for (const [end, point] of wireEnds(wire)) {
       const shape = end ? byId.get(end) : undefined;
       if (shape?.kind !== "diamond") continue;
-      const { x, y, width, height } = shape.box,
-        vertices = [
-          { x: x + width / 2, y },
-          { x: x + width, y: y + height / 2 },
-          { x: x + width / 2, y: y + height },
-          { x, y: y + height / 2 },
-        ];
-      if (!vertices.some((vertex) => Math.hypot(vertex.x - point.x, vertex.y - point.y) <= 0.5))
+      if (offVertices(point, shape.box))
         report("diamond-off-vertex", `${wire.edge} meets ${shape.id} off its vertices`);
     }
   }
