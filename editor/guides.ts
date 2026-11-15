@@ -130,27 +130,30 @@ function snapAxis(
 
 /**
  * Where a moved box comes to rest among others: on their edges and middles first, else with even
- * gaps to its neighbours. Returns the step from where it is, and the guides to show.
+ * gaps to its neighbours. Returns the step from where it is, the axes it lined up on (the others
+ * are free for the grid), and the guides to show.
  */
 export function snapMove(
   box: Box,
   others: Box[],
   reach: number,
-): { dx: number; dy: number; guides: Guide[] } {
+): { dx: number; dy: number; x: boolean; y: boolean; guides: Guide[] } {
   const across = snapAxis(box, others, "x", reach),
-    moved = { ...box, x: box.x + across.by },
-    down = snapAxis(moved, others, "y", reach);
-  // The guides of the first axis follow the step along the second.
-  const final = { ...moved, y: moved.y + down.by };
+    down = snapAxis(box, others, "y", reach);
   return {
     dx: across.by,
     dy: down.by,
-    guides: [
-      ...(down.by ? snapAxis(final, others, "x", 0.01).guides : across.guides),
-      ...down.guides,
-    ],
+    x: across.guides.length > 0,
+    y: down.guides.length > 0,
+    guides: [...across.guides, ...down.guides],
   };
 }
+
+/** The guides of a box where it lies: what it is lined up with, to the pixel. */
+export const guidesAt = (box: Box, others: Box[]): Guide[] => [
+  ...snapAxis(box, others, "x", 0.01).guides,
+  ...snapAxis(box, others, "y", 0.01).guides,
+];
 
 /** An edge being dragged comes to rest on the edges of others within `reach`. */
 export function snapEdge(

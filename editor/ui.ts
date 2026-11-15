@@ -131,6 +131,9 @@ const wireChange = (kind: (typeof WIRES)[number]) => ({
 const wireValue = (connection: Connection) =>
   connection.word === "dependency" ? `dependency:${connection.label}` : connection.word;
 
+/** An element of the tree with everything inside it, as ids. */
+const within = (item: TreeItem): string[] => [item.id, ...item.children.flatMap(within)];
+
 /** What the page offers the panels: files, the theme and the view. */
 export interface Shell {
   newDiagram(): void;
@@ -359,7 +362,43 @@ export class Panels {
         this.groups.push({ title, shapes, items: group.items });
         return [title, shapes];
       }),
-      h("h2", { class: "outline" }, "Elements"),
+      h(
+        "div",
+        { class: "outline" },
+        h("h2", {}, "Elements"),
+        h(
+          "button",
+          {
+            class: "tool mini plain",
+            type: "button",
+            title: "Expand all",
+            "aria-label": "Expand all",
+            onClick: () => this.foldAll(false),
+          },
+          icon("expand"),
+        ),
+        h(
+          "button",
+          {
+            class: "tool mini plain",
+            type: "button",
+            title: "Collapse all",
+            "aria-label": "Collapse all",
+            onClick: () => this.foldAll(true),
+          },
+          icon("collapse"),
+        ),
+      ),
+      h("input", {
+        class: "field search",
+        type: "search",
+        placeholder: "Find an element…",
+        "aria-label": "Find an element",
+        onInput: (event: Event) => {
+          this.filter = (event.target as HTMLInputElement).value;
+          this.showTree();
+        },
+      }),
       this.tree,
     );
   }
@@ -428,95 +467,181 @@ export class Panels {
   /** The elements being dragged in the tree. */
   private dragged: string[] = [];
 
-  /** The tree of the diagram: a click selects, a double click names, a drag puts an element inside another. */
+  /** The rows of the tree by element, to mark the selected ones without building the tree again. */
+  private rows = new Map<string, HTMLElement>();
+  private filter = "";
+  private marked = "";
+
+  /**
+   * The tree of the diagram: the arrow opens and closes an element that holds others, a click
+   * selects, a double click names, a drag puts an element inside another. Built again only when
+   * the elements, the closed ones or the filter changed, so a row stays the row it was between
+   * two clicks.
+   */
   private showTree() {
     const { editor } = this,
       items = editor.tree,
-      selected = new Set(editor.selectedElements);
-    // Built again only when it shows something else: a row under the pointer stays the row it was.
-    const key = JSON.stringify([items, [...selected], [...this.folded]]);
-    if (key === this.shown) return;
-    this.shown = key;
-    const row = (item: TreeItem, depth: number): HTMLElement[] => {
-      const folded = this.folded.has(item.id),
-        parent = item.children.length > 0;
-      // An element that holds others opens and closes; the others keep the room of the arrow.
-      const twist = h(
-        "span",
-        parent
-          ? {
-              class: "twist",
-              role: "button",
-              "aria-label": folded ? "Expand" : "Collapse",
-              "aria-expanded": String(!folded),
-              onClick: (event: Event) => {
-                event.stopPropagation();
-                if (folded) this.folded.delete(item.id);
-                else this.folded.add(item.id);
-                this.showTree();
-              },
-              onDblclick: (event: Event) => event.stopPropagation(),
-            }
-          : { class: "twist none" },
-        parent && icon("chevron"),
-      );
-      const line = h(
-        "div",
-        {
-          class: "node",
-          role: "treeitem",
-          draggable: "true",
-          "aria-selected": String(selected.has(item.id)),
-          ...(parent ? { "aria-expanded": String(!folded) } : {}),
-          style: `padding-left:${4 + depth * 14}px`,
-          title: `${item.kind} ${item.id}`,
-        },
-        twist,
-        icon(item.kind),
-        h(
+      selected = editor.selectedElements;
+    // What is selected on the canvas shows in the tree: the elements around it open.
+    const mark = selected.join(" ");
+    if (mark !== this.marked) {
+      const open = (list: TreeItem[], path: string[]): void => {
+        for (const item of list) {
+          if (selected.includes(item.id)) path.forEach((id) => this.folded.delete(id));
+          open(item.children, [...path, item.id]);
+        }
+      };
+      open(items, []);
+    }
+    const words = this.filter.trim().toLowerCase();
+    const matches = (item: TreeItem): boolean =>
+      !words ||
+      item.label.toLowerCase().includes(words) ||
+      item.id.toLowerCase().includes(words) ||
+      item.kind.includes(words) ||
+      item.children.some(matches);
+    const key = JSON.stringify([items, [...this.folded], words]);
+    if (key !== this.shown) {
+      this.shown = key;
+      this.rows.clear();
+      const row = (item: TreeItem, depth: number): HTMLElement[] => {
+        if (!matches(item)) return [];
+        // A search shows what it finds, whatever is closed.
+        const folded = !words && this.folded.has(item.id),
+          parent = item.children.length > 0;
+        const toggle = (deep: boolean) => {
+          const ids = deep ? within(item) : [item.id];
+          for (const id of ids)
+            if (folded) this.folded.delete(id);
+            else this.folded.add(id);
+          this.showTree();
+        };
+        const twist = h(
           "span",
-          { class: "name" },
-          item.label.replace(/<br\s*\/?>/gi, " ") || item.id.replace(/#.*/, ""),
-        ),
-      );
-      line.addEventListener("click", (event) => {
-        const part = { type: "element" as const, id: item.id };
-        editor.select(
-          event.shiftKey || event.ctrlKey || event.metaKey
-            ? editor.isSelected(part)
-              ? editor.selection.filter((other) => other.id !== item.id)
-              : [...editor.selection, part]
-            : [part],
+          parent
+            ? {
+                class: "twist",
+                role: "button",
+                title: folded ? "Expand (Alt: all inside)" : "Collapse (Alt: all inside)",
+                "aria-label": folded ? "Expand" : "Collapse",
+                "aria-expanded": String(!folded),
+                draggable: "false",
+                onClick: (event: MouseEvent) => {
+                  event.stopPropagation();
+                  toggle(event.altKey);
+                },
+                onDblclick: (event: Event) => event.stopPropagation(),
+                onPointerdown: (event: Event) => event.stopPropagation(),
+              }
+            : { class: "twist none" },
+          parent && icon("chevron"),
         );
-        editor.reveal(item.id);
-      });
-      line.addEventListener("dblclick", () => editor.rename(item.id));
-      line.addEventListener("dragstart", (event) => {
-        this.dragged = selected.has(item.id) ? [...selected] : [item.id];
-        event.dataTransfer?.setData("text/plain", this.dragged.join(" "));
-        if (event.dataTransfer) event.dataTransfer.effectAllowed = "move";
-      });
-      line.addEventListener("dragend", () => {
-        this.dragged = [];
-      });
-      line.addEventListener("dragover", (event) => {
-        if (!this.dragged.length || !editor.allowsMove(this.dragged, item.id)) return;
-        event.preventDefault();
-        line.classList.add("over");
-      });
-      line.addEventListener("dragleave", () => line.classList.remove("over"));
-      line.addEventListener("drop", (event) => {
-        event.preventDefault();
-        line.classList.remove("over");
-        editor.moveElements(this.dragged, item.id);
-      });
-      return [line, ...(folded ? [] : item.children.flatMap((child) => row(child, depth + 1)))];
+        const line = h(
+          "div",
+          {
+            class: "node",
+            role: "treeitem",
+            tabindex: "-1",
+            draggable: "true",
+            ...(parent ? { "aria-expanded": String(!folded) } : {}),
+            style: `padding-left:${2 + depth * 14}px`,
+            title: `${item.kind} ${item.id}`,
+          },
+          twist,
+          icon(item.kind),
+          h(
+            "span",
+            { class: "name" },
+            item.label.replace(/<br\s*\/?>/gi, " ") || item.id.replace(/#.*/, ""),
+          ),
+          parent && folded && h("span", { class: "count" }, String(within(item).length - 1)),
+        );
+        this.rows.set(item.id, line);
+        line.addEventListener("click", (event) => {
+          const part = { type: "element" as const, id: item.id };
+          editor.select(
+            event.shiftKey || event.ctrlKey || event.metaKey
+              ? editor.isSelected(part)
+                ? editor.selection.filter((other) => other.id !== item.id)
+                : [...editor.selection, part]
+              : [part],
+          );
+          editor.reveal(item.id);
+          line.focus();
+        });
+        line.addEventListener("dblclick", () => editor.rename(item.id));
+        line.addEventListener("contextmenu", (event) => {
+          event.preventDefault();
+          if (!editor.isSelected({ type: "element", id: item.id }))
+            editor.select([{ type: "element", id: item.id }]);
+          this.menu({ x: event.clientX, y: event.clientY }, { x: 0, y: 0 });
+        });
+        line.addEventListener("keydown", (event) => {
+          const lines = [...this.rows.values()],
+            at = lines.indexOf(line);
+          if (event.key === "ArrowRight" && parent && folded) toggle(false);
+          else if (event.key === "ArrowLeft" && parent && !folded) toggle(false);
+          else if (event.key === "ArrowDown") lines[at + 1]?.click();
+          else if (event.key === "ArrowUp") lines[at - 1]?.click();
+          else if (event.key === "Enter" || event.key === "F2") editor.rename(item.id);
+          else if (event.key === "Delete" || event.key === "Backspace") editor.deleteSelection();
+          else return;
+          event.preventDefault();
+          event.stopPropagation();
+          this.rows.get(item.id)?.focus();
+        });
+        line.addEventListener("dragstart", (event) => {
+          // The arrow opens and closes; it does not start a drag.
+          if ((event.target as HTMLElement).closest?.(".twist")) return event.preventDefault();
+          const chosen = editor.selectedElements;
+          this.dragged = chosen.includes(item.id) ? chosen : [item.id];
+          event.dataTransfer?.setData("text/plain", this.dragged.join(" "));
+          if (event.dataTransfer) event.dataTransfer.effectAllowed = "move";
+        });
+        line.addEventListener("dragend", () => {
+          this.dragged = [];
+        });
+        line.addEventListener("dragover", (event) => {
+          if (!this.dragged.length || !editor.allowsMove(this.dragged, item.id)) return;
+          event.preventDefault();
+          line.classList.add("over");
+        });
+        line.addEventListener("dragleave", () => line.classList.remove("over"));
+        line.addEventListener("drop", (event) => {
+          event.preventDefault();
+          line.classList.remove("over");
+          this.folded.delete(item.id);
+          editor.moveElements(this.dragged, item.id);
+        });
+        return [line, ...(folded ? [] : item.children.flatMap((child) => row(child, depth + 1)))];
+      };
+      const lines = items.flatMap((item) => row(item, 0));
+      this.tree.replaceChildren(
+        ...(lines.length
+          ? lines
+          : [h("p", { class: "note" }, words ? "Nothing found." : "No elements yet.")]),
+      );
+    }
+    for (const [id, line] of this.rows)
+      line.setAttribute("aria-selected", String(selected.includes(id)));
+    if (mark !== this.marked) {
+      this.marked = mark;
+      // The row of what was selected last comes into view, without taking the focus from the canvas.
+      this.rows.get(selected.at(-1) ?? "")?.scrollIntoView({ block: "nearest" });
+    }
+  }
+
+  /** Opens or closes every element of the tree that holds others. */
+  private foldAll(closed: boolean) {
+    this.folded.clear();
+    const walk = (items: TreeItem[]) => {
+      for (const item of items) {
+        if (closed && item.children.length) this.folded.add(item.id);
+        walk(item.children);
+      }
     };
-    this.tree.replaceChildren(
-      ...(items.length
-        ? items.flatMap((item) => row(item, 0))
-        : [h("p", { class: "note" }, "No elements yet.")]),
-    );
+    walk(this.editor.tree);
+    this.showTree();
   }
 
   private showZoom() {

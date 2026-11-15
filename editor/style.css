@@ -784,3 +784,61 @@ code,
   background: var(--accent-soft);
   color: var(--accent);
 }
+
+.outline {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin: 10px 2px 2px;
+}
+
+.outline h2 {
+  flex: 1;
+  margin: 0;
+}
+
+.tool.mini.plain {
+  width: 24px;
+  height: 24px;
+  border-color: transparent;
+}
+
+.field.search {
+  height: 28px;
+  width: 100%;
+  flex: none;
+}
+
+.node {
+  height: 28px;
+  outline: none;
+}
+
+.node:focus-visible {
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+
+.twist {
+  width: 22px;
+  height: 28px;
+}
+
+.node .twist .icon svg {
+  width: 16px;
+  height: 16px;
+  color: var(--text);
+}
+
+.node .count {
+  margin-left: auto;
+  padding: 0 6px;
+  border-radius: 99px;
+  background: var(--hover);
+  color: var(--quiet);
+  font-size: 11px;
+}
+
+.compact .outline,
+.compact .field.search {
+  display: none;
+}

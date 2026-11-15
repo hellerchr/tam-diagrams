@@ -47,7 +47,15 @@ import {
   samePart,
   wireParts,
 } from "./hit.ts";
-import { type Arrangement, around, arrange, type Guide, snapEdge, snapMove } from "./guides.ts";
+import {
+  type Arrangement,
+  around,
+  arrange,
+  type Guide,
+  guidesAt,
+  snapEdge,
+  snapMove,
+} from "./guides.ts";
 import type { View } from "./view.ts";
 
 /** An element in the tree of the diagram. */
@@ -107,6 +115,8 @@ type Gesture =
       target?: string | null;
       /** Lines the moved element is aligned on with others, in the diagram. */
       guides?: Guide[];
+      /** The copies a drag with Ctrl makes: selected when it ends. */
+      copies?: string[];
     }
   | {
       type: "resize";
@@ -124,7 +134,14 @@ type Gesture =
       result?: string;
     }
   | { type: "frame"; start: Point; current: Point; kept: Part[] }
-  | { type: "connect"; from: string; current: Point; target?: string }
+  | {
+      type: "connect";
+      from: string;
+      current: Point;
+      target?: string;
+      /** Pressed on a connection dot: the side it is on, and where, to tell a click from a drag. */
+      dot?: { side: number; screen: Point };
+    }
   /** An end of a connection dragged to another element. */
   | { type: "attach"; id: string; end: "from" | "to"; current: Point; target?: string };
 
@@ -143,7 +160,7 @@ const dropPlace = (kind: ElementKind, at: Point, free: boolean): Point => ({
 });
 
 /** A moved element snaps to the edges and middles of others within this many screen pixels. */
-const ALIGN = 6;
+const ALIGN = 8;
 
 const NAMES: Record<ElementKind, string> = {
   agent: "Agent",
@@ -680,6 +697,45 @@ export class Editor {
     this.fit();
   }
 
+  /** Opens the list of shortcuts; the panels show it. */
+  onHelp: () => void = () => {};
+
+  /** Shows the selected elements as large as the canvas allows. */
+  fitSelection() {
+    const { picture } = this,
+      boxes = picture ? this.selectedElements.flatMap((id) => boxesOf(picture, id)) : [];
+    if (boxes.length) this.view.fit(around(boxes), 120);
+    else this.fit();
+  }
+
+  /** Where the one selected element stands and how large it is drawn. */
+  get selectedBox(): Box | undefined {
+    return this.single?.box;
+  }
+
+  /** Stands the one selected element at a position, or gives it a size. */
+  setBox(change: Partial<Box>) {
+    const { single } = this,
+      base = this.doc.placedSource();
+    if (!single) return;
+    if (base === undefined) return void this.change(undefined);
+    const picture = this.doc.layout(base),
+      box = boxOf(picture, single.id);
+    if (!box) return;
+    const sized = change.width !== undefined || change.height !== undefined,
+      node = picture.diagram.nodes.get(single.id)!,
+      next = { ...box, ...change };
+    // A position moves the element with everything in it; a size is its own.
+    const { places } = this.movers(picture.diagram, [single.id]);
+    let source = place(base, shifted(places, next.x - box.x, next.y - box.y));
+    if (sized || node.at?.width !== undefined)
+      source = place(
+        source,
+        new Map([[single.id, { x: next.x, y: next.y, width: next.width, height: next.height }]]),
+      );
+    this.change(source);
+  }
+
   fit() {
     const bounds = this.picture?.scene.bounds;
     if (bounds && bounds.width) this.view.fit(bounds);
@@ -843,7 +899,12 @@ export class Editor {
     }
     const link = this.linkAt(screen);
     if (link) {
-      this.gesture = { type: "connect", from: link, current: point };
+      this.gesture = {
+        type: "connect",
+        from: link.id,
+        current: point,
+        dot: { side: link.side, screen },
+      };
       return;
     }
     if (!part) {
@@ -960,11 +1021,21 @@ export class Editor {
         this.change(undefined);
         return;
       }
+      // With Ctrl, copies are dragged away and the originals stay.
+      const copies =
+        event.ctrlKey || event.metaKey
+          ? duplicate(source, this.selectedElements, { x: 0, y: 0 })
+          : undefined;
+      if (copies?.ids.length) {
+        const picture = this.doc.layout(copies.source);
+        gesture.copies = copies.ids;
+        gesture.base = { picture, ...this.movers(picture.diagram, copies.ids) };
+      }
       const picture = this.doc.layout(source);
       // Grabbed by its copy, an element shown as several moves the copy alone: beside it, below it, anywhere.
       const [only] = this.selectedElements,
         copy = this.selectedElements.length === 1 ? boxOf(picture, `${only}#2`) : undefined;
-      gesture.base =
+      gesture.base ??=
         copy && contains(copy, gesture.start)
           ? {
               picture,
@@ -978,28 +1049,31 @@ export class Editor {
     // The first element lands on the grid; the others keep their distance to it.
     const lead = places.get(outer[0]) ?? [...places.values()][0];
     if (!lead) return;
-    let dx = snap(lead.x + point.x - gesture.start.x, this.free(event)) - lead.x,
-      dy = snap(lead.y + point.y - gesture.start.y, this.free(event)) - lead.y;
-    // Near the edge or middle of another element the moved one lines up with it instead.
-    // Near the edges and middles of others, or evenly between them, what is moved lines up instead.
-    gesture.guides = [];
-    const boxes = outer.flatMap((id) => boxOf(picture, id) ?? []);
-    if (boxes.length && !this.free(event)) {
-      const box = around(boxes),
-        others = elementShapes(picture)
-          .filter(({ id }) => !all.has(id))
-          .map(({ shape }) => shape.box);
-      const snapped = snapMove(
-        { ...box, x: box.x + dx, y: box.y + dy },
-        others,
-        ALIGN / this.view.zoom,
-      );
-      dx = Math.round((dx + snapped.dx) * 2) / 2;
-      dy = Math.round((dy + snapped.dy) * 2) / 2;
-      gesture.guides = snapped.guides;
+    // What is moved lines up with the edges and middles of others, or evenly between them, where
+    // the pointer brings it near; else its first element lands on the grid.
+    let dx = point.x - gesture.start.x,
+      dy = point.y - gesture.start.y;
+    // With Shift the move keeps to one axis: the one the pointer went further along.
+    if (event.shiftKey) {
+      if (Math.abs(dx) >= Math.abs(dy)) dy = 0;
+      else dx = 0;
     }
+    gesture.guides = [];
+    const boxes = outer.flatMap((id) => boxOf(picture, id) ?? []),
+      free = this.free(event);
+    const others = elementShapes(picture)
+      .filter(({ id }) => !all.has(id))
+      .map(({ shape }) => shape.box);
+    const box = boxes.length ? around(boxes) : undefined;
+    const snapped =
+      box && !free
+        ? snapMove({ ...box, x: box.x + dx, y: box.y + dy }, others, ALIGN / this.view.zoom)
+        : undefined;
+    dx = snapped?.x ? Math.round((dx + snapped.dx) * 2) / 2 : snap(lead.x + dx, free) - lead.x;
+    dy = snapped?.y ? Math.round((dy + snapped.dy) * 2) / 2 : snap(lead.y + dy, free) - lead.y;
+    if (box && snapped) gesture.guides = guidesAt({ ...box, x: box.x + dx, y: box.y + dy }, others);
     const moved = place(picture.source, shifted(places, dx, dy));
-    const target = dropTarget(picture, point, all, event.ctrlKey || event.metaKey);
+    const target = dropTarget(picture, point, all, false);
     gesture.target = undefined;
     let result = moved;
     if (outer.some((id) => holder(picture.diagram, id) !== target)) {
@@ -1042,25 +1116,19 @@ export class Editor {
       bottom = box.y + box.height;
     const dx = point.x - gesture.start.x,
       dy = point.y - gesture.start.y;
-    if (handle.x < 0) left = snap(left + dx, free);
-    if (handle.x > 0) right = snap(right + dx, free);
-    if (handle.y < 0) top = snap(top + dy, free);
-    if (handle.y > 0) bottom = snap(bottom + dy, free);
-    // A dragged edge comes to rest on the edges of other elements.
+    // A dragged edge comes to rest on the edges of other elements near it, else on the grid.
     gesture.guides = [];
-    if (!free) {
-      const now = { x: left, y: top, width: right - left, height: bottom - top },
-        reach = ALIGN / this.view.zoom;
-      const edge = (value: number, axis: "x" | "y") => {
-        const found = snapEdge(value, axis, now, gesture.others, reach);
-        if (found.guide) gesture.guides!.push(found.guide);
-        return found.value;
-      };
-      if (handle.x < 0) left = edge(left, "x");
-      if (handle.x > 0) right = edge(right, "x");
-      if (handle.y < 0) top = edge(top, "y");
-      if (handle.y > 0) bottom = edge(bottom, "y");
-    }
+    const reach = ALIGN / this.view.zoom;
+    const edge = (value: number, axis: "x" | "y") => {
+      const found = free ? { value } : snapEdge(value, axis, box, gesture.others, reach);
+      if (!("guide" in found) || !found.guide) return snap(value, free);
+      gesture.guides!.push(found.guide);
+      return found.value;
+    };
+    if (handle.x < 0) left = edge(left + dx, "x");
+    if (handle.x > 0) right = edge(right + dx, "x");
+    if (handle.y < 0) top = edge(top + dy, "y");
+    if (handle.y > 0) bottom = edge(bottom + dy, "y");
     if (container && "x" in least) {
       left = Math.min(left, Math.floor(least.x));
       top = Math.min(top, Math.floor(least.y));
@@ -1099,17 +1167,25 @@ export class Editor {
     switch (gesture.type) {
       case "move":
       case "resize":
-        if (gesture.result !== undefined && gesture.result !== this.doc.source)
-          this.change(gesture.result);
-        else if (gesture.type === "resize" || gesture.base) this.doc.cancel();
+        if (gesture.result !== undefined && gesture.result !== this.doc.source) {
+          const done = this.change(gesture.result);
+          if (done && gesture.type === "move" && gesture.copies)
+            this.select(gesture.copies.map((id) => ({ type: "element", id })));
+        } else if (gesture.type === "resize" || gesture.base) this.doc.cancel();
         break;
       case "attach":
         if (gesture.target) this.setWire(gesture.id, { [gesture.end]: gesture.target });
         break;
-      case "connect":
-        if (gesture.target) this.connect(gesture.from, gesture.target);
+      case "connect": {
+        const screen = view.pointOf(event),
+          clicked =
+            gesture.dot &&
+            Math.hypot(screen.x - gesture.dot.screen.x, screen.y - gesture.dot.screen.y) < SLOP;
+        if (clicked) this.addBeside(gesture.from, gesture.dot!.side);
+        else if (gesture.target) this.connect(gesture.from, gesture.target);
         else this.connectNew(gesture.from, gesture.current);
         break;
+      }
       case "frame":
       case "pan":
         break;
@@ -1124,6 +1200,87 @@ export class Editor {
     const made = parseTam(this.doc.source).edges.findLast((edge) => !edge.id.includes("#"));
     this.tool = "select";
     if (made) this.select([{ type: "wire", id: made.id }]);
+  }
+
+  /**
+   * A click on a connection dot adds a connected element on that side: an agent beside an agent or a
+   * storage, in the same container, at the first free spot.
+   */
+  addBeside(from: string, side: number) {
+    const base = this.doc.placedSource();
+    if (base === undefined) return void this.change(undefined);
+    const picture = this.doc.layout(base),
+      start = boxOf(picture, from);
+    if (!start) return;
+    const size = sizeOf("agent"),
+      gap = 8 * GRID,
+      step = [
+        { x: 0, y: -1 },
+        { x: 1, y: 0 },
+        { x: 0, y: 1 },
+        { x: -1, y: 0 },
+      ][side];
+    const taken = elementShapes(picture)
+      .filter(({ shape }) => !shape.container)
+      .map(({ shape }) => shape.box);
+    const spot = (shift: number): Box => ({
+      x: snap(
+        step.x
+          ? step.x > 0
+            ? start.x + start.width + gap
+            : start.x - gap - size.width
+          : start.x + start.width / 2 - size.width / 2 + shift,
+        false,
+      ),
+      y: snap(
+        step.y
+          ? step.y > 0
+            ? start.y + start.height + gap
+            : start.y - gap - size.height
+          : start.y + start.height / 2 - size.height / 2 + shift,
+        false,
+      ),
+      ...size,
+    });
+    // Straight out from the side, else beside what stands there already.
+    const lane = (step.x ? size.height : size.width) + 2 * GRID;
+    const free = [0, 1, -1, 2, -2, 3, -3, 4, -4]
+      .map((index) => spot(index * lane))
+      .find((box) =>
+        taken.every(
+          (other) =>
+            box.x >= other.x + other.width + GRID ||
+            other.x >= box.x + box.width + GRID ||
+            box.y >= other.y + other.height + GRID ||
+            other.y >= box.y + box.height + GRID,
+        ),
+      );
+    const at = free ?? spot(0);
+    let made = "";
+    const done = this.change(
+      (() => {
+        const added = addElement(base, {
+          kind: "agent",
+          label: NAMES.agent,
+          at: { x: at.x, y: at.y },
+          parent: holder(picture.diagram, from),
+        });
+        made = added.id;
+        try {
+          const joined = connect(added.source, from, made);
+          parseTam(joined);
+          return joined;
+        } catch {
+          // Where an agent may not stand beside it, or not be joined to it, nothing is added.
+          return undefined;
+        }
+      })(),
+    );
+    if (!done) return;
+    this.tool = "select";
+    this.select([{ type: "element", id: made }]);
+    this.reveal(made);
+    this.rename(made);
   }
 
   /** A connection dropped on the empty canvas ends at a new agent there. */
@@ -1251,6 +1408,10 @@ export class Editor {
         return this.setTool("group");
       case "1":
         return this.fit();
+      case "2":
+        return this.fitSelection();
+      case "?":
+        return this.onHelp();
       case "+":
       case "=":
         return this.view.zoomBy(1.25);
@@ -1338,12 +1499,15 @@ export class Editor {
     return [...(single ? [single] : []), ...(box ? [{ id: this.linkHost!, box }] : [])];
   }
 
+  /** The connection dot at a point of the canvas: its element, and the side it is on (top, right, bottom, left). */
   private linkAt(screen: Point) {
-    return this.linkHosts.find(({ box }) =>
-      this.linkPoints(box).some(
+    for (const { id, box } of this.linkHosts) {
+      const side = this.linkPoints(box).findIndex(
         (spot) => Math.hypot(spot.x - screen.x, spot.y - screen.y) <= HANDLE,
-      ),
-    )?.id;
+      );
+      if (side >= 0) return { id, side };
+    }
+    return undefined;
   }
 
   private cursor(screen?: Point) {

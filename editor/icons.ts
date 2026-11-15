@@ -81,6 +81,14 @@ export const ICONS = {
   snap: svg(
     '<path d="M5 3v7a5 5 0 0 0 10 0V3h-3.500v7a1.500 1.500 0 0 1-3 0V3z"/><path d="M5 6h3.500M11.500 6H15"/>',
   ),
+  expand: svg('<path d="M6 8l4 4 4-4"/><path d="M4 16h12"/>'),
+  collapse: svg('<path d="M6 12l4-4 4 4"/><path d="M4 4h12"/>'),
+  help: svg(
+    '<circle cx="10" cy="10" r="7.500"/><path d="M7.800 8a2.300 2.300 0 1 1 3.300 2.100c-.700.400-1.100.900-1.100 1.700"/><path d="M10 14.300v.100"/>',
+  ),
+  link: svg(
+    '<path d="M8.500 11.500a3 3 0 0 0 4.300 0l3-3a3 3 0 0 0-4.300-4.300l-1 1"/><path d="M11.500 8.500a3 3 0 0 0-4.300 0l-3 3a3 3 0 0 0 4.300 4.300l1-1"/>',
+  ),
   chevron: svg('<path d="M6 8l4 4 4-4"/>'),
   fold: svg(
     '<rect x="2.500" y="3.500" width="15" height="13" rx="1.500"/><path d="M7.500 3.500v13"/>',

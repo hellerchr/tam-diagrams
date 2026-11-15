@@ -11,7 +11,13 @@ describe("alignment help", () => {
     expect(snapped.guides).toHaveLength(2);
     // The middle on a middle: 150 wide next to 100 wide.
     expect(snapMove(box(178, 200, 150), [box(200, 0)], 6).dx).toBe(-3);
-    expect(snapMove(box(250, 300), [box(0, 0)], 6)).toEqual({ dx: 0, dy: 0, guides: [] });
+    expect(snapMove(box(250, 300), [box(0, 0)], 6)).toEqual({
+      dx: 0,
+      dy: 0,
+      x: false,
+      y: false,
+      guides: [],
+    });
   });
 
   it("stands a moved box halfway between its neighbours, or a gap on from them", () => {
