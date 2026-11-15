@@ -187,7 +187,7 @@ gateway -- sends data: push events --> client
 gateway -- calls: token check --> auth
 auth -- calls: token check --> orders
 gateway -- calls --> orders & billing
-orders <-- sends data: saga --> billing`,
+orders <-- calls: saga --> billing`,
   ],
 
   [
@@ -902,8 +902,8 @@ tm -- reads/writes --> tt
 pm -- reads/writes --> lca
 o2 -- calls: start,<br>commit --> ts
 po -- calls: create,<br>find --> ps
-o1 <-- sends data: create object,<br>set & read data --> ca
-o2 <-- sends data: create object,<br>set & read data --> cx
+o1 <-- calls: create object,<br>set & read data --> ca
+o2 <-- calls: create object,<br>set & read data --> cx
 ts -- calls: save --> pm
 pm --- ca
 pm --- cx

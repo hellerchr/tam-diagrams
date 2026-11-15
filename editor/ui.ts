@@ -160,10 +160,21 @@ export class Panels {
     "aria-label": "Diagram source",
   });
   private readonly problem = h("div", { class: "problem", role: "status" });
+  private readonly warning = h("div", { class: "problem warning", role: "status" });
   private readonly status = h("div", { class: "hint" });
   private readonly mode = h("span", { class: "mode" });
   private readonly zoom = h("button", { class: "zoom", title: "Zoom to 100% (Ctrl+0)" });
   private readonly undo: HTMLButtonElement;
+  private readonly snap = h(
+    "button",
+    {
+      class: "button",
+      type: "button",
+      title: "Snap to the grid and to other elements (Alt turns it off while dragging)",
+      "aria-label": "Snap to the grid and to other elements",
+    },
+    icon("snap"),
+  );
   private readonly redo: HTMLButtonElement;
   private readonly stage: HTMLElement;
   private readonly toasts = h("div", { class: "toasts", role: "status" });
@@ -188,6 +199,12 @@ export class Panels {
     this.undo = button("undo", "Undo (Ctrl+Z)", () => editor.doc.undo());
     this.redo = button("redo", "Redo (Ctrl+Shift+Z)", () => editor.doc.redo());
     this.zoom.addEventListener("click", () => editor.view.zoomTo(1));
+    this.snap.addEventListener("click", () => {
+      editor.snapping = !editor.snapping;
+      editor.view.grid = editor.snapping;
+      editor.view.invalidate();
+      this.update();
+    });
     const examples = h(
       "select",
       {
@@ -238,6 +255,7 @@ export class Panels {
         this.zoom,
         button("plus", "Zoom in (+)", () => editor.view.zoomBy(1.25)),
         button("fit", "Fit the diagram (1)", () => editor.fit()),
+        this.snap,
       ),
       h(
         "div",
@@ -264,7 +282,14 @@ export class Panels {
       "aside",
       { class: "side" },
       h("section", { class: "pane" }, this.inspector),
-      h("section", { class: "pane grow" }, h("h2", {}, "Source"), this.source, this.problem),
+      h(
+        "section",
+        { class: "pane grow" },
+        h("h2", {}, "Source"),
+        this.source,
+        this.problem,
+        this.warning,
+      ),
     );
     stage.append(this.empty, this.toasts);
     root.append(bar, tools, stage, side, h("footer", { class: "status" }, this.status));
@@ -683,12 +708,23 @@ export class Panels {
     }
     for (const [tool, control] of this.tools)
       control.setAttribute("aria-pressed", String(tool === editor.tool));
+    this.snap.setAttribute("aria-pressed", String(editor.snapping));
     this.undo.disabled = !doc.canUndo;
     this.redo.disabled = !doc.canRedo;
     if (this.source.value !== doc.source && document.activeElement !== this.source)
       this.source.value = doc.source;
     this.problem.textContent = doc.problem?.message ?? "";
     this.problem.hidden = !doc.problem;
+    // Not an error of the source, but not TAM either: elements that lie on each other.
+    const [pair] = doc.picture?.overlaps ?? [],
+      names = pair?.map((id) => {
+        const node = doc.picture!.diagram.nodes.get(id);
+        return (node?.label || node?.origin || id).replace(/<br\s*\/?>/gi, " ");
+      });
+    this.warning.textContent = names
+      ? `“${names[0]}” and “${names[1]}” overlap. TAM places all elements apart.`
+      : "";
+    this.warning.hidden = !names || !!doc.problem;
     const placed = doc.picture?.placed && doc.picture.diagram.nodes.size > 0;
     this.mode.textContent = placed ? "Placed by hand" : "Automatic layout";
     this.mode.title = placed
@@ -871,6 +907,48 @@ export class Panels {
     this.sync.push(() => {
       interfaces.hidden = !editor.allowsInterface(id);
     });
+    // Aligning and spreading need several elements; sizes can be made one, or left to the contents.
+    const act = (name: keyof typeof ICONS, title: string, run: () => void, least = 2) => {
+      const control = h(
+        "button",
+        { class: "tool mini", type: "button", title, "aria-label": title, onClick: run },
+        icon(name),
+      );
+      control.hidden = ids.length < least;
+      return control;
+    };
+    const arrangement = h(
+      "div",
+      { class: "arrange" },
+      act("align-left", "Align left edges", () => editor.arrange("left")),
+      act("align-center", "Align centers", () => editor.arrange("center")),
+      act("align-right", "Align right edges", () => editor.arrange("right")),
+      act("align-top", "Align top edges", () => editor.arrange("top")),
+      act("align-middle", "Align middles", () => editor.arrange("middle")),
+      act("align-bottom", "Align bottom edges", () => editor.arrange("bottom")),
+      act("spread-x", "Spread evenly, left to right", () => editor.arrange("spread-x"), 3),
+      act("spread-y", "Spread evenly, top to bottom", () => editor.arrange("spread-y"), 3),
+      act("same-width", "Make as wide as the widest", () => editor.sameSize("width")),
+      act("same-height", "Make as high as the highest", () => editor.sameSize("height")),
+      act("fit-size", "Fit the size to the name, or to what is inside", () => editor.fitSize(), 1),
+    );
+    // Shown as two with dots between, the copy stands beside or below; dragging it puts it anywhere.
+    const copyRow = h(
+      "div",
+      { class: "row" },
+      h("span", {}, "Copy"),
+      this.segments<"beside" | "below">(
+        [
+          { value: "beside", name: "Beside", title: "A … B, side by side" },
+          { value: "below", name: "Below", title: "A … B, one above the other" },
+        ],
+        () => editor.copySide(id),
+        (side) => editor.placeCopy(id, side),
+      ),
+    );
+    this.sync.push(() => {
+      copyRow.hidden = !editor.doc.picture?.diagram.nodes.has(`${id}#2`);
+    });
     const rows: (HTMLElement | false)[] = [
       h("h2", {}, single ? "Element" : `${ids.length} elements`),
       single &&
@@ -915,6 +993,8 @@ export class Panels {
             editor.allowsElements({ stack: value === "stack", multiple: value === "several" }),
         ),
       ),
+      h("div", { class: "row top" }, h("span", {}, "Arrange"), arrangement),
+      single && copyRow,
       single && interfaces,
       single && h("div", { class: "row quiet" }, h("span", {}, "Id"), h("code", {}, id)),
       h(
@@ -988,7 +1068,7 @@ export class Panels {
     this.sync.push(() => {
       const connection = read();
       both.checked = !!connection?.both;
-      bothRow.hidden = connection?.word !== "calls" && connection?.word !== "sends data";
+      bothRow.hidden = !connection?.both && !editor.allowsWire(id, { both: true });
       reverse.disabled = !editor.allowsWire(id, { reverse: true });
       label.hidden = connection?.word === "dependency";
       protocol.hidden = !channel();

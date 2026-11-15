@@ -151,9 +151,13 @@ export function placeElements(prepared: TamGraph, measure: Measure): PlacedEleme
     // A copy stands beside its original, the dots between them.
     const copy = `${id}#2`;
     if (diagram.nodes.get(copy)?.origin !== id) return box;
-    const second = vertical
-      ? { ...box, x: box.x + box.width + NODE_SPACING }
-      : { ...box, y: box.y + box.height + NODE_SPACING };
+    // Where the source places it, or beside the original: across the direction the diagram runs.
+    const given = diagram.nodes.get(copy)!.at;
+    const second = given
+      ? { ...box, x: given.x, y: given.y }
+      : vertical
+        ? { ...box, x: box.x + box.width + NODE_SPACING }
+        : { ...box, y: box.y + box.height + NODE_SPACING };
     boxes.set(copy, second);
     return union([box, second]);
   };

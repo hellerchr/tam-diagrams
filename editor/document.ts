@@ -8,7 +8,7 @@ import type { ElkLayout } from "../src/elk.ts";
 import type { Scene } from "../src/scene.ts";
 import { isPlaced, parseTam, TamError, type TamDiagram } from "../src/tam.ts";
 import { bestLayout, layoutPlaced } from "../src/tam-layout.ts";
-import { pin } from "../src/tam-pin.ts";
+import { overlapping, pin } from "../src/tam-pin.ts";
 import type { Measure } from "../src/text.ts";
 
 /** A source laid out: the parsed diagram and the scene drawn from it. */
@@ -18,6 +18,8 @@ export interface Picture {
   scene: Scene;
   /** Whether the source places its elements; else the layout is automatic. */
   placed: boolean;
+  /** Elements that lie on each other, which the notation does not allow: pairs of shape ids. */
+  overlaps: [string, string][];
 }
 
 /** Why a source shows no picture: the message, and the line it is about (0 for the whole source). */
@@ -57,7 +59,8 @@ export class Doc {
   /** A source laid out without waiting, which only placed sources allow; throws what the parser throws. */
   layout(source: string): Picture {
     const diagram = parseTam(source);
-    return { source, diagram, scene: layoutPlaced(diagram, this.measure), placed: true };
+    const scene = layoutPlaced(diagram, this.measure);
+    return { source, diagram, scene, placed: true, overlaps: overlapping(diagram, scene) };
   }
 
   /** Shows a source's picture: at once when it is placed, after the automatic layout else. */
@@ -67,12 +70,7 @@ export class Doc {
       const diagram = parseTam(source);
       this.problem = undefined;
       if (isPlaced(diagram) || !diagram.nodes.size) {
-        this.picture = {
-          source,
-          diagram,
-          scene: layoutPlaced(diagram, this.measure),
-          placed: true,
-        };
+        this.picture = this.layout(source);
         this.onChange();
         return;
       }
@@ -80,7 +78,7 @@ export class Doc {
       this.onChange();
       const scene = await bestLayout(diagram, this.measure, this.elk);
       if (run !== this.run) return;
-      this.picture = { source, diagram, scene, placed: false };
+      this.picture = { source, diagram, scene, placed: false, overlaps: [] };
     } catch (reason) {
       if (run !== this.run) return;
       this.problem = problemOf(reason);
@@ -184,6 +182,8 @@ export class Doc {
 function allPlaced(diagram: TamDiagram): boolean {
   for (const node of diagram.nodes.values()) {
     if (node.id.endsWith("#row") || ["dots", "interface", "channel"].includes(node.kind)) continue;
+    // A copy stands beside its original when the source does not place it.
+    if (node.origin && node.origin !== node.id) continue;
     if (!node.at && !node.children.length) return false;
   }
   return true;

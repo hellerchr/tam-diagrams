@@ -8,6 +8,7 @@ import {
   UmlError,
   type DiagramColors,
 } from "../src/index.ts";
+import { isPlaced, layoutPlaced, overlapping } from "../src/edit.ts";
 
 // Light theme with 6-digit hex only: the renderers mix colors as #rrggbb. The font and arialMeasure
 // belong together, since the measure is valid only for the Arial/Helvetica metric family. Arial
@@ -40,6 +41,17 @@ export async function renderSource(source: string): Promise<string> {
  */
 export async function checkSource(source: string): Promise<void> {
   await renderSource(source);
+  if (detectUml(source)) return;
+  // Placed by hand, elements may lie on each other, which the TAM standard (3.3.5) does not allow.
+  const diagram = parseTam(source);
+  if (!isPlaced(diagram)) return;
+  const [pair] = overlapping(diagram, layoutPlaced(diagram, arialMeasure));
+  if (!pair) return;
+  const [a, b] = pair.map((id) => diagram.nodes.get(id)!);
+  throw new TamError(
+    Math.max(a.line, b.line),
+    `\`${a.origin ?? a.id}\` and \`${b.origin ?? b.id}\` overlap; elements stand apart.`,
+  );
 }
 
 /** Whether an error is a problem in the diagram source rather than a fault of the program. */

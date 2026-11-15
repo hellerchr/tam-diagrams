@@ -42,10 +42,10 @@ agent shop[Web Shop]:::blue stack {
 
   it("reads channels with data flow, request direction, labels and protocols", () => {
     const [plain, flow, request, both] = parseTam(
-      "agent a\nagent b\na --- b\na <-- sends data: events --> b\na -- calls: GET @HTTP --> b\na <-- calls --> b",
+      "agent a\nagent b\na --- b\na -- sends data: events --> b\na -- calls: GET @HTTP --> b\na <-- calls --> b",
     ).edges;
     expect(plain).toMatchObject({ kind: "channel", flow: { toSource: false, toTarget: false } });
-    expect(flow).toMatchObject({ flow: { toSource: true, toTarget: true }, label: "events" });
+    expect(flow).toMatchObject({ flow: { toSource: false, toTarget: true }, label: "events" });
     expect(request).toMatchObject({
       request: { toSource: false, toTarget: true },
       label: "GET",
@@ -189,9 +189,9 @@ cart requires IStock`);
       "a channel b",
       "b channel c",
     ]);
-    expect(kinds("agent a\nagent b\na -- sends data --> b\na <-- sends data --> b")).toEqual([
+    expect(kinds("agent a\nagent b\na -- sends data --> b\nb -- sends data --> a")).toEqual([
       "a channel b",
-      "a channel b",
+      "b channel a",
     ]);
     expect(
       kinds(

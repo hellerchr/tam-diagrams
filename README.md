@@ -71,6 +71,9 @@ static page to `dist/editor`). Shapes are dragged from the palette onto the canv
 nested by dropping them into a container, and connected by dragging from the dots beside an
 element; the inspector offers only the kinds and connections the notation allows there. The tree
 lists the elements and takes drops too. Copy, cut, paste, duplicate, undo and redo work as usual.
+A moved element lines up with the edges and middles of others and with the gaps between them, a
+selection is aligned, spread evenly or made one size from the inspector, and a right click puts it in
+a box or changes what a connection is.
 
 The document is the TAM source, shown beside the canvas and editable there: every gesture is an edit
 of that text, and every other line stays as its author wrote it. A source without positions is laid
@@ -146,8 +149,28 @@ An **agent** (rectangle) does something; a **human** is an agent that is a perso
 (rounded) keeps information. Agents talk through **channels** (`a -- protocol --> b`) and use
 storages through **accesses** (`reads`, `writes`, `reads/writes`). A storage is never joined to a
 storage by a flow, only by a `pointer`. Containers draw their parts inside; `group` frames elements.
-`package` elements with `-. use .->` and `-. import .->` make package diagrams. The parser enforces
-these rules and reports the line of a broken one.
+`package` elements with `-. use .->` and `-. import .->` make package diagrams.
+
+The parser enforces the rules of the SAP TAM standard and reports the line of a broken one
+(`test/tam-standard.test.ts` lists them by section):
+
+| Rule                                                                                       | Standard      |
+| ------------------------------------------------------------------------------------------ | ------------- |
+| Agents hold agents, storages, subsystems, components and classes; a human holds nothing    | 3.3.4         |
+| Storages hold only storages                                                                | 3.3.15        |
+| Components hold components, classes and storages; subsystems also subsystems               | 2.1.1.3       |
+| A channel joins agents only; components, subsystems and classes connect through interfaces | 3.3.6, 3.3.8  |
+| Requests go one way or both (`<-- calls -->`); data flows one way                          | 3.3.6         |
+| An access joins one active element and a storage: to it writes, from it reads              | 3.3.1         |
+| A pointer joins two storages; create and generate join active elements                     | 3.3.9, 3.3.12 |
+| Only agents and storages are shown as several (`stack`, `...`), dots between one kind      | 3.3.5, 3.3.11 |
+| The conceptual level has agents, storages, channels and accesses only                      | 2.1.1.3       |
+| Elements do not overlap: `check` and the editor say which do in a layout by hand           | 3.3.5         |
+
+A `group` is the standard's anonymous grouping (3.3.4, 3.3.5): a thin frame that reduces the number
+of channels and accesses, and counts as a storage when it holds only storages. Beyond the standard,
+a group may carry a name, and `use` and `import` are plain UML dependencies. Agents and storages in
+L, U or T shape are not drawn.
 
 ### Positions
 
@@ -169,6 +192,8 @@ api -- reads/writes --> cart
   its parts. A container without a position fits its parts.
 - Wires are not stored. They are routed between the placed elements: straight, around one or two
   corners, or around the elements in their way.
+- An element shown as several (`...`) may place its copy with a second position:
+  `agent worker[Worker] ... @450,90 @450,160`. Without it the copy stands beside its original.
 - One position is enough to lay the diagram out by hand; elements without one stand in a row below
   the placed ones of their container, so an element added as text shows up at once.
 - A source without positions is laid out automatically, exactly as before. Positions are the only
@@ -243,6 +268,7 @@ api -- reads/writes --> cart
 | `editor/document.ts`         | The editor's document: the source, its picture, previews and history                 |
 | `editor/editor.ts`           | Selection, tools, gestures on the canvas and the commands of panels and keyboard     |
 | `editor/hit.ts`              | What of a picture lies at a point, in a frame, or under a dragged element            |
+| `editor/guides.ts`           | Alignment help: snapping to edges, middles and gaps; align, spread, same size        |
 | `editor/view.ts`             | The canvas: viewport, grid, the picture as an image, and the overlay                 |
 | `editor/ui.ts`               | Toolbar, palette, element tree, inspector and source pane                            |
 | `editor/main.ts`             | The page: theme, files, export, autosave                                             |

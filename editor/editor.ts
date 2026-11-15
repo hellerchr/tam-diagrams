@@ -38,6 +38,7 @@ import type { Doc, Picture } from "./document.ts";
 import {
   boxesOf,
   boxOf,
+  contains,
   dropTarget,
   elementShapes,
   elementsIn,
@@ -46,6 +47,7 @@ import {
   samePart,
   wireParts,
 } from "./hit.ts";
+import { type Arrangement, around, arrange, type Guide, snapEdge, snapMove } from "./guides.ts";
 import type { View } from "./view.ts";
 
 /** An element in the tree of the diagram. */
@@ -104,7 +106,7 @@ type Gesture =
       result?: string;
       target?: string | null;
       /** Lines the moved element is aligned on with others, in the diagram. */
-      guides?: [Point, Point][];
+      guides?: Guide[];
     }
   | {
       type: "resize";
@@ -116,6 +118,9 @@ type Gesture =
       /** A leaf's least size, or the box around a container's parts. */
       least: { width: number; height: number } | Box;
       container: boolean;
+      /** The boxes of the other elements, which the dragged edges line up with. */
+      others: Box[];
+      guides?: Guide[];
       result?: string;
     }
   | { type: "frame"; start: Point; current: Point; kept: Part[] }
@@ -400,6 +405,103 @@ export class Editor {
     view.panBy(width / 2 - on.x - on.width / 2, height / 2 - on.y - on.height / 2);
   }
 
+  /** Whether elements snap to the grid and to each other; Alt turns it off for one gesture. */
+  snapping = true;
+
+  private free(event: { altKey: boolean }) {
+    return event.altKey || !this.snapping;
+  }
+
+  /** The outermost selected elements with their boxes, in a placed picture of the source: what arranging works on. */
+  private units() {
+    const base = this.doc.placedSource();
+    if (base === undefined) return undefined;
+    const picture = this.doc.layout(base),
+      { outer } = this.movers(picture.diagram, this.selectedElements);
+    const boxes = new Map(
+      outer.flatMap((id) => {
+        const box = boxOf(picture, id);
+        return box ? [[id, box] as [string, Box]] : [];
+      }),
+    );
+    return { base, picture, boxes };
+  }
+
+  /** Aligns the selected elements on a side or middle of the box around them, or spreads them with even gaps. */
+  arrange(how: Arrangement) {
+    const units = this.units();
+    if (!units) return void this.change(undefined);
+    let source = units.base;
+    for (const [id, step] of arrange(units.boxes, how))
+      source = place(
+        source,
+        shifted(this.movers(units.picture.diagram, [id]).places, step.x, step.y),
+      );
+    this.change(source);
+  }
+
+  /** Makes the selected elements as wide, or as high, as the largest of them. */
+  sameSize(side: "width" | "height") {
+    const units = this.units();
+    if (!units) return void this.change(undefined);
+    const most = Math.max(...[...units.boxes.values()].map((box) => box[side]));
+    this.change(
+      place(
+        units.base,
+        new Map(
+          [...units.boxes].map(([id, box]) => [
+            id,
+            { x: box.x, y: box.y, width: box.width, height: box.height, [side]: most },
+          ]),
+        ),
+      ),
+    );
+  }
+
+  /** Lets the selected containers fit their parts, and leaves take the size of their names. */
+  fitSize() {
+    const units = this.units();
+    if (!units) return void this.change(undefined);
+    this.change(
+      place(
+        units.base,
+        new Map(
+          [...units.boxes].map(([id, box]) => [
+            id,
+            units.picture.diagram.nodes.get(id)!.children.length
+              ? undefined
+              : { x: box.x, y: box.y },
+          ]),
+        ),
+      ),
+    );
+  }
+
+  /** Where the copy of an element shown as several stands, when it is beside or below its original. */
+  copySide(id: string): "beside" | "below" | undefined {
+    const { picture } = this,
+      box = picture && boxOf(picture, id),
+      copy = picture && boxOf(picture, `${id}#2`);
+    if (!box || !copy) return undefined;
+    if (Math.abs(copy.y - box.y) < 1 && copy.x > box.x) return "beside";
+    if (Math.abs(copy.x - box.x) < 1 && copy.y > box.y) return "below";
+    return undefined;
+  }
+
+  /** Stands the copy of an element shown as several beside or below its original. */
+  placeCopy(id: string, side: "beside" | "below") {
+    const base = this.doc.placedSource();
+    if (base === undefined) return void this.change(undefined);
+    const box = boxOf(this.doc.layout(base), id);
+    if (!box) return;
+    const gap = 3 * GRID,
+      at =
+        side === "beside"
+          ? { x: box.x + box.width + gap, y: box.y }
+          : { x: box.x, y: box.y + box.height + gap };
+    this.change(place(base, new Map([[`${id}#2`, at]])));
+  }
+
   /** Whether an element may provide or require an interface. */
   allowsInterface(id: string) {
     return this.allows((source) => addInterface(source, id, "provides", "I"));
@@ -612,6 +714,9 @@ export class Editor {
       if (node.origin && node.origin !== id) return;
       if (!id.endsWith("#row")) all.add(id);
       if (node.at && !id.endsWith("#row")) places.set(id, node.at);
+      // The copy of an element shown as several moves with it when it has a place of its own.
+      const copy = diagram.nodes.get(`${id}#2`);
+      if (copy?.origin === id && copy.at) places.set(copy.id, copy.at);
       node.children.forEach(take);
     };
     outer.forEach(take);
@@ -835,7 +940,7 @@ export class Editor {
         this.drag(gesture, screen, point, event);
         return;
       case "resize":
-        this.resize(gesture, point, event.altKey);
+        this.resize(gesture, point, this.free(event));
         return;
     }
   }
@@ -856,58 +961,42 @@ export class Editor {
         return;
       }
       const picture = this.doc.layout(source);
-      gesture.base = { picture, ...this.movers(picture.diagram, this.selectedElements) };
+      // Grabbed by its copy, an element shown as several moves the copy alone: beside it, below it, anywhere.
+      const [only] = this.selectedElements,
+        copy = this.selectedElements.length === 1 ? boxOf(picture, `${only}#2`) : undefined;
+      gesture.base =
+        copy && contains(copy, gesture.start)
+          ? {
+              picture,
+              outer: [],
+              places: new Map([[`${only}#2`, { x: copy.x, y: copy.y }]]),
+              all: new Set([only]),
+            }
+          : { picture, ...this.movers(picture.diagram, this.selectedElements) };
     }
     const { picture, outer, places, all } = gesture.base;
     // The first element lands on the grid; the others keep their distance to it.
     const lead = places.get(outer[0]) ?? [...places.values()][0];
     if (!lead) return;
-    let dx = snap(lead.x + point.x - gesture.start.x, event.altKey) - lead.x,
-      dy = snap(lead.y + point.y - gesture.start.y, event.altKey) - lead.y;
+    let dx = snap(lead.x + point.x - gesture.start.x, this.free(event)) - lead.x,
+      dy = snap(lead.y + point.y - gesture.start.y, this.free(event)) - lead.y;
     // Near the edge or middle of another element the moved one lines up with it instead.
+    // Near the edges and middles of others, or evenly between them, what is moved lines up instead.
     gesture.guides = [];
-    const box = boxOf(picture, outer[0]);
-    if (box && !event.altKey) {
-      const others = elementShapes(picture)
-        .filter(({ id }) => !all.has(id))
-        .map(({ shape }) => shape.box);
-      const stops = (item: Box, axis: "x" | "y") => {
-        const extent = axis === "x" ? item.width : item.height;
-        return [item[axis], item[axis] + extent / 2, item[axis] + extent];
-      };
-      const align = (axis: "x" | "y", shift: number) => {
-        const moved = { ...box, [axis]: box[axis] + shift };
-        let best: { by: number; at: number; other: Box } | undefined;
-        for (const other of others)
-          for (const mine of stops(moved, axis))
-            for (const theirs of stops(other, axis)) {
-              const by = theirs - mine;
-              if (
-                Math.abs(by) <= ALIGN / this.view.zoom &&
-                (!best || Math.abs(by) < Math.abs(best.by))
-              )
-                best = { by, at: theirs, other };
-            }
-        return best;
-      };
-      const across = align("x", dx),
-        down = align("y", dy);
-      if (across) dx = Math.round((dx + across.by) * 2) / 2;
-      if (down) dy = Math.round((dy + down.by) * 2) / 2;
-      const moved = { ...box, x: box.x + dx, y: box.y + dy };
-      if (across)
-        gesture.guides.push([
-          { x: across.at, y: Math.min(moved.y, across.other.y) - 12 },
-          {
-            x: across.at,
-            y: Math.max(moved.y + moved.height, across.other.y + across.other.height) + 12,
-          },
-        ]);
-      if (down)
-        gesture.guides.push([
-          { x: Math.min(moved.x, down.other.x) - 12, y: down.at },
-          { x: Math.max(moved.x + moved.width, down.other.x + down.other.width) + 12, y: down.at },
-        ]);
+    const boxes = outer.flatMap((id) => boxOf(picture, id) ?? []);
+    if (boxes.length && !this.free(event)) {
+      const box = around(boxes),
+        others = elementShapes(picture)
+          .filter(({ id }) => !all.has(id))
+          .map(({ shape }) => shape.box);
+      const snapped = snapMove(
+        { ...box, x: box.x + dx, y: box.y + dy },
+        others,
+        ALIGN / this.view.zoom,
+      );
+      dx = Math.round((dx + snapped.dx) * 2) / 2;
+      dy = Math.round((dy + snapped.dy) * 2) / 2;
+      gesture.guides = snapped.guides;
     }
     const moved = place(picture.source, shifted(places, dx, dy));
     const target = dropTarget(picture, point, all, event.ctrlKey || event.metaKey);
@@ -935,7 +1024,11 @@ export class Editor {
         container = !!picture.diagram.nodes.get(id)?.children.length;
       // Without its placement the element shows what it needs: a leaf its size, a container the box around its parts.
       const least = boxOf(this.doc.layout(place(base, new Map([[id, undefined]]))), id)!;
-      this.gesture = { type: "resize", id, handle, start, base, box, least, container };
+      const inside = this.movers(picture.diagram, [id]).all,
+        others = elementShapes(picture)
+          .filter((item) => !inside.has(item.id))
+          .map(({ shape }) => shape.box);
+      this.gesture = { type: "resize", id, handle, start, base, box, least, container, others };
     } catch {
       this.notify("This element cannot be resized.");
     }
@@ -953,6 +1046,21 @@ export class Editor {
     if (handle.x > 0) right = snap(right + dx, free);
     if (handle.y < 0) top = snap(top + dy, free);
     if (handle.y > 0) bottom = snap(bottom + dy, free);
+    // A dragged edge comes to rest on the edges of other elements.
+    gesture.guides = [];
+    if (!free) {
+      const now = { x: left, y: top, width: right - left, height: bottom - top },
+        reach = ALIGN / this.view.zoom;
+      const edge = (value: number, axis: "x" | "y") => {
+        const found = snapEdge(value, axis, now, gesture.others, reach);
+        if (found.guide) gesture.guides!.push(found.guide);
+        return found.value;
+      };
+      if (handle.x < 0) left = edge(left, "x");
+      if (handle.x > 0) right = edge(right, "x");
+      if (handle.y < 0) top = edge(top, "y");
+      if (handle.y > 0) bottom = edge(bottom, "y");
+    }
     if (container && "x" in least) {
       left = Math.min(left, Math.floor(least.x));
       top = Math.min(top, Math.floor(least.y));
@@ -1272,6 +1380,18 @@ export class Editor {
       else this.strokeWire(context, picture, hover.id, 3);
       context.globalAlpha = 1;
     }
+    // Elements that lie on each other, which the notation does not allow.
+    if (picture.overlaps.length) {
+      context.strokeStyle = "#d9363e";
+      context.lineWidth = 2;
+      context.setLineDash([4, 3]);
+      const boxes = new Map(picture.scene.shapes.map((shape) => [shape.id, shape.box]));
+      for (const id of new Set(picture.overlaps.flat())) {
+        const box = boxes.get(id);
+        if (box) outlineBox(box, 2);
+      }
+      context.setLineDash([]);
+    }
     // Selected connections are drawn over in the accent color, selected elements framed.
     context.strokeStyle = accent;
     for (const id of this.selectedWires) this.strokeWire(context, picture, id, 2.5);
@@ -1302,7 +1422,7 @@ export class Editor {
           context.globalAlpha = 1;
         }
     }
-    if (gesture?.type === "move" && gesture.guides?.length) {
+    if ((gesture?.type === "move" || gesture?.type === "resize") && gesture.guides?.length) {
       context.strokeStyle = "#e0457b";
       context.lineWidth = 1;
       for (const [from, to] of gesture.guides) {

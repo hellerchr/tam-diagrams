@@ -202,6 +202,15 @@ export function generateTam(seed: number, options: FuzzOptions = {}): string {
   const named = elements.filter((element) => element.id);
   const active = (element: Element) =>
     !["storage", "group"].includes(element.kind) || (element.kind === "group" && !element.passive);
+  /** Whether an element can be the end of a channel: an agent, or a group of agents and storages. */
+  const talks = (element: Element): boolean =>
+    element.kind === "agent" ||
+    element.kind === "human" ||
+    (element.kind === "group" &&
+      !element.passive &&
+      elements
+        .filter((item) => item.parent === element)
+        .every((item) => item.kind === "storage" || talks(item)));
   const ancestor = (a: Element, b: Element) => {
     for (let p = b.parent; p; p = p.parent) if (p === a) return true;
     return false;
@@ -245,13 +254,21 @@ export function generateTam(seed: number, options: FuzzOptions = {}): string {
             ? `${a.id} -- ${plain} --- ${b.id}`
             : `${a.id} --- ${b.id}`
           : kind.endsWith("both")
-            ? `${a.id} <-- ${edge(kind.startsWith("data") ? "sends data" : "calls")} --> ${b.id}`
+            ? // Data flows one way on a channel; requests go both ways.
+              `${a.id} <-- ${edge("calls")} --> ${b.id}`
             : kind.endsWith("back")
               ? `${b.id} -- ${edge(kind.startsWith("data") ? "sends data" : "calls")} --> ${a.id}`
               : `${a.id} -- ${edge(kind === "data" ? "sends data" : "calls")} --> ${b.id}`;
-      if (design && r.chance(0.25) && a.kind !== "human" && b.kind !== "human")
+      // Channels join agents only; components, subsystems and classes connect through interfaces.
+      const channel = talks(a) && talks(b),
+        people = a.kind === "human" || b.kind === "human";
+      if (design && r.chance(0.25) && !people)
         line = `${a.id} -- requires${r.chance(0.1) ? "" : ` I${r.pick(WORDS)}`}${protocol} --> ${b.id}`;
       else if (r.chance(0.05)) line = `${a.id} -. create .-> ${b.id}`;
+      else if (!channel)
+        line = people
+          ? `${a.id} -. create .-> ${b.id}`
+          : `${a.id} -- requires I${WORDS[i % WORDS.length]}${protocol} --> ${b.id}`;
     } else if (active(a) !== active(b)) {
       const [agent, storage] = active(a) ? [a, b] : [b, a];
       line = `${agent.id} -- ${edge(r.pick(["reads", "writes", "reads/writes", "reads/writes"]), false)} --> ${storage.id}`;
@@ -375,7 +392,7 @@ export const VIOLATIONS: Violation[] = [
   {
     name: "interface on a storage",
     lines: ["storage zs1", "zs1 provides IThing"],
-    error: /Only active elements can provide interfaces/,
+    error: /Only components, subsystems, classes and agents provide interfaces/,
   },
 ];
 

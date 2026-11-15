@@ -54,6 +54,8 @@ interface Declaration {
   stack: boolean;
   multiple: boolean;
   at?: Placement;
+  /** Where the copy of an element shown as several stands. */
+  copyAt?: Placement;
   /** `{` opens a block, `{}` an empty one. */
   brace: "" | "{" | "{}";
   comment: string;
@@ -64,7 +66,7 @@ function read(line: string): Declaration | undefined {
     match = code.trim().match(ELEMENT);
   if (!match) return undefined;
   const [, kind, id, bracketed, quoted, modifiers, brace] = match;
-  const placed = modifiers.match(new RegExp(PLACEMENT));
+  const [placed, copy] = [...modifiers.matchAll(new RegExp(PLACEMENT, "g"))];
   const options = modifiers
     .replace(new RegExp(PLACEMENT, "g"), " ")
     .replace(/:::/g, " :::")
@@ -84,6 +86,7 @@ function read(line: string): Declaration | undefined {
     stack: options.includes("stack"),
     multiple: options.includes("..."),
     ...(at ? { at } : {}),
+    ...(copy ? { copyAt: { x: Number(copy[1]), y: Number(copy[2]) } } : {}),
     brace: !brace ? "" : brace === "{" ? "{" : "{}",
     comment,
   };
@@ -108,6 +111,11 @@ function write(declaration: Declaration): string {
     declaration.multiple && " ...",
     at &&
       ` @${number(at.x)},${number(at.y)}${at.width === undefined ? "" : ` ${number(at.width)}x${number(at.height!)}`}`,
+    // A copy's position is the second one: it is written only after the element's own.
+    at &&
+      declaration.multiple &&
+      declaration.copyAt &&
+      ` @${number(declaration.copyAt.x)},${number(declaration.copyAt.y)}`,
     declaration.brace && ` ${declaration.brace}`,
     declaration.comment && ` ${declaration.comment}`,
   ]
@@ -181,7 +189,12 @@ export function place(source: string, places: Map<string, Placement | undefined>
     const node = declared(diagram, id),
       declaration = isElement(node) ? read(lines[node.line - 1]) : undefined;
     if (!declaration) continue;
-    lines[node!.line - 1] = write({ ...declaration, at });
+    // The copy of an element shown as several (`id#2`) is placed in its original's declaration.
+    lines[node!.line - 1] = write(
+      id.endsWith("#2") && diagram.nodes.get(id)?.origin === node!.id
+        ? { ...declaration, copyAt: at && { x: at.x, y: at.y } }
+        : { ...declaration, at },
+    );
   }
   return lines.join("\n");
 }
@@ -191,7 +204,9 @@ export function unplace(source: string): string {
   return linesOf(source)
     .map((line) => {
       const declaration = read(line);
-      return declaration?.at ? write({ ...declaration, at: undefined }) : line;
+      return declaration?.at || declaration?.copyAt
+        ? write({ ...declaration, at: undefined, copyAt: undefined })
+        : line;
     })
     .join("\n");
 }
@@ -613,6 +628,10 @@ export function duplicate(
           x: declaration.at.x + offset.x,
           y: declaration.at.y + offset.y,
         },
+        copyAt: declaration.copyAt && {
+          x: declaration.copyAt.x + offset.x,
+          y: declaration.copyAt.y + offset.y,
+        },
       });
     });
     lines.splice(end + 1, 0, ...copy);
@@ -691,6 +710,10 @@ export function paste(
             options.placed === false || !declaration.at
               ? undefined
               : { ...declaration.at, x: declaration.at.x + dx, y: declaration.at.y + dy },
+          copyAt:
+            options.placed === false || !declaration.copyAt
+              ? undefined
+              : { x: declaration.copyAt.x + dx, y: declaration.copyAt.y + dy },
         }),
       );
     } else if (statement === "}" || statement === "...") {

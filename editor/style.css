@@ -747,3 +747,40 @@ code,
   border: 0;
   border-top: 1px solid var(--line);
 }
+
+.problem.warning {
+  background: color-mix(in srgb, #eda100 16%, var(--panel));
+  color: color-mix(in srgb, #8a5a00 70%, var(--text));
+}
+
+.arrange {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+}
+
+.tool.mini {
+  width: 28px;
+  height: 28px;
+  justify-content: center;
+  padding: 0;
+  border-color: var(--line);
+}
+
+.tool.mini .icon svg {
+  width: 17px;
+  height: 17px;
+}
+
+.row.top {
+  align-items: start;
+}
+
+.row.top > span:first-child {
+  padding-top: 5px;
+}
+
+.button[aria-pressed="true"] {
+  background: var(--accent-soft);
+  color: var(--accent);
+}

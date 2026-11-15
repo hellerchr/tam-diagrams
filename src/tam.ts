@@ -50,6 +50,8 @@ export interface TamNode {
   origin?: string;
   /** Where the source places the element (`@x,y` and a size `WxH`); without it, layout does. */
   at?: Placement;
+  /** Where the source places the copy of an element shown as several (`... @x,y @x,y`). */
+  copyAt?: Placement;
   line: number;
 }
 
@@ -299,9 +301,19 @@ export function parseTam(source: string): TamDiagram {
           `\`${kind}\` needs an id, for example \`${kind} web "Web Server"\`.`,
         );
       const placements = [...modifiers.matchAll(new RegExp(PLACEMENT, "g"))];
-      if (placements.length > 1)
-        throw new TamError(line, `\`${id ?? kind}\` is placed twice; keep one \`@x,y\`.`);
+      // An element shown as several (`...`) may place its copy too, with a second position.
+      const several = /(^|\s)\.\.\.(\s|$)/.test(modifiers.replace(new RegExp(PLACEMENT, "g"), " "));
+      if (placements.length > (several ? 2 : 1))
+        throw new TamError(
+          line,
+          several
+            ? `\`${id ?? kind}\` has more than two positions; the first places it, the second its copy.`
+            : `\`${id ?? kind}\` is placed twice; keep one \`@x,y\`.`,
+        );
       const at = placements[0] && placement(placements[0], line);
+      const copyAt = placements[1] && placement(placements[1], line);
+      if (copyAt?.width !== undefined)
+        throw new TamError(line, "A copy is as large as its original; place it with `@x,y` alone.");
       const options = modifiers
         .replace(new RegExp(PLACEMENT, "g"), " ")
         .replace(/:::/g, " :::")
@@ -320,6 +332,7 @@ export function parseTam(source: string): TamDiagram {
         stack: options.includes("stack"),
         color,
         ...(at ? { at } : {}),
+        ...(copyAt ? { copyAt } : {}),
         line,
       };
       if (options.includes("...")) multiples.push(node.id);
@@ -430,10 +443,10 @@ export function parseTam(source: string): TamDiagram {
       diagram.edges.push({ id: `e${++count}`, line, ...fields });
     if ("offers" in entry) {
       const { offers } = entry;
-      if (!isActive(a))
+      if (!isActive(a) || a.kind === "human")
         throw new TamError(
           line,
-          `Only active elements can ${offers.slice(0, -1)} interfaces; \`${a.id}\` is a ${a.kind}.`,
+          `Only components, subsystems, classes and agents ${offers.slice(0, -1)} interfaces; \`${a.id}\` is a ${a.kind}.`,
         );
       if (assembled.has(`${a.id} ${offers} ${label}`)) continue;
       const id = `${a.id}#${offers}#${++count}`;
@@ -452,7 +465,7 @@ export function parseTam(source: string): TamDiagram {
     const { word, both, protocol } = entry,
       b = lookup(entry.to, line);
     if (a === b) throw new TamError(line, `\`${a.id}\` cannot connect to itself.`);
-    checkWord(diagram, word, a, b, protocol, line);
+    checkWord(diagram, word, a, b, protocol, line, both);
     const nested = isAncestor(diagram, a.id, b.id) || isAncestor(diagram, b.id, a.id);
     if (
       (nested && word !== "delegates") ||
@@ -692,6 +705,7 @@ function checkWord(
   b: TamNode,
   protocol: string | undefined,
   line: number,
+  both = false,
 ) {
   if (word === "reads" || word === "writes" || word === "reads/writes") {
     if (isStorage(a) && isActive(b))
@@ -729,6 +743,21 @@ function checkWord(
           : `\`${outer.id}\` contains \`${inner.id}\`, and a container stands for its parts, so the two are never connected; connect \`${inner.id}\` to the element outside \`${outer.id}\` it works with, or leave the connection out.`,
       );
     }
+    // TAM standard 3.3.6: a channel is defined between agents only.
+    const design = [a, b].find((node) => !talks(diagram, node));
+    if (design) {
+      const other = design === a ? b : a;
+      throw new TamError(
+        line,
+        `Channels join agents; \`${design.id}\` is ${article(design.kind)}, which connects through interfaces: \`${a.id} -- requires IName --> ${b.id}\`${other.kind === "human" ? "" : `, or \`${design.id} provides IName\``}.`,
+      );
+    }
+    // TAM standard 3.3.6: fewer data flow ends than ends, so data flows one way on a channel.
+    if (word === "sends data" && both)
+      throw new TamError(
+        line,
+        `Data flows one way on a channel; for requests both ways write \`${a.id} <-- calls --> ${b.id}\`, for data both ways two channels.`,
+      );
     return;
   }
   if (word === "delegates" && !isAncestor(diagram, a.id, b.id))
@@ -736,6 +765,17 @@ function checkWord(
       line,
       `\`${a.id}\` does not contain \`${b.id}\`; \`delegates\` goes from a container to its part.`,
     );
+}
+
+/** Whether an element can be the end of a channel: an agent, or a group of such. */
+function talks(diagram: TamDiagram, node: TamNode): boolean {
+  if (node.kind === "agent" || node.kind === "human") return true;
+  // A group of agents, also with the storages they keep (an FMC object: its methods and its data).
+  if (node.kind !== "group" || node.passive) return false;
+  return node.children
+    .map((child) => diagram.nodes.get(child)!)
+    .filter((child) => child.kind !== "dots")
+    .every((child) => isStorage(child) || talks(diagram, child));
 }
 
 function isAncestor(diagram: TamDiagram, ancestor: string, id: string): boolean {
@@ -785,11 +825,30 @@ function validateNesting(diagram: TamDiagram) {
         );
     }
     if (node.kind === "subsystem") {
-      const wrong = children.find((child) => child.kind === "agent" || child.kind === "human");
+      const agent = children.find((child) => child.kind === "agent" || child.kind === "human");
+      if (agent)
+        throw new TamError(
+          agent.line,
+          `Subsystem \`${node.id}\` cannot contain the agent \`${agent.id}\`; agents may contain subsystems, not the other way round.`,
+        );
+      const wrong = children.find(
+        (child) =>
+          !["subsystem", "component", "class", "storage"].includes(child.kind) &&
+          !(child.kind === "group" && child.passive),
+      );
       if (wrong)
         throw new TamError(
           wrong.line,
-          `Subsystem \`${node.id}\` cannot contain the agent \`${wrong.id}\`; agents may contain subsystems, not the other way round.`,
+          `Subsystem \`${node.id}\` can contain subsystems, components, classes and storages, not the ${wrong.kind} \`${wrong.id}\`.`,
+        );
+    }
+    // Packages structure a package diagram: they stand at the top or in packages (and frames around them).
+    if (node.kind !== "package" && node.kind !== "group") {
+      const pkg = children.find((child) => child.kind === "package");
+      if (pkg)
+        throw new TamError(
+          pkg.line,
+          `${node.kind[0].toUpperCase()}${node.kind.slice(1)} \`${node.id}\` cannot contain the package \`${pkg.id}\`; packages stand on their own or in packages.`,
         );
     }
   }

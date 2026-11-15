@@ -86,8 +86,8 @@ describe("editing a TAM source as text", () => {
     expect(connectionOf(SHOP, "e3")).toMatchObject({ from: "api", to: "db", word: "reads/writes" });
     const source = setConnection(SHOP, "e3", { word: "reads", label: "peek" });
     expect(source).toContain("api -- reads/writes --> cart\napi -- reads: peek --> db\n");
-    const reversed = setConnection(SHOP, "e1", { reverse: true, word: "sends data", both: true });
-    expect(reversed).toContain("api <-- sends data: HTTPS @TLS --> customer");
+    const reversed = setConnection(SHOP, "e1", { reverse: true, word: "calls", both: true });
+    expect(reversed).toContain("api <-- calls: HTTPS @TLS --> customer");
     // A dependency carries only its keyword, an access no protocol.
     expect(setConnection(SHOP, "e1", { word: "dependency", label: "use" })).toContain(
       "customer -. use .-> api",

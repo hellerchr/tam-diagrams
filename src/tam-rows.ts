@@ -24,7 +24,17 @@ export function expandMultiples(diagram: TamDiagram, ids: string[]) {
     const siblings = node.parent ? diagram.nodes.get(node.parent)!.children : diagram.roots;
     siblings.splice(siblings.indexOf(id), 1, row.id);
     diagram.nodes.set(row.id, row);
-    const second: TamNode = { ...node, id: `${id}#2`, children: [], origin: id, parent: row.id };
+    // The copy stands where the source places it (the second position), or beside its original.
+    const { copyAt, ...original } = node;
+    const second: TamNode = {
+      ...original,
+      id: `${id}#2`,
+      children: [],
+      origin: id,
+      parent: row.id,
+      at: copyAt,
+    };
+    if (!copyAt) delete second.at;
     const dots: TamNode = {
       id: `${id}#dots`,
       kind: "dots",
