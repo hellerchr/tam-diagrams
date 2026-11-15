@@ -180,3 +180,24 @@ describe("copying and pasting elements", () => {
     expect(() => paste(SHOP, "what is this")).toThrow();
   });
 });
+
+describe("boxes and ends", () => {
+  it("puts elements in a new element where they stood", async () => {
+    const { wrap } = await import("../src/tam-edit.ts");
+    const { source, id } = wrap(SHOP, ["api", "cart"], { kind: "agent", label: "Core" });
+    expect(id).toBe("core");
+    expect(source).toContain(
+      'agent shop[Web Shop]:::blue stack {\n  agent core[Core] {\n    agent api[Order API]   %% entry\n    storage cart "Cart"\n  }\n}',
+    );
+    expect(parseTam(source).nodes.get("api")!.parent).toBe("core");
+    // A storage holds no agent: the result says so when parsed.
+    expect(() => parseTam(wrap(SHOP, ["api"], { kind: "storage", label: "S" }).source)).toThrow();
+  });
+
+  it("moves an end of a connection to another element", () => {
+    expect(setConnection(SHOP, "e1", { to: "shop" })).toContain(
+      "customer -- calls: HTTPS @TLS --> shop",
+    );
+    expect(() => parseTam(setConnection(SHOP, "e1", { to: "customer" }))).toThrow();
+  });
+});

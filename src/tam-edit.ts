@@ -397,6 +397,9 @@ export interface ConnectionChange {
   label?: string;
   protocol?: string;
   reverse?: boolean;
+  /** Another element at an end. */
+  from?: string;
+  to?: string;
 }
 
 /** Changes one connection; a statement that holds several is written out as one line each. */
@@ -557,6 +560,29 @@ export function moveInto(source: string, ids: Iterable<string>, parent: string |
   } else at = afterElements(lines);
   lines.splice(at, 0, ...blocks.flat().map((line) => (line.trim() ? indent + line : line)));
   return tidy(lines).join("\n");
+}
+
+/**
+ * Puts elements into a new element that holds them, where the first of them stood. Without a
+ * position the new element fits its parts. Returns the id it got.
+ */
+export function wrap(
+  source: string,
+  ids: Iterable<string>,
+  box: { kind: ElementKind; label?: string },
+): { source: string; id: string } {
+  const diagram = parseTam(source),
+    nodes = outermost(diagram, ids);
+  if (!nodes.length) return { source, id: "" };
+  const added = addElement(source, { ...box, parent: holder(diagram, nodes[0].id) });
+  return {
+    source: moveInto(
+      added.source,
+      nodes.map((node) => node.id),
+      added.id,
+    ),
+    id: added.id,
+  };
 }
 
 /** Copies elements with what they hold, moved by `offset`, and returns the ids the copies got. */

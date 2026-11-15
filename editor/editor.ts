@@ -31,6 +31,7 @@ import {
   setElement,
   setHeader,
   unplace,
+  wrap,
 } from "../src/tam-edit.ts";
 import { declaredElements } from "../src/tam-pin.ts";
 import type { Doc, Picture } from "./document.ts";
@@ -118,7 +119,9 @@ type Gesture =
       result?: string;
     }
   | { type: "frame"; start: Point; current: Point; kept: Part[] }
-  | { type: "connect"; from: string; current: Point; target?: string };
+  | { type: "connect"; from: string; current: Point; target?: string }
+  /** An end of a connection dragged to another element. */
+  | { type: "attach"; id: string; end: "from" | "to"; current: Point; target?: string };
 
 /** The size a new element of a kind is shown at before it is placed; its name sizes it after. */
 const sizeOf = (kind: ElementKind) =>
@@ -464,6 +467,60 @@ export class Editor {
     if (done) this.select(made.map((id) => ({ type: "element", id })));
   }
 
+  /** Whether the selected elements may stand together in a new element of a kind. */
+  allowsWrap(kind: ElementKind) {
+    const ids = this.selectedElements;
+    return (
+      ids.length > 0 && this.allows((source) => wrap(source, ids, { kind, label: "x" }).source)
+    );
+  }
+
+  /** Puts the selected elements in a new element that holds them, and opens its name. */
+  wrapSelection(kind: ElementKind) {
+    const ids = this.selectedElements;
+    if (!ids.length) return;
+    let made = "";
+    const done = this.edit((source) => {
+      const result = wrap(source, ids, { kind, label: NAMES[kind] || undefined });
+      made = result.id;
+      return result.source;
+    });
+    if (!done) return;
+    this.select([{ type: "element", id: made }]);
+    if (kind !== "group") void this.whenShown().then(() => this.rename(made));
+  }
+
+  /** The element that holds all selected elements, when one does. */
+  get selectionHolder(): string | null {
+    const { picture } = this,
+      ids = this.selectedElements;
+    if (!picture || !ids.length) return null;
+    const holders = new Set(ids.map((id) => holder(picture.diagram, id)));
+    return holders.size === 1 ? [...holders][0] : null;
+  }
+
+  /** Takes the selected elements out of the element that holds them, into the one around it. */
+  takeOut() {
+    const { picture } = this,
+      inside = this.selectionHolder;
+    if (!picture || !inside) return;
+    this.moveElements(this.selectedElements, holder(picture.diagram, inside));
+  }
+
+  /** Resolves when the picture of the committed source is on show. */
+  private async whenShown() {
+    for (let tries = 0; tries < 200 && this.picture?.source !== this.doc.source; tries++)
+      await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+
+  /** What was copied last here, for a paste the browser's clipboard does not serve. */
+  get copiedText() {
+    return this.copied?.text;
+  }
+
+  /** What a right click asks for; the panels show the menu. */
+  onMenu: (at: { x: number; y: number }, point: Point) => void = () => {};
+
   selectAll() {
     const { picture } = this;
     if (!picture) return;
@@ -643,7 +700,16 @@ export class Editor {
       point = view.toScene(screen);
     this.pointer = point;
     view.canvas.setPointerCapture(event.pointerId);
-    if (event.button === 1 || event.button === 2 || this.space || this.tool === "pan") {
+    if (event.button === 2) {
+      // A right click selects what it is on, unless that is selected already, and asks for the menu.
+      const part = this.picture && partAt(this.picture, point, 6 / view.zoom);
+      if (!part) this.select([]);
+      else if (!this.isSelected(part)) this.select([part]);
+      view.canvas.releasePointerCapture(event.pointerId);
+      this.onMenu({ x: event.clientX, y: event.clientY }, point);
+      return;
+    }
+    if (event.button === 1 || this.space || this.tool === "pan") {
       this.gesture = { type: "pan", last: screen };
       this.cursor();
       return;
@@ -663,6 +729,11 @@ export class Editor {
     const handle = this.handleAt(screen);
     if (handle && picture) {
       this.startResize(handle.id, handle.handle, point);
+      return;
+    }
+    const end = this.endAt(screen);
+    if (end) {
+      this.gesture = { type: "attach", ...end, current: point };
       return;
     }
     const link = this.linkAt(screen);
@@ -742,6 +813,17 @@ export class Editor {
         }
         view.invalidate();
         return;
+      case "attach": {
+        gesture.current = point;
+        // Only an element the connection may end at takes it.
+        const part = this.picture && partAt(this.picture, point, 0);
+        gesture.target =
+          part?.type === "element" && this.allowsWire(gesture.id, { [gesture.end]: part.id })
+            ? part.id
+            : undefined;
+        view.invalidate();
+        return;
+      }
       case "connect": {
         gesture.current = point;
         const part = this.picture && partAt(this.picture, point, 0);
@@ -913,6 +995,9 @@ export class Editor {
           this.change(gesture.result);
         else if (gesture.type === "resize" || gesture.base) this.doc.cancel();
         break;
+      case "attach":
+        if (gesture.target) this.setWire(gesture.id, { [gesture.end]: gesture.target });
+        break;
       case "connect":
         if (gesture.target) this.connect(gesture.from, gesture.target);
         else this.connectNew(gesture.from, gesture.current);
@@ -1008,6 +1093,7 @@ export class Editor {
       if (key === "y") return (done(), this.doc.redo());
       if (key === "d") return (done(), this.duplicateSelection());
       if (key === "a") return (done(), this.selectAll());
+      if (key === "g") return (done(), this.wrapSelection(event.shiftKey ? "group" : "agent"));
       if (key === "0") return (done(), this.view.zoomTo(1));
       if (key === "=" || key === "+") return (done(), this.view.zoomBy(1.25));
       if (key === "-") return (done(), this.view.zoomBy(0.8));
@@ -1104,6 +1190,37 @@ export class Editor {
     return found && { id: single.id, handle: found.handle };
   }
 
+  /**
+   * The ends of the one selected connection, where it meets its elements: handles to drag to
+   * another element. None for an interface's line.
+   */
+  private get wireEnds(): { id: string; end: "from" | "to"; at: Point }[] {
+    const { picture } = this,
+      [only] = this.selection;
+    if (!picture || this.selection.length !== 1 || only.type !== "wire" || this.tool !== "select")
+      return [];
+    const connection = this.connection(only.id);
+    if (!connection) return [];
+    const points = wireParts(picture.scene, picture.diagram, only.id).lines.flat();
+    return (["from", "to"] as const).flatMap((end) => {
+      const box = boxOf(picture, connection[end]);
+      if (!box || !points.length) return [];
+      // The point of the wire nearest to the element.
+      const away = (point: Point) =>
+        Math.max(box.x - point.x, point.x - box.x - box.width, 0) +
+        Math.max(box.y - point.y, point.y - box.y - box.height, 0);
+      const at = points.reduce((best, point) => (away(point) < away(best) ? point : best));
+      return [{ id: only.id, end, at }];
+    });
+  }
+
+  private endAt(screen: Point) {
+    return this.wireEnds.find(({ at }) => {
+      const on = this.view.toScreen(at);
+      return Math.hypot(on.x - screen.x, on.y - screen.y) <= HANDLE;
+    });
+  }
+
   /** The elements that show connection dots: the selected one and the one under the pointer. */
   private get linkHosts(): { id: string; box: Box }[] {
     const { picture, single } = this;
@@ -1130,7 +1247,7 @@ export class Editor {
     else if (screen) {
       const handle = this.handleAt(screen);
       if (handle) cursor = handle.handle.cursor;
-      else if (this.linkAt(screen)) cursor = "crosshair";
+      else if (this.endAt(screen) || this.linkAt(screen)) cursor = "crosshair";
       else if (this.hover?.type === "element") cursor = "move";
       else if (this.hover) cursor = "pointer";
     }
@@ -1236,6 +1353,39 @@ export class Editor {
       context.globalAlpha = 1;
       context.lineWidth = 1;
       context.strokeRect(on.x, on.y, on.width, on.height);
+    }
+    if (!gesture || gesture.type === "attach") {
+      // The ends of the selected connection: drag one to another element.
+      for (const { at, end } of this.wireEnds) {
+        if (gesture?.type === "attach" && gesture.end === end) continue;
+        const on = view.toScreen(at);
+        context.beginPath();
+        context.arc(on.x, on.y, 5, 0, 2 * Math.PI);
+        context.fillStyle = "#ffffff";
+        context.fill();
+        context.lineWidth = 2;
+        context.strokeStyle = accent;
+        context.stroke();
+      }
+    }
+    if (gesture?.type === "attach") {
+      const fixed = this.wireEnds.find((item) => item.end !== gesture.end),
+        end = view.toScreen(gesture.current);
+      context.strokeStyle = accent;
+      if (gesture.target) {
+        context.lineWidth = 2;
+        boxesOf(picture, gesture.target).forEach((box) => outlineBox(box, 3));
+      }
+      if (fixed) {
+        const start = view.toScreen(fixed.at);
+        context.lineWidth = 1.5;
+        context.setLineDash([5, 4]);
+        context.beginPath();
+        context.moveTo(start.x, start.y);
+        context.lineTo(end.x, end.y);
+        context.stroke();
+        context.setLineDash([]);
+      }
     }
     if (gesture?.type === "connect") {
       const from = boxOf(picture, gesture.from);

@@ -23,6 +23,7 @@ export {
   setElement,
   setHeader,
   unplace,
+  wrap,
 } from "./tam-edit.ts";
 export { declaredElements, elementBoxes, pin } from "./tam-pin.ts";
 export { layoutDiagram, layoutPlaced } from "./tam-layout.ts";

@@ -100,7 +100,7 @@ const SHAPES: { title: string; items: ToolItem[] }[] = [
 
 const HINTS: Record<string, string> = {
   select:
-    "Drag to move · drag the dots to connect · double-click to name · Ctrl-drop onto an element to put it inside",
+    "Drag to move · drag the dots to connect · drag a connection's end to another element · right-click for more",
   pan: "Drag to move the view · Ctrl + wheel zooms",
   connect: "Drag from one element to another",
 };
@@ -269,6 +269,7 @@ export class Panels {
     stage.append(this.empty, this.toasts);
     root.append(bar, tools, stage, side, h("footer", { class: "status" }, this.status));
     editor.notify = (message) => this.toast(message);
+    editor.onMenu = (at, point) => this.menu(at, point);
     editor.editText = (box, text, options, done) => this.editText(box, text, options, done);
     editor.view.onView = () => this.showZoom();
     this.showZoom();
@@ -495,6 +496,120 @@ export class Panels {
 
   private showZoom() {
     this.zoom.textContent = `${Math.round(this.editor.view.zoom * 100)}%`;
+  }
+
+  /** The menu of a right click: what can be done with the selection, or at the point on the empty canvas. */
+  private menu(at: { x: number; y: number }, point: { x: number; y: number }) {
+    const { editor } = this,
+      elements = editor.selectedElements,
+      wires = editor.selectedWires;
+    document.querySelector(".menu")?.remove();
+    const menu = h("div", { class: "menu", role: "menu" });
+    const close = () => {
+      menu.remove();
+      window.removeEventListener("pointerdown", outside, true);
+      window.removeEventListener("keydown", escape, true);
+    };
+    const outside = (event: Event) => {
+      if (!menu.contains(event.target as Node)) close();
+    };
+    const escape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") close();
+    };
+    const item = (
+      name: string,
+      run: () => void,
+      options: { key?: string; danger?: boolean } = {},
+    ) =>
+      h(
+        "button",
+        {
+          class: options.danger ? "danger" : "",
+          type: "button",
+          role: "menuitem",
+          onClick: () => {
+            close();
+            run();
+          },
+        },
+        h("span", {}, name),
+        options.key && h("kbd", {}, options.key),
+      );
+    const line = () => h("hr");
+    const clip = (cut: boolean) => {
+      const text = editor.copy();
+      if (text === undefined) return;
+      void navigator.clipboard?.writeText(text).catch(() => {});
+      if (cut) editor.deleteSelection();
+    };
+    const paste = () =>
+      void (navigator.clipboard?.readText() ?? Promise.reject(new Error("No clipboard.")))
+        .catch(() => editor.copiedText ?? "")
+        .then((text) => text && editor.paste(text));
+    const rows: (HTMLElement | false)[] = [];
+    if (elements.length) {
+      // Only the boxes that may hold what is selected are offered.
+      const boxes = (
+        [
+          ["agent", "Put in an agent", "Ctrl+G"],
+          ["storage", "Put in a storage", ""],
+          ["component", "Put in a component", ""],
+          ["subsystem", "Put in a subsystem", ""],
+          ["package", "Put in a package", ""],
+          ["group", "Put in a group", "Ctrl+Shift+G"],
+        ] as [ElementKind, string, string][]
+      ).filter(([kind]) => editor.allowsWrap(kind));
+      rows.push(
+        ...boxes.map(([kind, name, key]) => item(name, () => editor.wrapSelection(kind), { key })),
+        !!editor.selectionHolder && item("Take out of its box", () => editor.takeOut()),
+        (boxes.length > 0 || !!editor.selectionHolder) && line(),
+        elements.length === 1 && item("Rename", () => editor.rename(elements[0]), { key: "Enter" }),
+        item("Duplicate", () => editor.duplicateSelection(), { key: "Ctrl+D" }),
+        item("Copy", () => clip(false), { key: "Ctrl+C" }),
+        item("Cut", () => clip(true), { key: "Ctrl+X" }),
+        line(),
+        item("Delete", () => editor.deleteSelection(), { key: "Del", danger: true }),
+      );
+    } else if (wires.length) {
+      const [id] = wires,
+        connection = wires.length === 1 ? editor.connection(id) : undefined;
+      // The other kinds this connection may be, between the elements it joins.
+      const kinds = connection
+        ? WIRES.filter(
+            (kind) =>
+              kind.value !== wireValue(connection) && editor.allowsWire(id, wireChange(kind)),
+          )
+        : [];
+      rows.push(
+        ...kinds.map((kind) =>
+          item(`Change to: ${kind.name}`, () => editor.setWire(id, wireChange(kind))),
+        ),
+        kinds.length > 0 && line(),
+        wires.length === 1 &&
+          editor.allowsWire(id, { reverse: true }) &&
+          item("Reverse", () => editor.setWire(id, { reverse: true })),
+        item("Delete", () => editor.deleteSelection(), { key: "Del", danger: true }),
+      );
+    } else {
+      const kinds = (["agent", "human", "storage"] as ElementKind[]).filter((kind) =>
+        editor.allowsKind(kind),
+      );
+      rows.push(
+        ...kinds.map((kind) => item(`Add ${kind} here`, () => editor.create(kind, point))),
+        kinds.length > 0 && line(),
+        item("Paste", paste, { key: "Ctrl+V" }),
+        item("Select all", () => editor.selectAll(), { key: "Ctrl+A" }),
+        item("Fit the diagram", () => editor.fit(), { key: "1" }),
+      );
+    }
+    menu.append(...rows.filter((row) => row !== false));
+    document.body.append(menu);
+    // Inside the window, whichever corner the click was near.
+    const { width, height } = menu.getBoundingClientRect();
+    menu.style.left = `${Math.max(4, Math.min(at.x, window.innerWidth - width - 4))}px`;
+    menu.style.top = `${Math.max(4, Math.min(at.y, window.innerHeight - height - 4))}px`;
+    window.addEventListener("pointerdown", outside, true);
+    window.addEventListener("keydown", escape, true);
   }
 
   /** Says something for a few seconds. */
