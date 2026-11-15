@@ -509,8 +509,8 @@ export async function layoutSequenceDiagram(
       });
       return;
     }
-    // Above the message, over the widest stretch clear of the activation bars it passes; plain
-    // lifelines may run behind the label's halo.
+    // Above the message, over the stretch nearest its sender that is clear of the activation bars
+    // it passes, so that it reads as the sender's; plain lifelines may run behind the label's halo.
     const left = Math.min(start.x, end.x),
       right = Math.max(start.x, end.x),
       labelTop = start.y - 10 - size.height;
@@ -542,7 +542,11 @@ export async function layoutSequenceDiagram(
       )
       .filter(([a, b]) => b.x - a.x >= size.width + 8);
     const segments = spans.length
-      ? spans.toSorted((p, q) => q[1].x - q[0].x - (p[1].x - p[0].x))
+      ? spans.toSorted(
+          (p, q) =>
+            Math.min(Math.abs(p[0].x - start.x), Math.abs(p[1].x - start.x)) -
+            Math.min(Math.abs(q[0].x - start.x), Math.abs(q[1].x - start.x)),
+        )
       : [
           [
             { x: left, y: start.y },
