@@ -48,7 +48,20 @@ export interface TamNode {
   passive?: boolean;
   /** Copies made for `...` multiplicity share this id. */
   origin?: string;
+  /** Where the source places the element (`@x,y` and a size `WxH`); without it, layout does. */
+  at?: Placement;
   line: number;
+}
+
+/**
+ * An element placed by hand: its top left corner in diagram coordinates and, when the source gives
+ * one, its size. A size is a least size: an element never gets smaller than its name and its parts.
+ */
+export interface Placement {
+  x: number;
+  y: number;
+  width?: number;
+  height?: number;
 }
 
 export interface TamEdge {
@@ -87,7 +100,8 @@ export class TamError extends Error {
   }
 }
 
-const ELEMENT_KINDS = [
+/** The kinds a declaration starts with. */
+export const ELEMENT_KINDS = [
   "agent",
   "human",
   "storage",
@@ -100,16 +114,39 @@ const ELEMENT_KINDS = [
 
 const ACTIVE = new Set<NodeKind>(["agent", "human", "component", "subsystem", "class"]);
 
-const COLORS = new Set(["blue", "orange", "green", "yellow", "pink", "purple", "red", "gray"]);
+/** The colors an element takes with `:::name`. */
+export const COLORS = new Set([
+  "blue",
+  "orange",
+  "green",
+  "yellow",
+  "pink",
+  "purple",
+  "red",
+  "gray",
+]);
 
 const ID = "[A-Za-z_]\\w*";
 
-// Declarations: `agent web[Web Server]:::blue stack {`; a quoted label also works.
-const ELEMENT = new RegExp(
-  `^(${ELEMENT_KINDS.join("|")})(?:\\s+(${ID}))?\\s*(?:\\[([^\\]]*)\\]|"([^"]*)")?((?::::\\w+|\\s+(?:stack|\\.\\.\\.))*)\\s*(\\{\\s*\\}|\\{)?$`,
+const NUMBER = "\\d+(?:\\.\\d+)?";
+
+/** A placement among an element's modifiers: `@120,40`, or `@120,40 200x80` with a size. */
+export const PLACEMENT = `@\\s*(-?${NUMBER})\\s*,\\s*(-?${NUMBER})(?:\\s+(${NUMBER})x(${NUMBER}))?`;
+
+/**
+ * Declarations: `agent web[Web Server]:::blue stack @120,40 {`; a quoted label also works. The
+ * groups are the kind, the id, the label in brackets or in quotes, the modifiers and the brace.
+ */
+export const ELEMENT = new RegExp(
+  `^(${ELEMENT_KINDS.join("|")})(?:\\s+(${ID}))?\\s*(?:\\[([^\\]]*)\\]|"([^"]*)")?((?::::\\w+|\\s+(?:stack|\\.\\.\\.)|\\s*${PLACEMENT.replace(/\((?!\?)/g, "(?:")})*)\\s*(\\{\\s*\\}|\\{)?$`,
 );
 
-const INTERFACE = new RegExp(`^(${ID})\\s+(provides|requires)\\s+(.+)$`);
+/** Placements reach this far from the origin, and sizes this far across: a picture stays drawable. */
+const MAX_COORDINATE = 100_000,
+  MAX_SIZE = 10_000;
+
+/** `gateway provides IRefund`: the element, what it does with the interface, and the interface's name. */
+export const INTERFACE = new RegExp(`^(${ID})\\s+(provides|requires)\\s+(.+)$`);
 
 /**
  * Connections are Mermaid flowchart edges with one word on them, from the element that acts to the one
@@ -160,11 +197,12 @@ const MAX_TAM_CHARS = 20_000;
 const MAX_ELEMENTS = 300;
 
 /** Active elements can act: agents, humans, components, subsystems, classes and groups of them. */
-function isActive(node: TamNode): boolean {
+export function isActive(node: TamNode): boolean {
   return ACTIVE.has(node.kind) || (node.kind === "group" && !node.passive);
 }
 
-const isStorage = (node: TamNode) =>
+/** Storages keep information: storages and groups of them. */
+export const isStorage = (node: TamNode) =>
   node.kind === "storage" || (node.kind === "group" && !!node.passive);
 
 const isDesign = (node: TamNode) =>
@@ -260,7 +298,16 @@ export function parseTam(source: string): TamDiagram {
           line,
           `\`${kind}\` needs an id, for example \`${kind} web "Web Server"\`.`,
         );
-      const options = modifiers.replace(/:::/g, " :::").trim().split(/\s+/).filter(Boolean);
+      const placements = [...modifiers.matchAll(new RegExp(PLACEMENT, "g"))];
+      if (placements.length > 1)
+        throw new TamError(line, `\`${id ?? kind}\` is placed twice; keep one \`@x,y\`.`);
+      const at = placements[0] && placement(placements[0], line);
+      const options = modifiers
+        .replace(new RegExp(PLACEMENT, "g"), " ")
+        .replace(/:::/g, " :::")
+        .trim()
+        .split(/\s+/)
+        .filter(Boolean);
       const color = options.find((option) => option.startsWith(":::"))?.slice(3);
       if (color && !COLORS.has(color))
         throw new TamError(line, `Unknown color \`${color}\`; use ${[...COLORS].join(", ")}.`);
@@ -272,6 +319,7 @@ export function parseTam(source: string): TamDiagram {
         children: [],
         stack: options.includes("stack"),
         color,
+        ...(at ? { at } : {}),
         line,
       };
       if (options.includes("...")) multiples.push(node.id);
@@ -514,11 +562,32 @@ export function parseTam(source: string): TamDiagram {
   return diagram;
 }
 
+/** The placement a declaration carries, within the limits of a drawable picture. */
+function placement(match: RegExpMatchArray, line: number): Placement {
+  const [x, y, width, height] = match.slice(1).map((value) => (value ? Number(value) : undefined));
+  if (Math.abs(x!) > MAX_COORDINATE || Math.abs(y!) > MAX_COORDINATE)
+    throw new TamError(
+      line,
+      `\`${match[0]}\` is too far out; positions reach ${MAX_COORDINATE} from the origin.`,
+    );
+  if (width === undefined) return { x: x!, y: y! };
+  if (!width || !height || width > MAX_SIZE || height > MAX_SIZE)
+    throw new TamError(
+      line,
+      `\`${match[0]}\` has no drawable size; sizes run from 1 to ${MAX_SIZE} each way.`,
+    );
+  return { x: x!, y: y!, width, height };
+}
+
+/** Whether the source places elements by hand: one placement is enough, layout places the rest around it. */
+export const isPlaced = (diagram: TamDiagram) =>
+  [...diagram.nodes.values()].some((node) => node.at);
+
 /**
  * Mermaid-style connections: `a -- calls: label @Protocol --> b`, chains such as `a --- b --- c`, and
  * `a & b -- reads --> s` for several ends. Word, label and protocol apply to every connection in the statement.
  */
-type Word =
+export type Word =
   | "reads"
   | "writes"
   | "reads/writes"
@@ -530,7 +599,7 @@ type Word =
   | "dependency";
 
 /** `both` marks `<--`: data or requests in both directions. */
-type Connection = {
+export type Connection = {
   from: string;
   to: string;
   word: Word;
@@ -543,7 +612,7 @@ type Connection = {
  * The connections of one statement: one or more edges between ids (`a & b` for several ends), each
  * with its word, label and protocol. Null when the statement is no connection.
  */
-function readConnections(statement: string, line: number): Connection[] | null {
+export function readConnections(statement: string, line: number): Connection[] | null {
   const pieces: string[] = [],
     links: RegExpExecArray[] = [];
   let last = 0,

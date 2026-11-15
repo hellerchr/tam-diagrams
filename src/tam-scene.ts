@@ -128,6 +128,8 @@ const reverse = (points: Point[]) => points.toReversed();
 export function tamScene(prepared: TamGraph, geometry: TamGeometry, measure: Measure): Scene {
   const { chain, diagram, markerSize, shapes, vertical } = prepared;
   const { boxes, edgeLabels, leaves, markers, nodeLabels, round, routes } = geometry;
+  /** Whether the wire at a channel or connector runs up or down: its label then stands beside it. */
+  const uprightAt = (id: string) => geometry.upright?.get(id) ?? vertical;
   const scene: Scene = { ...emptyScene(), orthogonal: true };
   /** Channel circles and interface balls are small shapes named after their marker node. */
   const circle = (center: Point, radius: number, owner: string) =>
@@ -267,6 +269,11 @@ export function tamScene(prepared: TamGraph, geometry: TamGeometry, measure: Mea
   // Three dots between the siblings declared before and after them, along the line that joins them.
   for (const dots_ of diagram.nodes.values()) {
     if (dots_.kind !== "dots") continue;
+    const set = geometry.dots?.get(dots_.id);
+    if (set) {
+      dots(dots_.id, set.center, set.across);
+      continue;
+    }
     const siblings = dots_.parent ? diagram.nodes.get(dots_.parent)!.children : diagram.roots,
       index = siblings.indexOf(dots_.id);
     const before = siblings.slice(0, index).findLast((id) => boxes.has(id)),
@@ -410,7 +417,8 @@ export function tamScene(prepared: TamGraph, geometry: TamGeometry, measure: Mea
   for (const edge of diagram.edges) {
     if (edge.kind === "channel" || edge.kind === "assembly") {
       const node = `${edge.id}#node`,
-        middle = centerOf(boxes.get(node)!);
+        middle = centerOf(boxes.get(node)!),
+        upright = uprightAt(node);
       const a = routes.get(`${edge.id}:a`),
         b = routes.get(`${edge.id}:b`);
       if (!a || !b) continue;
@@ -464,17 +472,19 @@ export function tamScene(prepared: TamGraph, geometry: TamGeometry, measure: Mea
       const axial = (d: Point) =>
         Math.abs(d.x) >= Math.abs(d.y) ? { x: Math.sign(d.x), y: 0 } : { x: 0, y: Math.sign(d.y) };
       const way = directions.length === 1 ? axial(directions[0]) : undefined;
-      const glyph = directions.length ? markerSize(directions.length) : { width: 0, height: 0 };
+      const glyph = directions.length
+        ? markerSize(directions.length, upright)
+        : { width: 0, height: 0 };
       const textHeight = edge.label ? breaks(edge.label).length * SMALL_LINE : 0;
       const labels = nodeLabels.get(node) ?? [];
       let marker: Box | undefined,
         at: { x: number; y: number; anchor: "start" | "middle" } | undefined;
       if (edge.protocol && (edge.label || directions.length)) {
-        if (vertical && labels[0]) {
+        if (upright && labels[0]) {
           // One reserved box right of the circle: its upper half above the line, its lower half below.
           marker = { x: labels[0].x, y: middle.y + ASIDE, ...glyph };
           at = { x: labels[0].x, y: middle.y - ASIDE - textHeight / 2, anchor: "start" };
-        } else if (!vertical) {
+        } else if (!upright) {
           // Boxes above and below the circle; their right halves are beside the vertical line.
           marker = labels[1]
             ? {
@@ -487,7 +497,7 @@ export function tamScene(prepared: TamGraph, geometry: TamGeometry, measure: Mea
             ? { x: middle.x + ASIDE, y: labels[0].y + labels[0].height / 2, anchor: "start" }
             : undefined;
         }
-      } else if (vertical && labels[0]) {
+      } else if (upright && labels[0]) {
         // One reserved box right of the circle: the marker, then the label.
         marker = { x: labels[0].x, y: middle.y - glyph.height / 2, ...glyph };
         at = {
@@ -495,7 +505,7 @@ export function tamScene(prepared: TamGraph, geometry: TamGeometry, measure: Mea
           y: middle.y,
           anchor: "start",
         };
-      } else if (!vertical) {
+      } else if (!upright) {
         // The label above the circle, the marker below it.
         const label = edge.label ? labels[0] : undefined,
           below = directions.length ? labels[edge.label ? 1 : 0] : undefined;
@@ -623,7 +633,7 @@ export function tamScene(prepared: TamGraph, geometry: TamGeometry, measure: Mea
       const box = nodeLabels.get(edge.target)?.[0],
         name = diagram.nodes.get(edge.target)?.label;
       if (box && name) {
-        if (vertical)
+        if (uprightAt(edge.target))
           text(name, box.x, middle.y, {
             size: SMALL,
             anchor: "start",
@@ -682,7 +692,16 @@ export function tamScene(prepared: TamGraph, geometry: TamGeometry, measure: Mea
     );
   }
 
-  protocolBoundaries(diagram, scene, channelCenters, nodeLabels, vertical, measure);
+  // A boundary crosses its channels' wires: placed by hand they run either way, so each way gets its boundaries.
+  for (const upright of geometry.upright ? [true, false] : [vertical])
+    protocolBoundaries(
+      diagram,
+      scene,
+      new Map([...channelCenters].filter(([edge]) => uprightAt(`${edge}#node`) === upright)),
+      nodeLabels,
+      upright,
+      measure,
+    );
 
   // Bounds cover every shape with its stack shadow, wire, socket and text, plus the title above.
   finishBounds(scene, measure, diagram.title, {

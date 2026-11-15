@@ -35,10 +35,13 @@
     "./layout": "./src/layout.ts",
     "./samples/tam-examples": "./src/samples/tam-examples.ts",
     "./samples/uml-examples": "./src/samples/uml-examples.ts",
-    "./samples/fuzz": "./src/samples/fuzz.ts"
+    "./samples/fuzz": "./src/samples/fuzz.ts",
+    "./edit": "./src/edit.ts"
   },
   "scripts": {
     "build": "rolldown -c",
+    "build:editor": "vite build editor",
+    "editor": "vite editor",
     "prepare": "npm run build",
     "test": "vitest run",
     "typecheck": "tsc --noEmit -p ."
@@ -52,6 +55,7 @@
     "mermaid": "^12.2.0",
     "rolldown": "^1.2.19",
     "typescript": "^7.0.2",
+    "vite": "^8.3.8",
     "vitest": "^4.1.12"
   }
 }

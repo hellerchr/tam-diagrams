@@ -5,7 +5,7 @@
  * collisions.
  */
 
-import { parseTam, type TamDiagram } from "./tam.ts";
+import { isPlaced, parseTam, type TamDiagram } from "./tam.ts";
 import { type Measure, textMeasure } from "./text.ts";
 import type { Scene } from "./scene.ts";
 import { bundledElk, type ElkLayout } from "./elk.ts";
@@ -13,6 +13,8 @@ import { collectFallbacks } from "./route.ts";
 import { type LayoutOptions, tamGraph } from "./tam-graph.ts";
 import { tamScene } from "./tam-scene.ts";
 import { tamGeometry } from "./tam-geometry.ts";
+import { placeElements } from "./tam-placed.ts";
+import { placedGeometry } from "./tam-placed-wires.ts";
 import { bestScene, cachedLayout, COFFMAN, STRAIGHT } from "./best.ts";
 import type { ElkNode } from "elkjs/lib/elk-api";
 import { type DiagramColors, drawScene } from "./draw.ts";
@@ -46,6 +48,33 @@ export async function layoutTam(
   scene.fallbacks = fallbacks;
   return scene;
 }
+
+/**
+ * Lays out a diagram whose source places its elements (`@x,y`): they stand where it says, the wires
+ * run between them, and the scene is drawn like any other. There is nothing to search or to wait
+ * for, so an editor can lay a diagram out again on every move.
+ */
+export function layoutPlaced(source: TamDiagram, measure: Measure): Scene {
+  // Placed by hand, a pointer between two storages is a wire like any other: they need not share a row.
+  const diagram = {
+    ...source,
+    edges: source.edges.map((edge) => (edge.aside ? { ...edge, aside: false } : edge)),
+  };
+  const prepared = tamGraph(diagram, measure, {});
+  const fallbacks = new Map<string, number>();
+  collectFallbacks(fallbacks);
+  const geometry = placedGeometry(prepared, placeElements(prepared, measure), measure);
+  const scene = tamScene(prepared, geometry, measure);
+  collectFallbacks(undefined);
+  scene.fallbacks = fallbacks;
+  return scene;
+}
+
+/** Lays a parsed diagram out: as its source places it, or else the best of the layouts by ELK. */
+export const layoutDiagram = (diagram: TamDiagram, measure: Measure, layout?: ElkLayout) =>
+  isPlaced(diagram)
+    ? Promise.resolve(layoutPlaced(diagram, measure))
+    : bestLayout(diagram, measure, layout);
 
 /**
  * Draws a TAM block diagram as standalone SVG in the TAM/FMC notation: rectangular agents, rounded
@@ -115,9 +144,9 @@ export async function renderTam(
 ): Promise<TamPicture> {
   const diagram = parseTam(source);
   const scene = await (options.measure
-    ? bestLayout(diagram, options.measure, options.layout)
+    ? layoutDiagram(diagram, options.measure, options.layout)
     : cachedLayout(`tam\u0000${colors.font}\u0000${source}`, () =>
-        bestLayout(diagram, textMeasure(colors.font), options.layout),
+        layoutDiagram(diagram, textMeasure(colors.font), options.layout),
       ));
   const description = diagram.title || "TAM block diagram";
   const svg = drawScene(scene, colors, description, "tam");

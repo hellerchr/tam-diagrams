@@ -1,7 +1,7 @@
 /** TAM layout, first stage: the diagram's sizes and spacing, its channel and connector nodes, and the ELK graph built from them. */
 
 import { type Box, type Point, STACK } from "./scene.ts";
-import type { TamDiagram, TamNode } from "./tam.ts";
+import type { TamDiagram, TamEdge, TamNode } from "./tam.ts";
 import { edgeOwner, type ElkLayout, layeredOptions } from "./elk.ts";
 import type { ElkExtendedEdge, ElkLabel, ElkNode } from "elkjs/lib/elk-api";
 import { FONT, LINE, type Measure, SMALL, wrap } from "./text.ts";
@@ -17,6 +17,9 @@ export const PAD = 14,
   ICON = 24;
 
 export const BALL = 5;
+
+/** The gap between a channel's circle and the label or request marker beside it. */
+export const MARKER_GAP = 5;
 
 /** A request marker's letter or triangle is about this wide; text beside a boundary line starts ASIDE from it. */
 export const GLYPH = 9,
@@ -68,10 +71,11 @@ export interface LayoutOptions {
 /** A TAM diagram prepared for ELK: the diagram with its channel and connector nodes, and the ELK graph built from it. */
 export interface TamGraph {
   chain: (id: string) => string[];
+  channelLabels: (edge: TamEdge, upright?: boolean) => ElkLabel[];
   diagram: TamDiagram;
   ends: Map<string, [string, string]>;
   graph: ElkNode;
-  markerSize: (count: number) => { width: number; height: number };
+  markerSize: (count: number, upright?: boolean) => { width: number; height: number };
   reversed: Set<string>;
   scale: number;
   shapes: Map<string, Shape>;
@@ -87,6 +91,13 @@ export interface TamGeometry {
   nodeLabels: Map<string, Box[]>;
   round: Map<string, number>;
   routes: Map<string, Point[]>;
+  /**
+   * Layouts placed by hand: whether the wire at a channel or connector runs up or down, by the
+   * mark's id. ELK runs every such wire along the diagram's direction, which says it for all.
+   */
+  upright?: Map<string, boolean>;
+  /** Layouts placed by hand: where each row of three dots stands, and whether it runs across. */
+  dots?: Map<string, { center: Point; across: boolean }>;
 }
 
 /** Prepares a copy of the diagram (with channel and connector nodes) and builds its ELK graph. */
@@ -111,11 +122,10 @@ export function tamGraph(source: TamDiagram, measure: Measure, options: LayoutOp
   };
   /** Space beside a channel or interface: request marker and label sit in one box next to the circle on vertical layouts. */
   // Requests one way: "R" and a triangle along the line; both ways: "R" alone.
-  const markerSize = (count: number) =>
-    vertical
+  const markerSize = (count: number, upright = vertical) =>
+    upright
       ? { width: 9, height: count === 1 ? 22 : 16 }
       : { width: count === 1 ? 19 : 9, height: 13 };
-  const markerGap = 5;
 
   const between = (id: string) => {
     const node = diagram.nodes.get(id)!,
@@ -176,33 +186,20 @@ export function tamGraph(source: TamDiagram, measure: Measure, options: LayoutOp
     const weight = container ? 600 : 400;
     const lines =
       node.label && node.kind !== "interface"
-        ? container
-          ? wrap(node.label, 320, FONT, weight, measure)
-          : wrap(node.label, WRAP, FONT, weight, measure)
+        ? // A name runs as wide as the size the source gives its element.
+          wrap(
+            node.label,
+            Math.max(container ? 320 : WRAP, (node.at?.width ?? 0) - 2 * PAD),
+            FONT,
+            weight,
+            measure,
+          )
         : [];
     const textWidth = Math.max(0, ...lines.map((line) => measure(line, FONT, weight)));
     shapes.set(id, { node, lines, textWidth, container, depth });
     const extra = node.stack ? SHADOW : 0;
     if (container) {
-      const subsystem = node.kind === "subsystem" ? 16 : 0,
-        icon = node.kind === "component" || node.kind === "subsystem" ? 24 : 0;
-      // Below the title there is room for an arrowhead that enters a part from above, clear of the title's glyphs.
-      const titleBottom = TITLE_TOP + subsystem + (lines.length - 0.5) * LINE + 0.62 * FONT;
-      const top = row
-        ? 0
-        : node.kind === "package"
-          ? TAB + 14
-          : lines.length
-            ? Math.ceil(titleBottom + MARKER_LENGTH.arrow + 4)
-            : 12;
-      const side = row ? 0 : node.kind === "group" ? 12 : PAD;
-      const minimum = row
-        ? 0
-        : Math.ceil(
-            node.kind === "package"
-              ? measure(node.label, SMALL, 600) + 24
-              : textWidth + 2 * PAD + icon,
-          ) + extra;
+      const { top, side, minimum } = containerInsets(node, lines, textWidth, measure);
       return {
         id,
         children: children.map((child) => build(child, row ? depth : depth + 1)),
@@ -242,49 +239,24 @@ export function tamGraph(source: TamDiagram, measure: Measure, options: LayoutOp
       };
     };
     if (node.kind === "dots") return { id, width: 22, height: 12 };
-    const text = lines.length * LINE;
-    switch (node.kind) {
-      case "human":
-        return lines.length
-          ? size(Math.max(76, textWidth + 2 * PAD), 38 + text + 10)
-          : size(48, 46);
-      // Storages are pills: the round ends take half the height on each side.
-      case "storage": {
-        const height = Math.max(36, text + 18);
-        return lines.length ? size(Math.max(96, textWidth + height + 8), height) : size(36, 36);
-      }
-      case "component":
-        return size(Math.max(104, textWidth + 2 * PAD + ICON), Math.max(42, text + 22));
-      case "subsystem":
-        return size(
-          Math.max(
-            112,
-            textWidth + 2 * PAD + ICON,
-            measure("«subsystem»", SMALL, 400) + 2 * PAD + ICON,
-          ),
-          text + 40,
-        );
-      case "package":
-        return size(Math.max(96, textWidth + 2 * PAD), Math.max(40, text + 20) + TAB - 4);
-      case "interface":
-        return {
-          id,
-          width: CHANNEL,
-          height: CHANNEL,
-          labels: node.label ? [sideLabel(node.label)] : [],
-          layoutOptions: { "elk.spacing.labelNode": String(markerGap) },
-        };
-      default:
-        return size(Math.max(96, textWidth + 2 * PAD), Math.max(40, text + 20));
-    }
+    if (node.kind === "interface")
+      return {
+        id,
+        width: CHANNEL,
+        height: CHANNEL,
+        labels: node.label ? [sideLabel(node.label)] : [],
+        layoutOptions: { "elk.spacing.labelNode": String(MARKER_GAP) },
+      };
+    const { width, height } = leafSize(node, lines, textWidth, measure);
+    return size(width, height);
   };
-  const sideLabel = (text: string, marker = 0, split = false): ElkLabel => {
-    const size = markerSize(marker);
+  const sideLabel = (text: string, marker = 0, split = false, upright = vertical): ElkLabel => {
+    const size = markerSize(marker, upright);
     // On a protocol boundary the label sits above the line and the marker below it, so ELK keeps room for both.
     if (split) {
       const labelHeight = text ? smallSize(text, measure).height : 0,
         labelWidth = text ? smallSize(text, measure).width : 0;
-      return vertical
+      return upright
         ? {
             text: text || "R",
             width: Math.max(labelWidth, size.width) + 2,
@@ -298,7 +270,7 @@ export function tamGraph(source: TamDiagram, measure: Measure, options: LayoutOp
             layoutOptions: { "elk.nodeLabels.placement": "OUTSIDE V_TOP H_CENTER" },
           };
     }
-    if (vertical) {
+    if (upright) {
       const width =
         (marker ? size.width + (text ? 8 : 0) : 0) + (text ? smallSize(text, measure).width : 0);
       // ELK skips labels without text, so a marker-only label carries the marker's letter.
@@ -319,6 +291,29 @@ export function tamGraph(source: TamDiagram, measure: Measure, options: LayoutOp
       height: Math.max(LINE - 2, smallSize(text, measure).height),
       layoutOptions: { "elk.nodeLabels.placement": "OUTSIDE V_TOP H_CENTER" },
     };
+  };
+  /**
+   * The room a channel or connector keeps beside its circle for its label and request marker, as
+   * ELK labels: right of the circle on a wire that runs up or down (`upright`), above and below it else.
+   */
+  const channelLabels = (edge: TamEdge, upright = vertical): ElkLabel[] => {
+    const marker = edge.request ? +edge.request.toSource + +edge.request.toTarget : 0;
+    const below = (size: { width: number; height: number }): ElkLabel => ({
+      text: "R",
+      ...size,
+      layoutOptions: { "elk.nodeLabels.placement": "OUTSIDE V_BOTTOM H_CENTER" },
+    });
+    if (edge.protocol && (edge.label || marker))
+      return [
+        sideLabel(edge.label ?? "", marker, true, upright),
+        ...(!upright && marker ? [below({ width: 54, height: 13 })] : []),
+      ];
+    if (upright)
+      return edge.label || marker ? [sideLabel(edge.label ?? "", marker, false, true)] : [];
+    return [
+      ...(edge.label ? [sideLabel(edge.label, 0, false, false)] : []),
+      ...(marker ? [below(markerSize(marker, false))] : []),
+    ];
   };
 
   const graph: ElkNode = {
@@ -431,45 +426,13 @@ export function tamGraph(source: TamDiagram, measure: Measure, options: LayoutOp
       // Channels and ball-and-socket connectors are small nodes on the connection, so ELK keeps room for their markers and labels.
       const id = `${edge.id}#node`,
         parent = common(edge.source, edge.target);
-      const marker = edge.request ? +edge.request.toSource + +edge.request.toTarget : 0;
-      const split = !!edge.protocol && (!!edge.label || !!marker);
-      const labels = split
-        ? [
-            sideLabel(edge.label ?? "", marker, true),
-            ...(!vertical && marker
-              ? [
-                  {
-                    text: "R",
-                    width: 54,
-                    height: 13,
-                    layoutOptions: { "elk.nodeLabels.placement": "OUTSIDE V_BOTTOM H_CENTER" },
-                  },
-                ]
-              : []),
-          ]
-        : vertical
-          ? edge.label || marker
-            ? [sideLabel(edge.label ?? "", marker)]
-            : []
-          : [
-              ...(edge.label ? [sideLabel(edge.label)] : []),
-              ...(marker
-                ? [
-                    {
-                      text: "R",
-                      ...markerSize(marker),
-                      layoutOptions: { "elk.nodeLabels.placement": "OUTSIDE V_BOTTOM H_CENTER" },
-                    },
-                  ]
-                : []),
-            ];
       const size = edge.kind === "assembly" ? ASSEMBLY : CHANNEL;
       const node: ElkNode = {
         id,
         width: size,
         height: size,
-        labels,
-        layoutOptions: { "elk.spacing.labelNode": String(markerGap) },
+        labels: channelLabels(edge),
+        layoutOptions: { "elk.spacing.labelNode": String(MARKER_GAP) },
       };
       (parent ? elkNodes.get(parent)! : graph).children!.push(node);
       elkNodes.set(id, node);
@@ -518,5 +481,90 @@ export function tamGraph(source: TamDiagram, measure: Measure, options: LayoutOp
       );
     }
   }
-  return { chain, diagram, ends, graph, markerSize, reversed, scale, shapes, vertical };
+  return {
+    chain,
+    channelLabels,
+    diagram,
+    ends,
+    graph,
+    markerSize,
+    reversed,
+    scale,
+    shapes,
+    vertical,
+  };
+}
+
+/** A leaf element's size around its name: what it takes before its connections ask for more. */
+export function leafSize(
+  node: TamNode,
+  lines: string[],
+  textWidth: number,
+  measure: Measure,
+): { width: number; height: number } {
+  const text = lines.length * LINE;
+  switch (node.kind) {
+    case "human":
+      return lines.length
+        ? { width: Math.max(76, textWidth + 2 * PAD), height: 38 + text + 10 }
+        : { width: 48, height: 46 };
+    // Storages are pills: the round ends take half the height on each side.
+    case "storage": {
+      const height = Math.max(36, text + 18);
+      return lines.length
+        ? { width: Math.max(96, textWidth + height + 8), height }
+        : { width: 36, height: 36 };
+    }
+    case "component":
+      return {
+        width: Math.max(104, textWidth + 2 * PAD + ICON),
+        height: Math.max(42, text + 22),
+      };
+    case "subsystem":
+      return {
+        width: Math.max(
+          112,
+          textWidth + 2 * PAD + ICON,
+          measure("«subsystem»", SMALL, 400) + 2 * PAD + ICON,
+        ),
+        height: text + 40,
+      };
+    case "package":
+      return {
+        width: Math.max(96, textWidth + 2 * PAD),
+        height: Math.max(40, text + 20) + TAB - 4,
+      };
+    default:
+      return { width: Math.max(96, textWidth + 2 * PAD), height: Math.max(40, text + 20) };
+  }
+}
+
+/**
+ * What a container keeps free around its parts: `top` for its title, `side` on the other three
+ * sides, and the least width its title needs. A row of copies is no shape and keeps nothing.
+ */
+export function containerInsets(
+  node: TamNode,
+  lines: string[],
+  textWidth: number,
+  measure: Measure,
+): { top: number; side: number; minimum: number } {
+  if (node.id.endsWith("#row")) return { top: 0, side: 0, minimum: 0 };
+  const subsystem = node.kind === "subsystem" ? 16 : 0,
+    icon = node.kind === "component" || node.kind === "subsystem" ? 24 : 0;
+  // Below the title there is room for an arrowhead that enters a part from above, clear of the title's glyphs.
+  const titleBottom = TITLE_TOP + subsystem + (lines.length - 0.5) * LINE + 0.62 * FONT;
+  return {
+    top:
+      node.kind === "package"
+        ? TAB + 14
+        : lines.length
+          ? Math.ceil(titleBottom + MARKER_LENGTH.arrow + 4)
+          : 12,
+    side: node.kind === "group" ? 12 : PAD,
+    minimum:
+      Math.ceil(
+        node.kind === "package" ? measure(node.label, SMALL, 600) + 24 : textWidth + 2 * PAD + icon,
+      ) + (node.stack ? SHADOW : 0),
+  };
 }

@@ -64,6 +64,19 @@ The package ships TypeScript sources: use it with a bundler or runtime that comp
 checkout, but does not strip types in files under `node_modules`, so a project that installs the
 package needs one of the others, or the command line, which runs from the bundled `dist/cli.js`.
 
+## Editor
+
+`npm run editor` serves a canvas editor for TAM block diagrams (`npm run build:editor` writes it as a
+static page to `dist/editor`). Shapes are dragged from the palette onto the canvas, moved, resized,
+nested by dropping them into a container, and connected by dragging from the dots beside an
+element; the inspector offers only the kinds and connections the notation allows there. The tree
+lists the elements and takes drops too. Copy, cut, paste, duplicate, undo and redo work as usual.
+
+The document is the TAM source, shown beside the canvas and editable there: every gesture is an edit
+of that text, and every other line stays as its author wrote it. A source without positions is laid
+out automatically, as everywhere else; moving an element writes a position for every element
+(`@x,y`, see [Positions](#positions)), and *Auto layout* removes them again.
+
 ## Command line
 
 With the package installed in a project (`npm install --save-dev tam-diagrams`, or from git),
@@ -103,6 +116,10 @@ widths and names that font stack in the SVG, so the picture is exact where those
   `UmlError`; `renderClassView`, `overview`, `classPartAt`, `classPartBox`, `toggleClassPart`;
   `drawScene`, `textMeasure`, `arialMeasure`, `auditScene`, `measureScene`, `svgUrl`;
   `elkWorkerPool`, `bundledElk`; and their types.
+- `tam-diagrams/edit`: what an editor is built from. Edits of a source as text, each returning the
+  new source: `place`, `unplace`, `pin` (positions from a layout), `addElement`, `setElement`,
+  `connect`, `setConnection`, `addInterface`, `remove`, `moveInto`, `duplicate`, `copyOf`, `paste`,
+  `setHeader`; and `layoutPlaced`, the synchronous layout of a placed diagram.
 - `tam-diagrams/layout`: building blocks for further diagram types (`layoutGraph`, `addWire`,
   `attachEnds`, `hugLabels`, `straightenScene`, `bestScene`, scene helpers, `prepare`, ...) and the
   TAM layout steps (`layoutTam`, `bestLayout`).
@@ -132,6 +149,31 @@ storage by a flow, only by a `pointer`. Containers draw their parts inside; `gro
 `package` elements with `-. use .->` and `-. import .->` make package diagrams. The parser enforces
 these rules and reports the line of a broken one.
 
+### Positions
+
+An element's declaration may say where it stands: `@x,y` is its top left corner, and `WxH` after it
+a size.
+
+```tam
+human customer[Customer] @40,60
+agent shop[Web Shop] @220,30 380x260 {
+  agent api[Order API] @250,90
+  storage cart[Cart]:::blue @250,220 140x40
+}
+customer -- calls: place order @HTTPS --> api
+api -- reads/writes --> cart
+```
+
+- Positions are absolute, in pixels, y down; nesting stays what the braces say.
+- A size is a least size: an element is never smaller than its name, a container never smaller than
+  its parts. A container without a position fits its parts.
+- Wires are not stored. They are routed between the placed elements: straight, around one or two
+  corners, or around the elements in their way.
+- One position is enough to lay the diagram out by hand; elements without one stand in a row below
+  the placed ones of their container, so an element added as text shows up at once.
+- A source without positions is laid out automatically, exactly as before. Positions are the only
+  addition to the syntax; a protocol's `@` (inside a connection) is not one.
+
 ## Files
 
 | File                         | Contents                                                                             |
@@ -144,6 +186,12 @@ these rules and reports the line of a broken one.
 | `src/tam-graph.ts`           | TAM layout stage 1: sizes, channel and connector nodes, the ELK graph                |
 | `src/tam-geometry.ts`        | TAM layout stage 2: ELK's result read back, then the geometry passes                 |
 | `src/tam-scene.ts`           | TAM layout stage 3: the scene drawn from the final geometry                          |
+| `src/tam-placed.ts`          | TAM layout by hand: element boxes from the positions in the source (`@x,y`)          |
+| `src/tam-placed-wires.ts`    | TAM layout by hand: wires between placed elements, channel circles and labels        |
+| `src/tam-placed-detour.ts`   | TAM layout by hand: a wire's way around the elements between its ends                |
+| `src/tam-edit.ts`            | Edits of a TAM source as text: place, add, change, connect, remove, nest, copy       |
+| `src/tam-pin.ts`             | Positions for every element from a layout                                            |
+| `src/edit.ts`                | The `tam-diagrams/edit` entry point                                                  |
 | `src/tam-protocols.ts`       | TAM protocol boundaries: dashed lines through the channels of one protocol           |
 | `src/uml.ts`                 | What the UML parsers share: type detection, errors, source preparation, vertex ports |
 | `src/uml-class.ts`           | Class diagrams: the parser, and the views and hit tests of the class explorer        |
@@ -192,6 +240,12 @@ these rules and reports the line of a broken one.
 | `cli/diagram.ts`             | Source to SVG with `arialMeasure`: TAM or Mermaid by content; the CLI's colors       |
 | `cli/report.ts`              | Error messages as `<file>:<line>: <message>`                                         |
 | `cli/node-io.ts`             | The I/O port on `node:fs` and the process streams                                    |
+| `editor/document.ts`         | The editor's document: the source, its picture, previews and history                 |
+| `editor/editor.ts`           | Selection, tools, gestures on the canvas and the commands of panels and keyboard     |
+| `editor/hit.ts`              | What of a picture lies at a point, in a frame, or under a dragged element            |
+| `editor/view.ts`             | The canvas: viewport, grid, the picture as an image, and the overlay                 |
+| `editor/ui.ts`               | Toolbar, palette, element tree, inspector and source pane                            |
+| `editor/main.ts`             | The page: theme, files, export, autosave                                             |
 | `rolldown.config.mjs`        | The build: bundles `cli/bin.ts` into `dist/cli.js`, the package's `bin`              |
 | `test/`                      | Tests; `tam.fuzz.test.ts` is a stress run gated by `HARNESS=1`                       |
 
