@@ -8,8 +8,11 @@ import type { ElkLayout } from "../src/elk.ts";
 import type { Scene } from "../src/scene.ts";
 import { isPlaced, parseTam, TamError, type TamDiagram } from "../src/tam.ts";
 import { bestLayout, layoutPlaced } from "../src/tam-layout.ts";
-import { overlapping, pin } from "../src/tam-pin.ts";
+import { layoutWithin, overlapping, pin } from "../src/tam-pin.ts";
 import type { Measure } from "../src/text.ts";
+import { parseUml } from "../src/index.ts";
+import { UmlError } from "../src/uml.ts";
+import { type DiagramType, typeInfo, typeOf } from "./types.ts";
 
 /** A source laid out: the parsed diagram and the scene drawn from it. */
 export interface Picture {
@@ -20,7 +23,14 @@ export interface Picture {
   placed: boolean;
   /** Elements that lie on each other, which the notation does not allow: pairs of shape ids. */
   overlaps: [string, string][];
+  /** What the source draws: a block diagram, edited on the canvas, or a UML diagram, edited as text. */
+  type: DiagramType;
+  /** The title the source gives the diagram. */
+  title?: string;
 }
+
+/** A UML picture holds no block diagram: nothing in it is an element to select or move. */
+const NO_DIAGRAM = (): TamDiagram => ({ direction: "TB", nodes: new Map(), roots: [], edges: [] });
 
 /** Why a source shows no picture: the message, and the line it is about (0 for the whole source). */
 export interface Problem {
@@ -29,7 +39,7 @@ export interface Problem {
 }
 
 const problemOf = (reason: unknown): Problem =>
-  reason instanceof TamError
+  reason instanceof TamError || reason instanceof UmlError
     ? { line: reason.line, message: reason.message }
     : { line: 0, message: reason instanceof Error ? reason.message : String(reason) };
 
@@ -60,13 +70,41 @@ export class Doc {
   layout(source: string): Picture {
     const diagram = parseTam(source);
     const scene = layoutPlaced(diagram, this.measure);
-    return { source, diagram, scene, placed: true, overlaps: overlapping(diagram, scene) };
+    return {
+      source,
+      diagram,
+      scene,
+      placed: true,
+      overlaps: overlapping(diagram, scene),
+      type: "tam",
+      title: diagram.title,
+    };
   }
 
   /** Shows a source's picture: at once when it is placed, after the automatic layout else. */
   private async show(source: string): Promise<void> {
     const run = ++this.run;
     try {
+      const type = typeOf(source);
+      if (type !== "tam") {
+        // A UML source: parsed and laid out by its own type; the picture is to look at.
+        const parsed = parseUml(source);
+        this.problem = undefined;
+        this.onChange();
+        const scene = await parsed.layout(this.measure, this.elk);
+        if (run !== this.run) return;
+        this.picture = {
+          source,
+          diagram: NO_DIAGRAM(),
+          scene,
+          placed: false,
+          overlaps: [],
+          type: parsed.kind,
+          title: parsed.title,
+        };
+        this.onChange();
+        return;
+      }
       const diagram = parseTam(source);
       this.problem = undefined;
       if (isPlaced(diagram) || !diagram.nodes.size) {
@@ -78,7 +116,15 @@ export class Doc {
       this.onChange();
       const scene = await bestLayout(diagram, this.measure, this.elk);
       if (run !== this.run) return;
-      this.picture = { source, diagram, scene, placed: false, overlaps: [] };
+      this.picture = {
+        source,
+        diagram,
+        scene,
+        placed: false,
+        overlaps: [],
+        type: "tam",
+        title: diagram.title,
+      };
     } catch (reason) {
       if (run !== this.run) return;
       this.problem = problemOf(reason);
@@ -163,9 +209,15 @@ export class Doc {
    */
   placedSource(): string | undefined {
     const { picture } = this;
-    if (this.problem || !picture || picture.source !== this.source) return undefined;
+    if (this.problem || !picture || picture.source !== this.source || picture.type !== "tam")
+      return undefined;
     if (picture.placed && allPlaced(picture.diagram)) return this.source;
     return pin(this.source, picture.scene, this.measure);
+  }
+
+  /** Lays some elements of the placed source out automatically among themselves: see `layoutWithin`. */
+  layoutWithin(source: string, ids: string[]): Promise<string> {
+    return layoutWithin(source, ids, this.measure, this.elk);
   }
 
   /** The picture as a standalone SVG. */
@@ -173,7 +225,12 @@ export class Doc {
     const { picture } = this;
     return (
       picture &&
-      drawScene(picture.scene, colors, picture.diagram.title || "TAM block diagram", "tam")
+      drawScene(
+        picture.scene,
+        colors,
+        picture.title || typeInfo(picture.type).name,
+        picture.type === "tam" ? "tam" : `${picture.type} diagram`,
+      )
     );
   }
 }

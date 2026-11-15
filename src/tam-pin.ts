@@ -3,8 +3,9 @@
 import { type Box, centerOf, overlaps, type Scene } from "./scene.ts";
 import { ELEMENT_KINDS, parseTam, type Placement, type TamDiagram, type TamNode } from "./tam.ts";
 import type { Measure } from "./text.ts";
-import { place } from "./tam-edit.ts";
-import { layoutPlaced } from "./tam-layout.ts";
+import type { ElkLayout } from "./elk.ts";
+import { copyOf, place, unplace } from "./tam-edit.ts";
+import { bestLayout, layoutPlaced } from "./tam-layout.ts";
 
 /** The elements a source declares: no copies, rows, dots, channels or interfaces. */
 export const declaredElements = (diagram: TamDiagram): TamNode[] =>
@@ -88,4 +89,52 @@ export function overlapping(diagram: TamDiagram, scene: Scene): [string, string]
         pairs.push([a.id, b.id]);
   });
   return pairs;
+}
+
+/**
+ * Lays some elements of a placed source out automatically and leaves the rest where it is: the
+ * parts of one element when `ids` names a single element that holds others, else the named elements
+ * among themselves. Only they and the connections among them count for the layout; it takes the
+ * place they had, from its top left corner. A container laid out this way fits its parts again.
+ */
+export async function layoutWithin(
+  source: string,
+  ids: string[],
+  measure: Measure,
+  layout?: ElkLayout,
+): Promise<string> {
+  const diagram = parseTam(source),
+    declared = new Set(declaredElements(diagram).map((node) => node.id));
+  /** The elements an element holds: rows of copies and of dots are no elements. */
+  const parts = (id: string): string[] =>
+    diagram.nodes
+      .get(id)!
+      .children.flatMap((child) =>
+        child.endsWith("#row") ? parts(child) : declared.has(child) ? [child] : [],
+      );
+  const named = ids.filter((id) => declared.has(id)),
+    [only] = named,
+    inside = named.length === 1 && parts(only).length > 0,
+    scope = inside ? parts(only) : named;
+  if (scope.length < (inside ? 1 : 2)) return source;
+  const before = elementBoxes(diagram, layoutPlaced(diagram, measure)),
+    stood = scope.flatMap((id) => before.get(id) ?? []);
+  if (!stood.length) return source;
+  // The elements as a diagram of their own, without their places.
+  const fragment = `direction ${diagram.direction}\n${unplace(copyOf(source, scope))}`,
+    alone = parseTam(fragment),
+    pinned = parseTam(pin(fragment, await bestLayout(alone, measure, layout), measure)),
+    after = [...elementBoxes(pinned, layoutPlaced(pinned, measure)).values()];
+  const dx = Math.min(...stood.map((box) => box.x)) - Math.min(...after.map((box) => box.x)),
+    dy = Math.min(...stood.map((box) => box.y)) - Math.min(...after.map((box) => box.y));
+  const places = new Map<string, Placement | undefined>();
+  for (const node of pinned.nodes.values())
+    if (node.at && diagram.nodes.has(node.id) && !node.id.endsWith("#row"))
+      places.set(node.id, {
+        ...node.at,
+        x: Math.round(node.at.x + dx),
+        y: Math.round(node.at.y + dy),
+      });
+  if (inside) places.set(only, undefined);
+  return place(source, places);
 }

@@ -45,6 +45,7 @@ import {
   type Part,
   partAt,
   samePart,
+  wireOf,
   wireParts,
 } from "./hit.ts";
 import {
@@ -56,6 +57,7 @@ import {
   snapEdge,
   snapMove,
 } from "./guides.ts";
+import { type DiagramType, typeInfo, typeOf } from "./types.ts";
 import type { View } from "./view.ts";
 
 /** An element in the tree of the diagram. */
@@ -310,9 +312,11 @@ export class Editor {
   private change(source: string | undefined): boolean {
     if (source === undefined) {
       this.notify(
-        this.doc.problem
-          ? "Fix the source first: it does not parse."
-          : "The layout is not ready yet.",
+        !this.editable
+          ? `A ${typeInfo(this.type).name.toLowerCase()} is edited as text, in the source.`
+          : this.doc.problem
+            ? "Fix the source first: it does not parse."
+            : "The layout is not ready yet.",
       );
       return false;
     }
@@ -321,9 +325,24 @@ export class Editor {
     return !problem;
   }
 
+  /** What the document draws: a source without a picture yet says it by its first line. */
+  get type(): DiagramType {
+    return typeOf(this.doc.source);
+  }
+
+  /** Whether the diagram is edited on the canvas; the UML types are edited as text. */
+  get editable(): boolean {
+    return this.type === "tam";
+  }
+
+  /** Adds a piece of source at the end: the statements a text diagram is built from. */
+  insert(text: string) {
+    void this.doc.apply(`${this.doc.source.trimEnd()}\n${text}\n`);
+  }
+
   /** Runs an edit of the committed source, which must parse. */
   private edit(make: (source: string) => string): boolean {
-    if (this.doc.problem) return this.change(undefined);
+    if (this.doc.problem || !this.editable) return this.change(undefined);
     try {
       return this.change(make(this.doc.source));
     } catch (reason) {
@@ -334,7 +353,7 @@ export class Editor {
 
   /** Whether an edit leaves a source the notation allows: the panels offer only such choices. */
   private allows(make: (source: string) => string): boolean {
-    if (this.doc.problem) return false;
+    if (this.doc.problem || !this.editable) return false;
     try {
       parseTam(make(this.doc.source));
       return true;
@@ -688,6 +707,34 @@ export class Editor {
     if (this.edit(unplace)) await this.fitSoon();
   }
 
+  /** Whether the selection can be laid out on its own: one element that holds others, or several elements. */
+  get canLayoutSelection(): boolean {
+    const { picture } = this,
+      ids = this.selectedElements;
+    if (!picture || !this.editable) return false;
+    return (
+      ids.length > 1 || (ids.length === 1 && !!picture.diagram.nodes.get(ids[0])?.children.length)
+    );
+  }
+
+  /**
+   * Lays out only what is selected: the parts of the one selected container, or the selected
+   * elements among themselves. Everything else stays where it is.
+   */
+  async layoutSelection() {
+    const base = this.doc.placedSource(),
+      ids = this.selectedElements;
+    if (base === undefined) return void this.change(undefined);
+    try {
+      const next = await this.doc.layoutWithin(base, ids);
+      // The document may have moved on while the layout ran.
+      if (this.doc.placedSource() !== base && this.doc.source !== base) return;
+      this.change(next);
+    } catch (reason) {
+      this.notify(reason instanceof Error ? reason.message : String(reason));
+    }
+  }
+
   /** Fits the picture once the layout under way is shown. */
   async fitSoon() {
     for (let tries = 0; tries < 200 && this.picture?.source !== this.doc.source; tries++)
@@ -829,10 +876,19 @@ export class Editor {
     if (wire) {
       const connection = this.connection(id);
       if (!connection || connection.word === "dependency" || !at) return;
-      const box = { x: at.x - 70, y: at.y - 12, width: 140, height: 24 };
-      this.editText(box, connection.label ?? "", { size: 12, weight: 400 }, (text) => {
-        if (text !== undefined && text !== (connection.label ?? ""))
-          this.setWire(id, { label: text });
+      // The field lies on the label where it is drawn, its lines as lines; a connection without one gets it at the pointer.
+      const drawn = picture.scene.texts
+        .filter(
+          (text) =>
+            text.role === "label" && text.owner && wireOf(picture.diagram, text.owner) === id,
+        )
+        .map((text) => text.box);
+      const box = drawn.length
+        ? around(drawn)
+        : { x: at.x - 60, y: at.y - 10, width: 120, height: 20 };
+      const label = (connection.label ?? "").replace(/<br\s*\/?>/gi, "\n");
+      this.editText(box, label, { size: 12, weight: 400 }, (text) => {
+        if (text !== undefined && text !== label) this.setWire(id, { label: text });
       });
       return;
     }
@@ -870,7 +926,8 @@ export class Editor {
       this.onMenu({ x: event.clientX, y: event.clientY }, point);
       return;
     }
-    if (event.button === 1 || this.space || this.tool === "pan") {
+    // A picture that is edited as text is moved about by dragging it.
+    if (event.button === 1 || this.space || this.tool === "pan" || !this.editable) {
       this.gesture = { type: "pan", last: screen };
       this.cursor();
       return;
@@ -1329,7 +1386,7 @@ export class Editor {
   private doubleClick(event: MouseEvent) {
     const point = this.view.toScene(this.view.pointOf(event)),
       { picture } = this;
-    if (this.tool !== "select") return;
+    if (this.tool !== "select" || !this.editable) return;
     const part = picture && partAt(picture, point, 6 / this.view.zoom);
     if (!part) this.create("agent", point, event.altKey);
     else if (part.type === "element") this.rename(part.id);

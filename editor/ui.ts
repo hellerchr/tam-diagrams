@@ -716,6 +716,11 @@ export class Panels {
       rows.push(
         ...boxes.map(([kind, name, key]) => item(name, () => editor.wrapSelection(kind), { key })),
         !!editor.selectionHolder && item("Take out of its box", () => editor.takeOut()),
+        editor.canLayoutSelection &&
+          item(
+            elements.length === 1 ? "Auto layout inside" : "Auto layout these",
+            () => void editor.layoutSelection(),
+          ),
         (boxes.length > 0 || !!editor.selectionHolder) && line(),
         elements.length === 1 && item("Rename", () => editor.rename(elements[0]), { key: "Enter" }),
         item("Duplicate", () => editor.duplicateSelection(), { key: "Ctrl+D" }),
@@ -861,12 +866,19 @@ export class Panels {
     const field = h("textarea", { class: "label-edit", spellcheck: "false", rows: "1" });
     field.value = text;
     const lines = () => Math.max(1, field.value.split("\n").length);
+    // As wide as its longest line and as high as its lines, around the middle of the box: nothing wraps.
+    const ruler = document.createElement("canvas").getContext("2d")!;
     const fit = () => {
-      const height = Math.max(on.height, lines() * size * 1.3 + 8);
+      ruler.font = `${options.weight} ${size}px system-ui, sans-serif`;
+      const longest = Math.max(
+          ...field.value.split("\n").map((line) => ruler.measureText(line).width),
+        ),
+        width = Math.max(on.width + 24, longest + 28, 100),
+        height = Math.max(on.height, lines() * size * 1.3 + 8);
       Object.assign(field.style, {
-        left: `${on.x - 20}px`,
+        left: `${on.x + on.width / 2 - width / 2}px`,
         top: `${on.y + on.height / 2 - height / 2}px`,
-        width: `${Math.max(on.width + 40, 120)}px`,
+        width: `${width}px`,
         height: `${height}px`,
         fontSize: `${size}px`,
         fontWeight: String(options.weight),
@@ -1159,6 +1171,23 @@ export class Panels {
       control.hidden = ids.length < least;
       return control;
     };
+    // Only what is selected is laid out: the parts of a container, or several elements among themselves.
+    const layoutThese = h(
+      "button",
+      {
+        class: "tool mini",
+        type: "button",
+        title: single ? "Auto layout inside this element" : "Auto layout the selected elements",
+        "aria-label": single
+          ? "Auto layout inside this element"
+          : "Auto layout the selected elements",
+        onClick: () => void editor.layoutSelection(),
+      },
+      icon("layout"),
+    );
+    this.sync.push(() => {
+      layoutThese.hidden = !editor.canLayoutSelection;
+    });
     const arrangement = h(
       "div",
       { class: "arrange" },
@@ -1173,6 +1202,7 @@ export class Panels {
       act("same-width", "Make as wide as the widest", () => editor.sameSize("width")),
       act("same-height", "Make as high as the highest", () => editor.sameSize("height")),
       act("fit-size", "Fit the size to the name, or to what is inside", () => editor.fitSize(), 1),
+      layoutThese,
     );
     // Shown as two with dots between, the copy stands beside or below; dragging it puts it anywhere.
     const copyRow = h(

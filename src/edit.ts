@@ -25,7 +25,7 @@ export {
   unplace,
   wrap,
 } from "./tam-edit.ts";
-export { declaredElements, elementBoxes, overlapping, pin } from "./tam-pin.ts";
+export { declaredElements, elementBoxes, layoutWithin, overlapping, pin } from "./tam-pin.ts";
 export { layoutDiagram, layoutPlaced } from "./tam-layout.ts";
 export {
   COLORS,

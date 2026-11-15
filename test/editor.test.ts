@@ -96,3 +96,29 @@ describe("what lies at a point of the picture", () => {
     expect(dropTarget(picture!, { x: 200, y: 180 }, new Set(["shop"]), false)).toBeNull();
   });
 });
+
+describe("diagram types in the editor", () => {
+  it("draws a UML source as a picture to look at, and says what type it is", async () => {
+    const { TYPES, typeOf } = await import("../editor/types.ts");
+    for (const info of TYPES.filter((item) => item.type !== "tam")) {
+      expect(typeOf(info.starter)).toBe(info.type);
+      const made = await doc(info.starter);
+      expect(made.problem, info.name).toBeUndefined();
+      expect(made.picture).toMatchObject({ type: info.type, placed: false });
+      expect(made.picture!.scene.shapes.length).toBeGreaterThan(0);
+      // Nothing of it is edited on the canvas.
+      expect(made.placedSource()).toBeUndefined();
+      expect(made.picture!.diagram.nodes.size).toBe(0);
+      // Every snippet adds statements the type reads.
+      for (const snippet of info.snippets) {
+        await made.apply(`${info.starter}\n${snippet.text}\n`);
+        expect(made.problem, `${info.name}: ${snippet.name}`).toBeUndefined();
+      }
+    }
+  });
+
+  it("reports the line of an error in a UML source", async () => {
+    const made = await doc("classDiagram\n  class A\n  A --> ");
+    expect(made.problem?.line).toBe(3);
+  });
+});

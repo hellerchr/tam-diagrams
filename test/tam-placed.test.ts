@@ -135,3 +135,43 @@ describe("pinning a layout", () => {
     },
   );
 });
+
+describe("automatic layout of a part of a placed diagram", () => {
+  const SOURCE = `agent out[Outside] @0,0
+agent box[Box] @200,0 600x400 {
+  agent a[A] @620,300
+  agent b[B] @230,60
+  storage s[S] @500,320
+}
+out -- calls --> a
+a -- calls --> b
+b -- reads/writes --> s`;
+
+  it("lays out only the parts of a container, where they stood, and lets the container fit them", async () => {
+    const { layoutWithin } = await import("../src/tam-pin.ts");
+    const next = await layoutWithin(SOURCE, ["box"], arialMeasure),
+      diagram = parseTam(next),
+      placed = boxes(next);
+    // Outside nothing moved; the container fits its parts again.
+    expect(diagram.nodes.get("out")!.at).toEqual({ x: 0, y: 0 });
+    expect(diagram.nodes.get("box")!.at).toBeUndefined();
+    expect(placed.get("box")!.width).toBeLessThan(600);
+    // The parts follow their connections, top down, from where the topmost and leftmost stood.
+    const [a, b, s] = ["a", "b", "s"].map((id) => placed.get(id)!);
+    expect(Math.min(a.x, b.x, s.x)).toBe(230);
+    expect(Math.min(a.y, b.y, s.y)).toBe(60);
+    expect(a.y).toBeLessThan(b.y);
+    expect(b.y).toBeLessThan(s.y);
+    expect(next).toContain("out -- calls --> a");
+  });
+
+  it("lays several named elements out among themselves and leaves single ones alone", async () => {
+    const { layoutWithin } = await import("../src/tam-pin.ts");
+    const next = await layoutWithin(SOURCE, ["b", "s"], arialMeasure),
+      placed = boxes(next);
+    expect(parseTam(next).nodes.get("a")!.at).toEqual({ x: 620, y: 300 });
+    expect(parseTam(next).nodes.get("box")!.at).toEqual({ x: 200, y: 0, width: 600, height: 400 });
+    expect(placed.get("s")!.y).toBeGreaterThan(placed.get("b")!.y);
+    expect(await layoutWithin(SOURCE, ["a"], arialMeasure)).toBe(SOURCE);
+  });
+});
