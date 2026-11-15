@@ -92,3 +92,37 @@ describe("editing an activity diagram as text", () => {
     expect(edges(removeFlow(LANES, ["order"]))).toEqual(["check>ship"]);
   });
 });
+
+describe("an activity diagram as a structure", () => {
+  it("reads parts and joins under the ids of the scene, and edits through one interface", async () => {
+    const { flowStructure } = await import("../src/uml-activity-edit.ts");
+    const { parseUml } = await import("../src/index.ts");
+    const { arialMeasure } = await import("../src/arial-measure.ts");
+    const { nodes, edges } = flowStructure.read(FLOW);
+    expect(nodes.map((node) => `${node.id}:${node.kind}:${node.parent}`)).toEqual([
+      "start:start:null",
+      "check:decision:null",
+      "ship:step:null",
+      "wait:step:null",
+      "part:group:null",
+      "x:step:part",
+      "y:step:part",
+      "done:end:null",
+    ]);
+    // Every part is a shape of the scene, every join a wire.
+    const scene = await parseUml(FLOW).layout(arialMeasure),
+      shapes = new Set(scene.shapes.map((shape) => shape.id)),
+      wires = new Set(scene.wires.map((wire) => wire.edge));
+    for (const node of nodes) expect(shapes.has(node.id), node.id).toBe(true);
+    for (const edge of edges) expect(wires.has(edge.id), edge.id).toBe(true);
+    const dotted = flowStructure.relink(FLOW, "e4", "dotted");
+    expect(dotted).toContain("  wait -.-> check\n");
+    expect(
+      flowStructure.read(flowStructure.connect(FLOW, "wait", "done", "thick")).edges.at(-1),
+    ).toMatchObject({
+      source: "wait",
+      target: "done",
+      kind: "thick",
+    });
+  });
+});

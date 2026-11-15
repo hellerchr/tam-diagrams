@@ -5,6 +5,7 @@
  * says; every other line stays as it was. The layout stays automatic.
  */
 
+import type { Structure, StructureNode } from "./structure.ts";
 import { type FlowEdge, type Flowchart, parseFlowchart } from "./uml-activity.ts";
 
 /** What a canvas adds to an activity diagram. */
@@ -344,3 +345,98 @@ export function removeFlow(source: string, ids: Iterable<string>): string {
   }
   return lines.join("\n");
 }
+
+/** The strokes a flow is drawn with, as the kinds of join of an activity diagram. */
+const STROKES: Record<string, FlowEdge["stroke"]> = {
+  flow: "solid",
+  dotted: "dotted",
+  thick: "thick",
+};
+
+/** Makes an edge one of another stroke. */
+export function restrokeFlow(source: string, edge: string, kind: string): string {
+  const chart = parseFlowchart(source),
+    lines = linesOf(source),
+    found = chart.edges.find((item) => item.id === edge);
+  if (!found || !STROKES[kind]) return source;
+  found.stroke = STROKES[kind];
+  lines.splice(found.line - 1, 1, ...rewrite(lines, found.line - 1, chart, () => true, new Set()));
+  return lines.join("\n");
+}
+
+/** Flowcharts and swimlanes as a structure a canvas edits. */
+export const flowStructure: Structure = {
+  pieces: [
+    { kind: "step", name: "Step", about: "Something that is done", joins: "after", named: true },
+    {
+      kind: "decision",
+      name: "Decision",
+      about: "A question the flow branches at",
+      joins: "after",
+      named: true,
+    },
+    { kind: "start", name: "Start", about: "Where the flow begins", joins: "before" },
+    { kind: "end", name: "End", about: "Where the flow ends", joins: "after" },
+    {
+      kind: "group",
+      name: "Group",
+      about: "A group of steps, or a lane",
+      group: true,
+      named: true,
+    },
+  ],
+  links: [
+    { kind: "flow", name: "Flow" },
+    { kind: "dotted", name: "Dotted flow" },
+    { kind: "thick", name: "Thick flow" },
+  ],
+  read(source) {
+    const chart = parseFlowchart(source);
+    const kindOf = (shape: string) =>
+      shape === "diamond"
+        ? "decision"
+        : shape === "initial"
+          ? "start"
+          : shape === "final" || shape === "flow-final"
+            ? "end"
+            : "step";
+    return {
+      nodes: chart.order.flatMap((id): StructureNode[] => {
+        const group = chart.subgraphs.get(id),
+          node = chart.nodes.get(id);
+        return group
+          ? [{ ...group, group: true, kind: "group" }]
+          : node
+            ? [
+                {
+                  id,
+                  label: node.label,
+                  parent: node.parent,
+                  line: node.line,
+                  group: false,
+                  kind: kindOf(node.shape),
+                },
+              ]
+            : [];
+      }),
+      edges: chart.edges.map((edge) => ({
+        id: edge.id,
+        source: edge.source,
+        target: edge.target,
+        label: edge.label,
+        line: edge.line,
+        kind: edge.stroke === "dotted" ? "dotted" : edge.stroke === "thick" ? "thick" : "flow",
+      })),
+    };
+  },
+  add: (source, piece) => addFlowPiece(source, { ...piece, kind: piece.kind as FlowPiece }),
+  connect: (source, from, to, kind) => {
+    const joined = connectFlow(source, from, to);
+    if (!kind || kind === "flow") return joined;
+    return restrokeFlow(joined, parseFlowchart(joined).edges.at(-1)!.id, kind);
+  },
+  rename: renameFlow,
+  label: labelFlowEdge,
+  relink: restrokeFlow,
+  remove: (source, ids) => removeFlow(source, ids),
+};
