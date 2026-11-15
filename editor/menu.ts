@@ -4,6 +4,7 @@
  */
 
 import { h, icon, isOff, setOff } from "./dom.ts";
+import type { IconName } from "./icons.ts";
 
 /** A command in a menu, or a submenu when it has `items`. */
 export interface MenuItem {
@@ -11,6 +12,10 @@ export interface MenuItem {
   run?: () => void;
   /** The keys that do the same, shown at the right. */
   key?: string;
+  /** A drawing before the name. */
+  icon?: IconName;
+  /** A word or two about the row, shown at the right where a row without keys has room. */
+  note?: string;
   danger?: boolean;
   /** Shown but not to be picked: true, or the reason, which its tooltip says. */
   off?: string | boolean;
@@ -33,6 +38,10 @@ export interface PopupOptions {
   right?: boolean;
   /** Starts with the focus on the first row, as a menu opened by a key does. */
   first?: boolean;
+  /** The arrow down on the control opens the menu, as it opens a list of choices. */
+  arrow?: boolean;
+  /** As wide as the control at least, as a list of choices is. */
+  wide?: boolean;
 }
 
 /** Closes the menu that is open. */
@@ -132,8 +141,9 @@ export function popup(
           "data-side": "right",
         },
         ticks && h("span", { class: "tick" }, row.checked ? icon("check") : null),
+        row.icon && icon(row.icon),
         h("span", { class: "name" }, row.name),
-        row.key && h("kbd", {}, row.key),
+        row.key ? h("kbd", {}, row.key) : row.note && h("span", { class: "row-note" }, row.note),
         row.items && icon("chevron-right"),
       );
       setOff(control, off);
@@ -246,7 +256,8 @@ export function popup(
     let x: number, y: number;
     if (anchor instanceof HTMLElement) {
       const at = anchor.getBoundingClientRect();
-      x = options.right ? at.right - width : at.left;
+      if (options.wide) menu.style.minWidth = `${at.width}px`;
+      x = options.right ? at.right - Math.max(width, options.wide ? at.width : 0) : at.left;
       y = options.above ? at.top - height - 2 : at.bottom + 2;
     } else ({ x, y } = anchor);
     // Inside the window, whichever corner it was asked for near.
@@ -273,7 +284,8 @@ export function menuButton(
   options: PopupOptions = {},
 ): { open: (first?: boolean) => void; close: () => void; readonly isOpen: boolean } {
   let close: (() => void) | undefined,
-    closedAt = 0;
+    /** The press under way began on the control while its menu was open: it closes the menu. */
+    closing = false;
   control.setAttribute("aria-haspopup", "menu");
   control.setAttribute("aria-expanded", "false");
   const open = (first = false) => {
@@ -284,17 +296,31 @@ export function menuButton(
       first,
       closed: () => {
         close = undefined;
-        closedAt = performance.now();
         control.setAttribute("aria-expanded", "false");
         options.closed?.();
       },
     });
   };
-  // The press that closed the menu, on its own control, does not open it again.
+  // The press that closes the menu, on its own control, does not open it again. It is seen here
+  // before the menu sees it as a press outside and closes.
+  window.addEventListener(
+    "pointerdown",
+    (event) => {
+      closing = !!close && event.target instanceof Node && control.contains(event.target);
+    },
+    true,
+  );
   control.addEventListener("pointerdown", (event) => {
-    if (event.button !== 0 || performance.now() - closedAt < 50) return;
+    if (event.button !== 0 || closing) return;
     event.preventDefault();
     open();
+  });
+  // The arrow down opens the menu of a control that shows a choice, as it opens a list.
+  control.addEventListener("keydown", (event) => {
+    if (event.key !== "ArrowDown" || close || !options.arrow) return;
+    event.preventDefault();
+    event.stopPropagation();
+    open(true);
   });
   control.addEventListener("click", (event) => {
     // A click without a pointer comes from the keyboard.
@@ -305,6 +331,60 @@ export function menuButton(
     close: () => close?.(),
     get isOpen() {
       return !!close;
+    },
+  };
+}
+
+/** One of the things to choose from in a `choiceButton`. */
+export interface Choice<Value extends string> {
+  value: Value;
+  name: string;
+}
+
+/** A control that shows one choice of a list and opens the list as a menu: see `choiceButton`. */
+export interface ChoiceButton<Value extends string> {
+  readonly element: HTMLButtonElement;
+  /** Shows the choices on offer and the one that is set; the empty value shows as "Mixed". */
+  show(choices: Choice<Value>[], current: Value | ""): void;
+}
+
+/**
+ * A list to choose one of, in the look of the other controls: a field that names the choice that
+ * is set and opens the choices as a menu, with a tick at that one. A click, Enter, Space or the
+ * arrow down opens it; `write` takes what is picked.
+ */
+export function choiceButton<Value extends string>(
+  write: (value: Value) => void,
+): ChoiceButton<Value> {
+  let choices: Choice<Value>[] = [],
+    current: Value | "" = "";
+  const name = h("span", { class: "name" }),
+    element = h(
+      "button",
+      { class: "field choice", type: "button", role: "combobox" },
+      name,
+      icon("chevron"),
+    );
+  menuButton(
+    element,
+    () =>
+      choices.map((choice) => ({
+        name: choice.name,
+        checked: choice.value === current,
+        run: () => {
+          if (choice.value !== current) write(choice.value);
+        },
+      })),
+    { arrow: true, wide: true },
+  );
+  return {
+    element,
+    show(list, value) {
+      choices = list;
+      current = value;
+      name.textContent =
+        value === "" ? "Mixed" : (list.find((choice) => choice.value === value)?.name ?? value);
+      name.classList.toggle("mixed", value === "");
     },
   };
 }

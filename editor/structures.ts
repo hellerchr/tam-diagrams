@@ -4,7 +4,7 @@
  */
 
 import type { Structure } from "../src/structure.ts";
-import { flowStructure } from "../src/uml-activity-edit.ts";
+import { flowStructure, swimlaneStructure } from "../src/uml-activity-edit.ts";
 import {
   classStructure,
   duplicateClass,
@@ -40,7 +40,7 @@ import type { IconName } from "./icons.ts";
 
 const STRUCTURES: Record<string, Structure | undefined> = {
   flowchart: flowStructure,
-  swimlane: flowStructure,
+  swimlane: swimlaneStructure,
   class: {
     ...classStructure,
     reverse: reverseClassRelation,

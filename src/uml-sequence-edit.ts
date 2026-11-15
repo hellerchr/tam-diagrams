@@ -8,6 +8,8 @@
  * the group `box<index>`, a note the node `note<number>`, a fragment (`alt`, `loop`, ...) the group
  * `block<number>`, a message the edge `m<number>`. Activation bars and destruction crosses are no
  * parts: they follow the statements around them, and `toggleActivation` sets a bar on a message.
+ * The ids of messages, notes and fragments are their numbers in the order of the source, so an
+ * edit that moves or adds one returns the id it has afterwards.
  *
  * The columns stand in the order in which the source first names their participants, by a
  * declaration or by a message. The edits that place a participant therefore declare the ones
@@ -19,12 +21,31 @@ import { scan } from "./uml.ts";
 import { type MessageEvent, parseSequenceDiagram, type SequenceDiagram } from "./uml-sequence.ts";
 
 /** What a canvas adds to a sequence diagram. */
-export type SequencePiece = "participant" | "actor" | "box" | "note";
+export type SequencePiece = "participant" | "actor" | "box" | "note" | "alt" | "opt" | "loop";
 
 /** The kinds of fragment that frame messages under a condition. */
 export type FragmentKind = "alt" | "loop" | "opt" | "par" | "critical" | "break";
 
-const FRAGMENTS: string[] = ["alt", "loop", "opt", "par", "critical", "break"];
+const FRAGMENTS: string[] = ["alt", "opt", "loop", "par", "critical", "break"];
+
+/** The keyword that divides a fragment of a kind into branches; the other kinds have one branch. */
+const DIVIDERS: Record<string, string | undefined> = {
+  alt: "else",
+  par: "and",
+  critical: "option",
+};
+
+/**
+ * A place among the statements of a sequence: before or after a message, a note or a fragment
+ * (`m3`, `note1`, `block2`), in the fragment and the branch that one stands in, or as the first
+ * statement of a branch of a fragment (`into`, with `branch` counted from 0).
+ */
+export interface SequencePlace {
+  before?: string;
+  after?: string;
+  into?: string;
+  branch?: number;
+}
 
 const linesOf = (source: string) => source.replace(/\r\n?/g, "\n").split("\n");
 
@@ -454,9 +475,11 @@ export function boxParticipants(
  * only named by messages; inside a box when `parent` is one, and in the column after a participant
  * when `parent` is one. A box frames the participant `parent`; without one it comes with a first
  * participant, since a box without one is not drawn. A note stands over the participant `parent`,
- * as the last statement of the diagram. Returns the id of the node it got, empty with the source
- * unchanged when the piece has no place: a note without a participant, a box around a participant
- * that stands in one.
+ * as the last statement of the diagram; with a message as `parent` it follows that message, over
+ * its sender and its receiver, and with a note it follows that note, over the same participants.
+ * A fragment (`alt`, `opt`, `loop`) frames the message `parent`. Returns the id of the node it
+ * got, empty with the source unchanged when the piece has no place: a note or a fragment without
+ * a part to stand at, a box around a participant that stands in one.
  */
 export function addSequencePiece(
   source: string,
@@ -465,7 +488,16 @@ export function addSequencePiece(
   const diagram = parseSequenceDiagram(source),
     lines = linesOf(source),
     beside = participantOf(diagram, piece.parent?.startsWith("head:") ? piece.parent : "");
+  if (piece.kind === "alt" || piece.kind === "opt" || piece.kind === "loop")
+    return piece.parent && messageOf(diagram, piece.parent)
+      ? wrapMessages(source, [piece.parent], piece.kind, piece.label ?? "")
+      : { source, id: "" };
   if (piece.kind === "note") {
+    // At a message: over its two ends. At a note: over the participants of that one.
+    const message = messageOf(diagram, piece.parent ?? ""),
+      note = noteOf(diagram, piece.parent ?? ""),
+      over = message ? [message.from, message.to] : note?.type === "note" ? note.who : undefined;
+    if (over) return insertNote(source, { over, text: piece.label, after: piece.parent! });
     if (beside === null) return { source, id: "" };
     let end = lines.length;
     while (end > 0 && !lines[end - 1].trim()) end--;
@@ -514,12 +546,68 @@ export function addSequencePiece(
 const noteOf = (diagram: SequenceDiagram, id: string) =>
   diagram.events.find((event) => event.type === "note" && event.id === id);
 
+/** The lines of a fragment: the one that opens it, the ones that divide it, and its `end`. */
+function frameOf(diagram: SequenceDiagram, id: string) {
+  const own = diagram.events.filter((event) => "id" in event && event.id === id),
+    start = own.find((event) => event.type === "start"),
+    end = own.find((event) => event.type === "end");
+  return start?.type === "start" && end
+    ? { start, end, dividers: own.filter((event) => event.type === "else") }
+    : undefined;
+}
+
+/**
+ * Where a new statement is written for a place: the index its line gets, and its indent. Nothing
+ * for a place that names no part of the diagram.
+ */
+function placeOf(
+  diagram: SequenceDiagram,
+  lines: string[],
+  place: SequencePlace,
+): { at: number; indent: string } | undefined {
+  const { events } = diagram;
+  if (place.into !== undefined) {
+    const frame = frameOf(diagram, place.into),
+      border = frame && [frame.start, ...frame.dividers][place.branch ?? 0];
+    if (!frame || !border) return undefined;
+    // As deep as the statement it comes to stand before, when the branch has one.
+    const next = events[events.indexOf(border) + 1],
+      outer = indentOf(lines[border.line - 1]),
+      inner = next ? indentOf(lines[next.line - 1]) : "";
+    return { at: border.line, indent: inner.length > outer.length ? inner : deeper(outer) };
+  }
+  const after = place.after !== undefined,
+    id = after ? place.after! : place.before;
+  if (id === undefined) return undefined;
+  const frame = frameOf(diagram, id);
+  if (frame)
+    return {
+      at: after ? frame.end.line : frame.start.line - 1,
+      indent: indentOf(lines[frame.start.line - 1]),
+    };
+  const index = events.findIndex(
+    (event) => (event.type === "message" || event.type === "note") && event.id === id,
+  );
+  if (index < 0) return undefined;
+  let line = events[index].line;
+  // The statement that creates or destroys a participant belongs to the message below it.
+  if (!after && ["create", "destroy"].includes(events[index - 1]?.type))
+    line = events[index - 1].line;
+  return { at: after ? line : line - 1, indent: indentOf(lines[events[index].line - 1]) };
+}
+
+/** Whether two diagrams hold the same statements in the same order, whatever they say. */
+const sameShape = (a: SequenceDiagram, b: SequenceDiagram) =>
+  a.events.map((event) => event.type).join() === b.events.map((event) => event.type).join() &&
+  columns(a).join("\n") === columns(b).join("\n");
+
 /**
  * Sends a message from one participant to another, or to itself, and returns the source with the
  * id the message has in it: messages are numbered in the order of the source, so one written in
- * the middle takes the number of the one that stood there. The message stands after the message
- * with the edge id `after`, in the fragment that one stands in, or else as the last statement of
- * the diagram, in no fragment. Its text is `message` unless a label is given.
+ * the middle takes the number of the one that stood there. The message stands at the place the
+ * options name: after or before a message, a note or a fragment, in the fragment and the branch
+ * that one stands in, or first in a branch of a fragment; or else as the last statement of the
+ * diagram, in no fragment. Its text is `message` unless a label is given.
  *
  * A note as one end is put over the participant at the other, and no message is returned. Parts
  * that are no participants are not sent to: the source stays as it is, with no message.
@@ -529,7 +617,7 @@ export function connectSequence(
   from: string,
   to: string,
   kind?: string,
-  options: { label?: string; after?: string; sign?: "+" | "-" | "" } = {},
+  options: SequencePlace & { label?: string; sign?: "+" | "-" | "" } = {},
 ): { source: string; edge: string } {
   const diagram = parseSequenceDiagram(source),
     lines = linesOf(source),
@@ -554,15 +642,10 @@ export function connectSequence(
       to: receiver,
       text: textOf(options.label ?? "message"),
     };
-  const anchor = options.after ? messageOf(diagram, options.after) : undefined;
-  let at = lines.length;
-  if (anchor) at = anchor.line;
-  else while (at > 0 && !lines[at - 1].trim()) at--;
-  lines.splice(
-    at,
-    0,
-    messageLine(anchor ? indentOf(lines[anchor.line - 1]) : topIndent(source, lines), parts),
-  );
+  const place = placeOf(diagram, lines, options);
+  let at = place?.at ?? lines.length;
+  if (!place) while (at > 0 && !lines[at - 1].trim()) at--;
+  lines.splice(at, 0, messageLine(place?.indent ?? topIndent(source, lines), parts));
   const result = lines.join("\n");
   try {
     const made = parseSequenceDiagram(result).events.find(
@@ -579,9 +662,64 @@ export function insertMessage(
   source: string,
   from: string,
   to: string,
-  options: { kind?: string; label?: string; after?: string } = {},
+  options: SequencePlace & { kind?: string; label?: string } = {},
 ): string {
   return connectSequence(source, from, to, options.kind, options).source;
+}
+
+/**
+ * Sends a message at a place: before or after the message, note or fragment the place names, where
+ * it takes that statement's place in its fragment and branch, or first in a branch of a fragment
+ * (`into`), also one that holds nothing yet. Without a place it is the last statement. Returns the
+ * source with the id the message has in it, empty with the source unchanged when it is not sent.
+ */
+export function insertMessageAt(
+  source: string,
+  from: string,
+  to: string,
+  kind?: string,
+  place: SequencePlace & { label?: string } = {},
+): { source: string; edge: string } {
+  return connectSequence(source, from, to, kind, place);
+}
+
+/**
+ * Adds a note over one participant or two, or beside one (`left of`, `right of`), at a place: after
+ * or before a message, a note or a fragment, or first in a branch of a fragment, and else as the
+ * last statement. Returns the id of the note, empty with the source unchanged when the
+ * participants are not ones a note can name.
+ */
+export function insertNote(
+  source: string,
+  note: SequencePlace & {
+    over: string[];
+    text?: string;
+    side?: "over" | "left of" | "right of";
+  },
+): { source: string; id: string } {
+  const diagram = parseSequenceDiagram(source),
+    lines = linesOf(source),
+    who = [...new Set(note.over.map((id) => participantOf(diagram, id)))],
+    side = note.side ?? "over",
+    none = { source, id: "" };
+  if (!who.length || who.includes(null) || who.length > (side === "over" ? 2 : 1)) return none;
+  const place = placeOf(diagram, lines, note);
+  let at = place?.at ?? lines.length;
+  if (!place) while (at > 0 && !lines[at - 1].trim()) at--;
+  lines.splice(
+    at,
+    0,
+    `${place?.indent ?? topIndent(source, lines)}note ${side} ${who.join(",")}: ${textOf(note.text ?? "") || "Note"}`,
+  );
+  const result = lines.join("\n");
+  try {
+    const made = parseSequenceDiagram(result).events.find(
+      (event) => event.type === "note" && event.line === at + 1,
+    );
+    return made?.type === "note" ? { source: result, id: made.id } : none;
+  } catch {
+    return none;
+  }
 }
 
 /**
@@ -624,19 +762,18 @@ export function messageContext(
 }
 
 /**
- * Moves a message one statement up (`-1`) or down (`1`): it changes places with the message, note
- * or activation beside it, or steps over the line that opens, divides or closes a fragment, into or
- * out of it. The source stays as it is where that is not defined: beside a declaration, a box or
- * the header, for the message that creates or destroys a participant, and when the activations
- * would no longer match.
+ * Moves the statement of a line (from 1), a message or a note, one statement up (`-1`) or down
+ * (`1`), and says on which line it stands afterwards. Nothing where the move is not defined.
  */
-export function moveMessage(source: string, edge: string, delta: -1 | 1): string {
+function step(
+  source: string,
+  line: number,
+  delta: -1 | 1,
+): { source: string; line: number } | null {
   const diagram = parseSequenceDiagram(source),
     lines = linesOf(source),
-    message = messageOf(diagram, edge);
-  if (!message) return source;
-  const statements = scan(source).lines,
-    at = statements.findIndex((item) => item.line === message.line),
+    statements = scan(source).lines,
+    at = statements.findIndex((item) => item.line === line),
     eventAt = (position: number) =>
       diagram.events.find((event) => event.line === statements[position]?.line);
   const beside = eventAt(at + delta),
@@ -645,9 +782,8 @@ export function moveMessage(source: string, edge: string, delta: -1 | 1): string
       return event?.type === "create" || event?.type === "destroy";
     };
   // A `create` or `destroy` and the message below it belong together.
-  if (!beside || bound(at + delta) || bound(at - 1) || (delta === -1 && bound(at - 2)))
-    return source;
-  const here = message.line - 1,
+  if (!beside || bound(at + delta) || bound(at - 1) || (delta === -1 && bound(at - 2))) return null;
+  const here = line - 1,
     there = beside.line - 1,
     own = lines[here].trim();
   let indent = indentOf(lines[here]);
@@ -663,12 +799,127 @@ export function moveMessage(source: string, edge: string, delta: -1 | 1): string
   lines[here] = lines[there];
   lines[there] = indent + own;
   const moved = lines.join("\n");
-  try {
-    parseSequenceDiagram(moved);
-  } catch {
-    return source;
+  return parses(moved) ? { source: moved, line: there + 1 } : null;
+}
+
+/**
+ * Moves a message one statement up (`-1`) or down (`1`): it changes places with the message, note
+ * or activation beside it, or steps over the line that opens, divides or closes a fragment, into or
+ * out of it. Messages are numbered in the order of the source, so the message may have another id
+ * afterwards: the one returned. The source and the id stay as they are where the move is not
+ * defined: beside a declaration, a box or the header, for the message that creates or destroys a
+ * participant, and when the activations would no longer match.
+ */
+export function moveMessageTo(
+  source: string,
+  edge: string,
+  delta: -1 | 1,
+): { source: string; edge: string } {
+  const message = messageOf(parseSequenceDiagram(source), edge),
+    moved = message && step(source, message.line, delta),
+    now =
+      moved &&
+      parseSequenceDiagram(moved.source).events.find(
+        (event) => event.type === "message" && event.line === moved.line,
+      );
+  return moved && now?.type === "message"
+    ? { source: moved.source, edge: now.id }
+    : { source, edge };
+}
+
+/** Moves a message as `moveMessageTo` does, and returns the source alone. */
+export function moveMessage(source: string, edge: string, delta: -1 | 1): string {
+  return moveMessageTo(source, edge, delta).source;
+}
+
+/**
+ * Moves a note one statement up (`-1`) or down (`1`), the way `moveMessageTo` moves a message:
+ * past the statement beside it, or over the border of a fragment. Returns the id the note has
+ * afterwards, which is another one when it passes a note.
+ */
+export function moveNote(
+  source: string,
+  id: string,
+  delta: -1 | 1,
+): { source: string; id: string } {
+  const note = noteOf(parseSequenceDiagram(source), id),
+    moved = note && step(source, note.line, delta),
+    now =
+      moved &&
+      parseSequenceDiagram(moved.source).events.find(
+        (event) => event.type === "note" && event.line === moved.line,
+      );
+  return moved && now?.type === "note" ? { source: moved.source, id: now.id } : { source, id };
+}
+
+/**
+ * Moves a fragment with all it holds one statement up (`-1`) or down (`1`): past the message, note
+ * or activation beside it, or over the border of a fragment beside or around it, into or out of
+ * it. Returns the id the fragment has afterwards: fragments are numbered in the order of the
+ * source. The source and the id stay as they are where the move is not defined.
+ */
+export function moveFragment(
+  source: string,
+  id: string,
+  delta: -1 | 1,
+): { source: string; id: string } {
+  const diagram = parseSequenceDiagram(source),
+    frame = frameOf(diagram, id),
+    same = { source, id };
+  if (!frame) return same;
+  const lines = linesOf(source),
+    statements = scan(source).lines,
+    open = frame.start.line - 1,
+    close = frame.end.line - 1,
+    eventAt = (position: number) =>
+      diagram.events.find((event) => event.line === statements[position]?.line),
+    edge = statements.findIndex((item) => item.line === (delta === 1 ? close : open) + 1),
+    beside = eventAt(edge + delta),
+    bound = (event: ReturnType<typeof eventAt>) =>
+      event?.type === "create" || event?.type === "destroy";
+  if (!beside || bound(beside) || (delta === -1 && bound(eventAt(edge - 2)))) return same;
+  const there = beside.line - 1,
+    own = indentOf(lines[open]),
+    border = indentOf(lines[there]);
+  let indent = own;
+  if (beside.type === "start" || beside.type === "end") {
+    if ((beside.type === "start") === (delta === 1)) {
+      const next = statements[edge + 2 * delta],
+        inner = next ? indentOf(lines[next.line - 1]) : "";
+      indent = inner.length > border.length ? inner : deeper(border);
+    } else indent = border;
   }
-  return moved;
+  const block = lines
+      .slice(open, close + 1)
+      .map((line) => (line.startsWith(own) ? indent + line.slice(own.length) : line)),
+    passed = lines[there],
+    result = (
+      delta === 1
+        ? [
+            ...lines.slice(0, open),
+            passed,
+            ...lines.slice(close + 1, there),
+            ...block,
+            ...lines.slice(there + 1),
+          ]
+        : [
+            ...lines.slice(0, there),
+            ...block,
+            ...lines.slice(there + 1, open),
+            passed,
+            ...lines.slice(close + 1),
+          ]
+    ).join("\n"),
+    at = delta === 1 ? there - (close - open) : there;
+  try {
+    const moved = parseSequenceDiagram(result),
+      now = moved.events.find((event) => event.type === "start" && event.line === at + 1);
+    return now?.type === "start" && moved.events.length === diagram.events.length
+      ? { source: result, id: now.id }
+      : same;
+  } catch {
+    return same;
+  }
 }
 
 /**
@@ -677,8 +928,8 @@ export function moveMessage(source: string, edge: string, delta: -1 | 1): string
  * and a participant that only messages name is declared where it first stands, so the columns keep
  * their order. An empty name removes the alias, which leaves the id as the name. A note gets the
  * name as its text, and keeps the text it has when the name is empty. A fragment gets it as its
- * condition, the text after its keyword; the keyword it is labelled with (`alt is sick`) is not
- * part of the condition and is left out when the name opens with it. A `rect` has none.
+ * condition, the text after its keyword; the keyword stays, and `setFragmentKind` changes it. A
+ * `rect` has no condition.
  */
 export function renameSequence(source: string, id: string, label: string): string {
   const diagram = parseSequenceDiagram(source),
@@ -690,23 +941,16 @@ export function renameSequence(source: string, id: string, label: string): strin
     const index = (note ?? fragment)!.line - 1,
       statement = lines[index].trim(),
       parts = statement.match(NOTE),
-      keyword = statement.match(/^\w+/)![0],
-      condition =
-        text === keyword
-          ? ""
-          : text.startsWith(`${keyword} `)
-            ? text.slice(keyword.length + 1)
-            : text;
+      keyword = statement.match(/^\w+/)![0];
     if (note ? !parts || !text : keyword === "rect") return source;
     lines[index] =
       indentOf(lines[index]) +
       (note
         ? `${parts![1]}${parts![2]}${parts![3]} ${text}`
-        : `${keyword}${condition ? ` ${condition.trim()}` : ""}`);
+        : `${keyword}${text ? ` ${text}` : ""}`);
     const result = lines.join("\n");
     try {
-      const read = parseSequenceDiagram(result);
-      return read.events.length === diagram.events.length ? result : source;
+      return sameShape(parseSequenceDiagram(result), diagram) ? result : source;
     } catch {
       return source;
     }
@@ -1001,8 +1245,10 @@ function withParticipant(text: string, from: string, to: string): string {
 
 /**
  * Gives a participant another id, on every line that mentions it: its declarations, its messages,
- * its notes, its activations and its links. The source stays as it is when the id cannot be one or
- * another participant has it.
+ * its notes, its activations and its links. A name that is the new id itself is not written
+ * beside it (`participant Shop`, not `participant Shop as Shop`). The source stays as it is when
+ * the id cannot be one or another participant has it, and for what is no participant: a box, a
+ * note, a fragment.
  */
 export function renameParticipantId(source: string, id: string, newId: string): string {
   const diagram = parseSequenceDiagram(source),
@@ -1020,10 +1266,31 @@ export function renameParticipantId(source: string, id: string, newId: string): 
   const result = lines.join("\n"),
     wanted = columns(diagram).map((item) => (item === who ? newId : item));
   try {
-    return columns(parseSequenceDiagram(result)).join("\n") === wanted.join("\n") ? result : source;
+    const renamed = parseSequenceDiagram(result);
+    if (columns(renamed).join("\n") !== wanted.join("\n")) return source;
+    return renamed.participants.get(newId)!.label === newId &&
+      declarations(result).some((item) => item.id === newId && item.alias !== undefined)
+      ? renameSequence(result, `head:${newId}`, newId)
+      : result;
   } catch {
     return source;
   }
+}
+
+/**
+ * Whether a participant goes by an id that an edit made up and its first name may replace:
+ * `participant1` and `actor1` as a new one gets them, and the id of a copy (`Shop2` beside `Shop`)
+ * while the copy still shows the name of its original or its own id.
+ */
+export function isGeneratedParticipantId(source: string, id: string): boolean {
+  const diagram = parseSequenceDiagram(source),
+    who = participantOf(diagram, id);
+  if (who === null) return false;
+  if (/^(?:participant|actor)\d+$/.test(who)) return true;
+  const copy = who.match(/^(.+?)(\d+)$/),
+    original = copy && Number(copy[2]) > 1 ? diagram.participants.get(copy[1]) : undefined,
+    { label } = diagram.participants.get(who)!;
+  return !!original && (label === who || label === original.label);
 }
 
 /** A name as an id: its words run together, each after the first with a capital. */
@@ -1035,8 +1302,9 @@ function idFrom(name: string): string {
 }
 
 /**
- * Gives a part that was just added its first name. A participant that was added under a generated
- * id (`participant1`, `actor1`) takes its id from the name, on every line that mentions it: the
+ * Gives a part that was just added its first name. A participant that goes by a generated id
+ * (`participant1`, `actor1`, the `Shop2` of a copy; see `isGeneratedParticipantId`) takes its id
+ * from the name, on every line that mentions it: the
  * name itself where it can be an id (`participant Cart`), else its words run together
  * (`participant WebShop as Web shop`). Where that gives no id, or one that is taken, and for every
  * other part, the name is written as `renameSequence` writes it. Returns the id the part has
@@ -1050,7 +1318,7 @@ export function retitleSequence(
   const who = participantOf(parseSequenceDiagram(source), id.startsWith("head:") ? id : ""),
     title = name.trim(),
     wanted = canBeId(title) ? title : idFrom(title);
-  if (who !== null && /^(?:participant|actor)\d+$/.test(who) && wanted.length <= 24) {
+  if (who !== null && isGeneratedParticipantId(source, id) && wanted.length <= 24) {
     const renamed = renameParticipantId(source, id, wanted);
     if (renamed !== source)
       return { source: renameSequence(renamed, `head:${wanted}`, name), id: `head:${wanted}` };
@@ -1144,6 +1412,268 @@ export function wrapMessages(
   }
 }
 
+/** The keyword of a fragment (`alt`, `opt`, `loop`, `par`, `critical`, `break`, `rect`); empty for what is none. */
+export function fragmentKind(source: string, id: string): string {
+  return frameOf(parseSequenceDiagram(source), id)?.start.kind ?? "";
+}
+
+/**
+ * The kinds a fragment can become: every kind for one with a single branch, and for one that is
+ * divided the kinds that have branches (`alt`, `par`, `critical`). A `rect` stays one.
+ */
+export function fragmentKinds(source: string, id: string): string[] {
+  const frame = frameOf(parseSequenceDiagram(source), id);
+  if (!frame) return [];
+  if (frame.start.kind === "rect") return ["rect"];
+  return frame.dividers.length ? FRAGMENTS.filter((kind) => DIVIDERS[kind]) : FRAGMENTS;
+}
+
+/**
+ * Makes a fragment one of another kind: its keyword changes and its condition stays. The lines
+ * that divide it change with it (`else` of an `alt`, `and` of a `par`, `option` of a `critical`);
+ * a divided fragment does not become a kind without branches, and the source stays as it is.
+ */
+export function setFragmentKind(source: string, id: string, kind: string): string {
+  const diagram = parseSequenceDiagram(source),
+    frame = frameOf(diagram, id),
+    lines = linesOf(source);
+  if (!frame || kind === frame.start.kind || !fragmentKinds(source, id).includes(kind))
+    return source;
+  const keyword = (line: number, word: string) => {
+    lines[line - 1] = lines[line - 1].replace(/^(\s*)\w+/, (_, indent: string) => indent + word);
+  };
+  keyword(frame.start.line, kind);
+  for (const divider of frame.dividers) keyword(divider.line, DIVIDERS[kind]!);
+  const result = lines.join("\n");
+  try {
+    return sameShape(parseSequenceDiagram(result), diagram) ? result : source;
+  } catch {
+    return source;
+  }
+}
+
+/**
+ * The branches of a fragment with the text each is labelled with: the first is the fragment's
+ * own condition, the others stand on the lines that divide it. Empty for what is no fragment.
+ */
+export function fragmentBranches(source: string, id: string): { label: string }[] {
+  const frame = frameOf(parseSequenceDiagram(source), id);
+  return frame
+    ? [frame.start, ...frame.dividers].map((event) => ({
+        label: "text" in event ? event.text : "",
+      }))
+    : [];
+}
+
+/**
+ * Gives a branch of a fragment another text, by its place in `fragmentBranches`: the first is the
+ * condition of the fragment, as `renameSequence` writes it. An empty text leaves the keyword alone.
+ */
+export function setFragmentBranch(
+  source: string,
+  id: string,
+  index: number,
+  label: string,
+): string {
+  const diagram = parseSequenceDiagram(source),
+    divider = frameOf(diagram, id)?.dividers[index - 1],
+    lines = linesOf(source);
+  if (index === 0) return renameSequence(source, id, label);
+  if (!divider || divider.type !== "else") return source;
+  const text = textOf(label);
+  lines[divider.line - 1] =
+    `${indentOf(lines[divider.line - 1])}${divider.kind}${text ? ` ${text}` : ""}`;
+  const result = lines.join("\n");
+  try {
+    return sameShape(parseSequenceDiagram(result), diagram) ? result : source;
+  } catch {
+    return source;
+  }
+}
+
+/**
+ * Divides a fragment once more: a line with the keyword of its kind (`else`, `and`, `option`) and
+ * a text stands before its `end`, and opens a branch that holds nothing yet; `insertMessageAt`
+ * with `into` and the number of the branch puts a message there. The source stays as it is for a
+ * fragment of a kind that has one branch.
+ */
+export function addFragmentBranch(source: string, id: string, label: string): string {
+  const frame = frameOf(parseSequenceDiagram(source), id),
+    word = frame && DIVIDERS[frame.start.kind],
+    lines = linesOf(source);
+  if (!frame || !word) return source;
+  const text = textOf(label);
+  lines.splice(
+    frame.end.line - 1,
+    0,
+    `${indentOf(lines[frame.start.line - 1])}${word}${text ? ` ${text}` : ""}`,
+  );
+  const result = lines.join("\n");
+  return parses(result) ? result : source;
+}
+
+/**
+ * Takes a line that divides a fragment away, by the place of its branch in `fragmentBranches`
+ * (from 1): what the branch holds joins the branch before it.
+ */
+export function removeFragmentBranch(source: string, id: string, index: number): string {
+  const divider = frameOf(parseSequenceDiagram(source), id)?.dividers[index - 1];
+  if (!divider) return source;
+  const result = linesOf(source)
+    .filter((_, at) => at !== divider.line - 1)
+    .join("\n");
+  return parses(result) ? result : source;
+}
+
+/**
+ * Turns a message round: its sender and its receiver change places, its arrow and its text stay.
+ * An activation it opens or closes stays where the bars still match, and else goes with its other
+ * end. Its id stays, as its place does.
+ */
+export function reverseMessage(source: string, edge: string): string {
+  const turned = (text: string): string => {
+    const lines = linesOf(text),
+      message = messageOf(parseSequenceDiagram(text), edge),
+      parts = message && messageParts(lines[message.line - 1]);
+    if (!message || !parts) return text;
+    // The sender carries the space before the arrow.
+    const gap = parts.from.match(/\s*$/)![0];
+    lines[message.line - 1] = messageLine(indentOf(lines[message.line - 1]), {
+      ...parts,
+      from: parts.to.trim() + gap,
+      to: parts.from.trim(),
+      text: parts.text?.trim(),
+    });
+    return lines.join("\n");
+  };
+  const message = messageOf(parseSequenceDiagram(source), edge);
+  if (!message) return source;
+  const result = turned(source);
+  if (parses(result)) return result;
+  if (!message.activate && !message.deactivate) return source;
+  const plain = turned(toggleActivation(source, edge));
+  return parses(plain) ? plain : source;
+}
+
+/**
+ * Makes a participant an actor, drawn as a stick figure, or a participant, drawn as a box: every
+ * declaration of it gets the keyword, and one that only messages name is declared first.
+ */
+export function setParticipantKind(
+  source: string,
+  id: string,
+  kind: "participant" | "actor",
+): string {
+  const before = parseSequenceDiagram(source),
+    who = participantOf(before, id);
+  if (who === null || before.participants.get(who)!.actor === (kind === "actor")) return source;
+  const ready = pinned(source, who),
+    lines = linesOf(ready);
+  for (const item of declarations(ready))
+    if (item.id === who)
+      lines[item.index] = lines[item.index].replace(
+        /^(\s*(?:create\s+)?)(?:participant|actor)\b/,
+        (_, head: string) => head + kind,
+      );
+  const result = lines.join("\n");
+  try {
+    const now = parseSequenceDiagram(result);
+    return now.participants.get(who)?.actor === (kind === "actor") &&
+      columns(now).join("\n") === columns(before).join("\n")
+      ? result
+      : source;
+  } catch {
+    return source;
+  }
+}
+
+/**
+ * Adds a copy of a participant in the column after it: the same kind and name under an id of its
+ * own (`Shop2`), in its box, with none of its messages. Returns the id of the copy's node, empty
+ * for what is no participant.
+ */
+export function duplicateParticipant(source: string, id: string): { source: string; id: string } {
+  const diagram = parseSequenceDiagram(source),
+    who = participantOf(diagram, id),
+    none = { source, id: "" };
+  if (who === null) return none;
+  const item = diagram.participants.get(who)!,
+    added = insertParticipant(source, {
+      kind: item.actor ? "actor" : "participant",
+      label: item.label,
+      after: `head:${who}`,
+    });
+  if (!added.id) return none;
+  let copy = "";
+  for (let count = 2; !copy; count++)
+    if (canBeId(`${who}${count}`) && !diagram.participants.has(`${who}${count}`))
+      copy = `${who}${count}`;
+  const renamed = renameParticipantId(added.source, added.id, copy);
+  if (renamed === added.source) return added;
+  // A participant without a name of its own shows its id, and so does its copy.
+  return {
+    source: item.label === who ? renameSequence(renamed, `head:${copy}`, "") : renamed,
+    id: `head:${copy}`,
+  };
+}
+
+/**
+ * Why two parts are not joined by a message, in words for the user; undefined when
+ * `connectSequence` joins them. A message runs between two participants, and a note is put over
+ * a participant.
+ */
+export function whyNotSequence(
+  source: string,
+  from: string,
+  to: string,
+  kind?: string,
+): string | undefined {
+  const diagram = parseSequenceDiagram(source),
+    ends = [from, to],
+    notes = ends.filter((id) => noteOf(diagram, id)).length,
+    participants = ends.filter((id) => participantOf(diagram, id) !== null).length;
+  if (notes === 2) return "A note is put over a participant, not on another note.";
+  if (notes === 1 && participants === 1) return undefined;
+  if (participants < 2)
+    return notes
+      ? "A note is put over a participant: drag it to a lifeline."
+      : "A message runs between two participants: from a lifeline to a lifeline.";
+  if (kind !== undefined && !ARROWS.some(([name]) => name === kind))
+    return "There is no message of that kind.";
+  return connectSequence(source, from, to, kind).edge
+    ? undefined
+    : "That message cannot be written here.";
+}
+
+/**
+ * Adds a piece at a part and says what it wrote: the id of the piece, and the id of the message
+ * that joins it to the part when there is one. A participant or an actor stands in the column
+ * after the participant `at` (or in the box `at`) and, with a `link`, gets a message of that kind
+ * from it; a note stands over the participant or after the message `at`; a fragment frames the
+ * message `at`; a box frames the participant `at`. The id is empty, with the source unchanged,
+ * where `addSequencePiece` has no place for the piece.
+ */
+export function attachSequence(
+  source: string,
+  piece: { kind: string; label?: string },
+  at: string,
+  link?: string,
+): { source: string; id: string; edge: string } {
+  const added = addSequencePiece(source, {
+    kind: piece.kind as SequencePiece,
+    label: piece.label,
+    parent: at,
+  });
+  if (!added.id) return { source, id: "", edge: "" };
+  const sends =
+    link !== undefined &&
+    (piece.kind === "participant" || piece.kind === "actor") &&
+    participantOf(parseSequenceDiagram(source), at.startsWith("head:") ? at : "") !== null;
+  if (!sends) return { ...added, edge: "" };
+  const sent = connectSequence(added.source, at, added.id, link);
+  return { source: sent.source, id: added.id, edge: sent.edge };
+}
+
 /**
  * Sets or takes away the activation bar a message opens on its receiver. Without one, the message
  * gets the `+` and the reply to it (the next dashed message from its receiver back to its sender)
@@ -1220,6 +1750,12 @@ export function setAutonumber(source: string, on: boolean): string {
   return parses(result) ? result : source;
 }
 
+/** Whether the messages are numbered: the source says `autonumber`, and not `autonumber off`. */
+export function hasAutonumber(source: string): boolean {
+  const numbering = scan(source).lines.filter((item) => /^autonumber\b/.test(item.text));
+  return numbering.length > 0 && !numbering.some((item) => /\boff$/.test(item.text));
+}
+
 /**
  * What a removal takes with it, in words: the names of the participants that go, and how many
  * messages, notes, fragments and boxes go with them, as in `Alice, 8 messages, 2 fragments`.
@@ -1246,8 +1782,9 @@ export function removalSummary(source: string, ids: Iterable<string>): string {
 /**
  * Sequence diagrams as a structure a canvas edits. The parts are the participants, the boxes that
  * group them, the notes and the fragments, a group each that holds the notes and fragments inside
- * it; the joins are the messages. A fragment is no piece to add: `wrapMessages` frames messages in
- * one, and its kind is `fragment`.
+ * it; the joins are the messages. A fragment reads as the kind `fragment` with its condition as
+ * its label; `fragmentKind` gives its keyword. The pieces `alt`, `opt` and `loop` frame the
+ * message they are added at, as `wrapMessages` frames a run of them.
  */
 export const sequenceStructure: Structure = {
   pieces: [
@@ -1257,9 +1794,30 @@ export const sequenceStructure: Structure = {
     {
       kind: "note",
       name: "Note",
-      about: "A remark over a participant",
+      about: "A remark over a participant, or after a message",
       joins: "after",
       joinsTo: ["participant", "actor"],
+      named: true,
+    },
+    {
+      kind: "alt",
+      name: "Alternative",
+      about: "Messages that are sent under a condition, and others when it does not hold",
+      group: true,
+      named: true,
+    },
+    {
+      kind: "opt",
+      name: "Option",
+      about: "Messages that are sent only under a condition",
+      group: true,
+      named: true,
+    },
+    {
+      kind: "loop",
+      name: "Loop",
+      about: "Messages that are sent again and again",
+      group: true,
       named: true,
     },
   ],
@@ -1298,7 +1856,7 @@ export const sequenceStructure: Structure = {
       if (event.type !== "note" && event.type !== "start") continue;
       nodes.push({
         id: event.id,
-        label: event.type === "note" ? event.text : `${event.kind} ${event.text}`.trim(),
+        label: event.text,
         parent: open.at(-1) ?? null,
         line: event.line,
         group: event.type === "start",

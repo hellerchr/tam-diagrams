@@ -1,21 +1,27 @@
 import { describe, expect, it } from "vitest";
 import { arialMeasure } from "../src/arial-measure.ts";
 import { parseUml } from "../src/index.ts";
-import { startsOf, syntaxRows, thumbOf } from "../editor/dialogs.ts";
+import { findCommands, startsOf, syntaxRows, thumbOf } from "../editor/dialogs.ts";
 import { Doc } from "../editor/document.ts";
 import {
+  ageOf,
   diagramIn,
   extensionOf,
   fileStem,
   readRecents,
+  Replacements,
+  shortHash,
   stemOf,
   withBackground,
+  withMargin,
+  withoutHalos,
   withRecent,
 } from "../editor/files.ts";
+import type { Command } from "../editor/menus.ts";
 import { type MenuItem, refusal } from "../editor/menu.ts";
 import { STARTER } from "../editor/starter.ts";
 import { TYPES, typeInfo } from "../editor/types.ts";
-import { wheelZoom, ZOOM_LEVELS, zoomLevel } from "../editor/view.ts";
+import { panTo, wheelZoom, ZOOM_LEVELS, zoomLevel } from "../editor/view.ts";
 
 describe("the name a diagram is saved under", () => {
   it("keeps the letters of every script and drops what is neither a letter nor a digit", () => {
@@ -125,6 +131,48 @@ describe("an exported picture", () => {
 
   it("leaves a text without a view box as it is", () => {
     expect(withBackground("<svg></svg>", "#fff")).toBe("<svg></svg>");
+    expect(withMargin("<svg></svg>", 16)).toBe("<svg></svg>");
+  });
+
+  const colors = {
+    background: "#ffffff",
+    text: "#1b1c1f",
+    secondary: "#3f4146",
+    series: ["#2a78d6"],
+    font: "Arial, sans-serif",
+    dark: false,
+  };
+
+  it("gets room around it, which the background fills too", async () => {
+    const doc = new Doc(arialMeasure);
+    await doc.open(STARTER);
+    const svg = doc.svg(colors)!,
+      { x, y, width, height } = doc.picture!.scene.bounds,
+      roomy = withMargin(svg, 16);
+    expect(roomy).toContain(
+      `viewBox="${x - 16} ${y - 16} ${width + 32} ${height + 32}" width="${width + 32}" height="${height + 32}"`,
+    );
+    expect(withBackground(roomy, "#ffffff")).toContain(
+      `<rect x="${x - 16}" y="${y - 16}" width="${width + 32}" height="${height + 32}" fill="#ffffff"/>`,
+    );
+    expect(withMargin(svg, 0)).toBe(svg);
+    // Nothing but the frame changed.
+    expect(roomy.slice(roomy.indexOf("role="))).toBe(svg.slice(svg.indexOf("role=")));
+  });
+
+  it("has no outline in the page color around its labels when nothing is behind it", async () => {
+    const doc = new Doc(arialMeasure);
+    await doc.open(STARTER);
+    const svg = doc.svg(colors)!,
+      bare = withoutHalos(svg, "#ffffff");
+    expect(svg).toContain('stroke="#ffffff" stroke-width="7"');
+    expect(bare).not.toMatch(/<text[^>]*stroke="#ffffff"/);
+    // The texts are all still there, and nothing else lost its stroke.
+    expect(bare.match(/<text/g)).toHaveLength(svg.match(/<text/g)!.length);
+    expect(bare.replace(/<text[^>]*>/g, "")).toBe(svg.replace(/<text[^>]*>/g, ""));
+    expect(
+      new DOMParser().parseFromString(bare, "image/svg+xml").querySelector("parsererror"),
+    ).toBeNull();
   });
 });
 
@@ -141,12 +189,182 @@ describe("the diagrams on show lately", () => {
     expect(readRecents(JSON.stringify(list))).toEqual(list);
   });
 
+  it("keeps every untitled diagram of a type by its text, and one with a title by that", () => {
+    const untitled = (source: string) => ({ title: "Sequence diagram", source, named: false });
+    let list = withRecent([], untitled("sequenceDiagram\n  A->>B: one"));
+    list = withRecent(list, untitled("sequenceDiagram\n  A->>B: two"));
+    expect(list).toHaveLength(2);
+    // The same text again is the same diagram: it moves to the head.
+    list = withRecent(list, untitled("sequenceDiagram\n  A->>B: one"));
+    expect(list.map((recent) => recent.source.slice(-3))).toEqual(["one", "two"]);
+    // A title names one diagram of a type, however its text changed; another type is another diagram.
+    list = withRecent(list, { title: "Shop", source: "title Shop\nagent a[A]", named: true });
+    list = withRecent(list, { title: "Shop", source: "title Shop\nagent b[B]", named: true });
+    list = withRecent(list, {
+      title: "Shop",
+      source: "---\ntitle: Shop\n---\nsequenceDiagram\n  A->>B: hi",
+      named: true,
+    });
+    expect(list.map((recent) => recent.title)).toEqual([
+      "Shop",
+      "Shop",
+      "Sequence diagram",
+      "Sequence diagram",
+    ]);
+    expect(list[1].source).toBe("title Shop\nagent b[B]");
+  });
+
+  it("says how long ago a diagram was on show", () => {
+    const now = 1_000_000_000;
+    expect(ageOf(undefined, now)).toBe("");
+    expect(ageOf(now - 20_000, now)).toBe("just now");
+    expect(ageOf(now - 5 * 60_000, now)).toBe("5 min ago");
+    expect(ageOf(now - 3 * 3_600_000, now)).toBe("3 h ago");
+    expect(ageOf(now - 50 * 3_600_000, now)).toBe("2 d ago");
+    expect(shortHash("agent a[A]")).toBe(shortHash("agent a[A]"));
+    expect(shortHash("agent a[A]")).not.toBe(shortHash("agent a[B]"));
+  });
+
   it("reads nothing from what is not a list of diagrams", () => {
     expect(readRecents("{")).toEqual([]);
     expect(readRecents('{"title":"a"}')).toEqual([]);
     expect(readRecents('[{"title":"a"},{"title":"b","source":"agent b[B]"},null]')).toEqual([
       { title: "b", source: "agent b[B]" },
     ]);
+  });
+});
+
+describe("the file of a diagram", () => {
+  const now = (file: string | undefined, saved = true) => ({ file, saved });
+
+  it("comes back with its diagram when Undo and Redo cross a replacement", () => {
+    const swaps = new Replacements<string>();
+    // "win" from copy.tam is replaced by "bee", which is then opened from b.tam.
+    swaps.add("win", "bee", now("copy.tam"));
+    expect(swaps.cross("win", "bee", now("copy.tam"))).toEqual(now(undefined));
+    expect(swaps.cross("bee", "win", now("b.tam"), "undo")).toEqual(now("copy.tam"));
+    expect(swaps.cross("win", "bee", now("copy.tam"), "redo")).toEqual(now("b.tam"));
+    // What was saved to another file, or changed, in between is what comes back.
+    expect(swaps.cross("bee", "win", now("c.tam", false), "undo")).toEqual(now("copy.tam"));
+    expect(swaps.cross("win", "bee", now(undefined), "redo")).toEqual(now("c.tam", false));
+  });
+
+  it("stays through the steps within one diagram", () => {
+    const swaps = new Replacements<string>();
+    swaps.add("a", "b", now("a.tam"));
+    swaps.cross("a", "b", now("a.tam"));
+    expect(swaps.cross("b", "b2", now("b.tam"))).toBeUndefined();
+    expect(swaps.cross("b2", "b", now("b.tam"), "undo")).toBeUndefined();
+    expect(swaps.cross("b", "b2", now("b.tam"), "redo")).toBeUndefined();
+    expect(swaps.cross("b2", "b", now("b.tam"), "undo")).toBeUndefined();
+    expect(swaps.cross("b", "a", now("b.tam"), "undo")).toEqual(now("a.tam"));
+  });
+
+  it("tells two replacements between the same sources apart", () => {
+    const swaps = new Replacements<string>();
+    // A diagram without a file, then one from w.tam, then the first again from b.tam.
+    swaps.add("bee", "win", now(undefined, false));
+    swaps.cross("bee", "win", now(undefined, false));
+    swaps.add("win", "bee", now("w.tam"));
+    swaps.cross("win", "bee", now("w.tam"));
+    expect(swaps.cross("bee", "win", now("b.tam"), "undo")).toEqual(now("w.tam"));
+    expect(swaps.cross("win", "bee", now("w.tam"), "undo")).toEqual(now(undefined, false));
+    expect(swaps.cross("bee", "win", now(undefined, false), "redo")).toEqual(now("w.tam"));
+    expect(swaps.cross("win", "bee", now("w.tam"), "redo")).toEqual(now("b.tam"));
+  });
+
+  it("forgets the replacements Redo could take once the diagram is edited", () => {
+    const swaps = new Replacements<string>();
+    swaps.add("a", "b", now("a.tam"));
+    swaps.cross("a", "b", now("a.tam"));
+    swaps.cross("b", "a", now("b.tam"), "undo");
+    expect(swaps.cross("a", "a2", now("a.tam"))).toBeUndefined();
+    // Typing the other diagram is no replacement.
+    expect(swaps.cross("a2", "a", now("a.tam"))).toBeUndefined();
+    expect(swaps.cross("a", "b", now("a.tam"))).toBeUndefined();
+  });
+});
+
+describe("the list of all commands", () => {
+  const command = (name: string, path: string, off?: string): Command => ({
+    name,
+    path,
+    off,
+    run: () => {},
+  });
+  const commands = [
+    command("New…", "File"),
+    command("Open…", "File"),
+    command("Recent one", "File ▸ Open recent"),
+    command("Copy shop", "File ▸ Open example ▸ Block diagram"),
+    command("Save", "File"),
+    command("Export SVG…", "File"),
+    command("Copy source", "File"),
+    command("Undo", "Edit"),
+    command("Redo", "Edit", "There is nothing to redo"),
+    command("Copy", "Edit", "Select an element"),
+    command("Zoom in", "View"),
+    command("Dark", "View ▸ Theme"),
+    command("Add agent", "Shapes"),
+  ];
+  const names = (typed: string) => findCommands(commands, typed).map(({ name }) => name);
+
+  it("starts with the commands asked for most, and ends with the diagrams to open", () => {
+    expect(names("")).toEqual([
+      "Save",
+      "Undo",
+      "Redo",
+      "New…",
+      "Open…",
+      "Export SVG…",
+      "Copy source",
+      "Copy",
+      "Zoom in",
+      "Dark",
+      "Add agent",
+      "Recent one",
+      "Copy shop",
+    ]);
+    expect(names("  ")).toHaveLength(commands.length);
+  });
+
+  it("puts the command of the very name first, though it is off", () => {
+    expect(names("copy")).toEqual(["Copy", "Copy source", "Copy shop"]);
+    expect(names("COPY S")).toEqual(["Copy source", "Copy shop"]);
+    expect(names("new")).toEqual(["New…"]);
+  });
+
+  it("finds by the words of the name and of the menu, in any order", () => {
+    expect(names("theme dark")).toEqual(["Dark"]);
+    expect(names("agent")).toEqual(["Add agent"]);
+    // A name that starts with what was typed, then the commands that can be run, then the diagrams.
+    expect(names("o")).toEqual([
+      "Open…",
+      "Export SVG…",
+      "Copy source",
+      "Undo",
+      "Zoom in",
+      "Redo",
+      "Copy",
+      "Recent one",
+      "Copy shop",
+    ]);
+    expect(names("nothing of the kind")).toEqual([]);
+  });
+});
+
+describe("bringing a box into view", () => {
+  const frame = { x: 0, y: 0, width: 500, height: 400 };
+
+  it("moves the least that shows the box whole", () => {
+    expect(panTo({ x: 10, y: 10, width: 100, height: 40 }, frame)).toBeUndefined();
+    expect(panTo({ x: 450, y: 10, width: 100, height: 40 }, frame)).toEqual({ x: -50, y: 0 });
+    expect(panTo({ x: -30, y: 380, width: 100, height: 40 }, frame)).toEqual({ x: 30, y: -20 });
+  });
+
+  it("shows the start of a box longer than the frame, and leaves one that fills it", () => {
+    expect(panTo({ x: 100, y: 0, width: 800, height: 40 }, frame)).toEqual({ x: -100, y: 0 });
+    expect(panTo({ x: -100, y: 0, width: 800, height: 40 }, frame)).toBeUndefined();
   });
 });
 

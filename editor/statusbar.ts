@@ -48,7 +48,14 @@ export class StatusBar {
   private readonly mode: HTMLButtonElement;
   private readonly snap: HTMLButtonElement;
   private readonly zoom: HTMLButtonElement;
-  private readonly zoomText = h("span", {});
+  /** The zoom in percent, as a field: a number typed into it is the zoom. */
+  private readonly zoomField = h("input", {
+    class: "zoom-field",
+    type: "text",
+    inputmode: "numeric",
+    spellcheck: "false",
+    ...tipped({ tip: "Zoom: type a percentage", side: "top" }),
+  });
 
   constructor(editor: Editor, host: StatusHost) {
     this.editor = editor;
@@ -76,11 +83,25 @@ export class StatusBar {
     );
     this.zoom = h(
       "button",
-      { class: "status-button zoom", type: "button", ...tipped({ tip: "Zoom", side: "top" }) },
-      this.zoomText,
+      {
+        class: "status-button zoom",
+        type: "button",
+        ...tipped({ tip: "Zoom levels and fits", side: "top" }),
+      },
       icon("chevron"),
     );
     menuButton(this.zoom, () => host.zoom(), { above: true, right: true });
+    const field = this.zoomField;
+    field.addEventListener("focus", () => field.select());
+    field.addEventListener("blur", () => this.showZoom());
+    field.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter" && event.key !== "Escape") return;
+      event.preventDefault();
+      const percent = Number.parseFloat(field.value.replace(",", "."));
+      if (event.key === "Enter" && percent > 0) editor.view.zoomTo(percent / 100);
+      // Back to the canvas, with the zoom as it is now.
+      editor.view.canvas.focus({ preventScroll: true });
+    });
     this.element = h(
       "footer",
       { class: "status" },
@@ -98,7 +119,7 @@ export class StatusBar {
           () => editor.view.zoomStep(-1),
           "status-button",
         ),
-        this.zoom,
+        h("span", { class: "zoom-box" }, this.zoomField, this.zoom),
         iconButton(
           "plus",
           { tip: "Zoom in", key: "+", side: "top" },
@@ -111,8 +132,10 @@ export class StatusBar {
     this.showPointer(undefined);
   }
 
+  /** Shows the zoom in percent, unless a number is being typed there. */
   showZoom() {
-    this.zoomText.textContent = `${Math.round(this.editor.view.zoom * 100)}%`;
+    if (document.activeElement !== this.zoomField)
+      this.zoomField.value = `${Math.round(this.editor.view.zoom * 100)}%`;
   }
 
   /** Shows where the pointer is in the diagram's coordinates; nothing while it is off the canvas. */
@@ -126,7 +149,10 @@ export class StatusBar {
       { doc } = editor,
       elements = editor.selectedElements.length,
       wires = editor.selectedWires.length;
-    if (doc.problem) return "The source has an error: the diagram shows as it last was";
+    if (doc.problem)
+      return doc.picture
+        ? "The source has an error: the diagram shows as it last was"
+        : "The source has an error: the diagram shows once it is mended";
     if (editor.structural)
       return elements === 1
         ? "Click a shape to add it here · drag a dot to connect · double-click to rename · Delete removes"

@@ -106,9 +106,14 @@ export const inOrder = (options: Completion[]): Completion[] =>
 export function filled(template: string, completion: Completion): Completion {
   if (!template.includes("${"))
     return template === completion.label ? completion : { ...completion, apply: template };
-  // A stop right behind a field would take in what is typed at the end of that field.
+  // A stop right behind a field would take in what is typed at the end of that field. Behind a
+  // block, the last stop is a line of its own: what is typed next is the next statement.
   return snippetCompletion(
-    /\$\{[^{}]*\}$/.test(template) ? template : `${template}\${}`,
+    /\$\{[^{}]*\}$/.test(template)
+      ? template
+      : /\n(end|\})$/.test(template)
+        ? `${template}\n\${}`
+        : `${template}\${}`,
     completion,
   );
 }

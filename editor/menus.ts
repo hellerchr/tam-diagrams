@@ -10,9 +10,9 @@ import type { ElementKind } from "../src/tam-edit.ts";
 import type { Editor } from "./editor.ts";
 import type { Arrangement } from "./guides.ts";
 import type { IconName } from "./icons.ts";
-import type { Recent } from "./files.ts";
+import { ageOf, type Recent } from "./files.ts";
 import { type MenuEntry, type MenuItem, refusal } from "./menu.ts";
-import { kindName, TYPES, typeInfo } from "./types.ts";
+import { kindName, TYPES, typeInfo, typeOf } from "./types.ts";
 
 /** How the page follows light and dark: one of them, or the system's choice. */
 export type ThemeChoice = "light" | "dark" | "system";
@@ -36,6 +36,8 @@ export interface Shell {
   replace(source: string, sure?: boolean): void;
   /** Whether the diagram changed since it was saved or opened. */
   readonly unsaved: boolean;
+  /** The name of the file the diagram was opened from or saved to; undefined while it has none. */
+  readonly fileName: string | undefined;
   readonly theme: ThemeChoice;
   setTheme(theme: ThemeChoice): void;
   /** Remembers a choice across visits. */
@@ -62,6 +64,9 @@ export interface Bench {
   toggle(panel: PanelName): void;
   toggleSnap(): void;
   toggleGrid(): void;
+  /** Whether long lines of the source wrap. */
+  readonly wrap: boolean;
+  toggleWrap(): void;
 }
 
 /** The kinds of connection the editor offers: a word, and for dependencies their keyword. */
@@ -228,8 +233,58 @@ export class Menus {
     ];
   }
 
-  /** Every command of the bar's menus in one list, each with the menus that lead to it. */
+  /**
+   * Every command in one list: those of the bar's menus, each with the menus that lead to it, and
+   * what has no menu: the pointer tools, the shapes of the diagram type, the zooms, and how the
+   * source wraps.
+   */
   commands(): Command[] {
+    const { editor, bench } = this,
+      info = typeInfo(editor.type),
+      stuck = editor.doc.problem ? "Fix the error in the source first" : undefined;
+    const tools: Command[] = [
+      { name: "Select tool", path: "Tools", key: "V", run: () => editor.setTool("select") },
+      { name: "Pan tool", path: "Tools", key: "H", run: () => editor.setTool("pan") },
+      { name: "Connect tool", path: "Tools", key: "C", run: () => editor.setTool("connect") },
+    ];
+    // A piece of a structure is added at the selected part; a block shape is picked, to place with a click.
+    const shapes: Command[] = editor.structure
+      ? editor.structure.pieces.map((piece) => ({
+          name: `Add ${piece.name.toLowerCase()}`,
+          path: "Shapes",
+          off: stuck,
+          run: () => editor.addPiece(piece.kind),
+        }))
+      : info.palette.flatMap((group) =>
+          group.items.map((shape) => ({
+            name: `Add ${shape.name.toLowerCase()}`,
+            path: "Shapes",
+            key: shape.key,
+            off:
+              stuck ??
+              (editor.allowsKind(shape.kind)
+                ? undefined
+                : "The level of this diagram does not take this shape"),
+            run: () => editor.setTool(shape.kind),
+          })),
+        );
+    const zooms: Command[] = ZOOMS.filter((percent) => percent !== 100).map((percent) => ({
+      name: `Zoom to ${percent}%`,
+      path: "View",
+      run: () => editor.view.zoomTo(percent / 100),
+    }));
+    const source: Command[] = [
+      {
+        name: bench.wrap ? "Do not wrap long lines" : "Wrap long lines",
+        path: "Source",
+        run: () => bench.toggleWrap(),
+      },
+    ];
+    return [...this.menuCommands(), ...tools, ...shapes, ...zooms, ...source];
+  }
+
+  /** Every command of the bar's menus, each with the menus that lead to it. */
+  private menuCommands(): Command[] {
     const walk = (entries: MenuEntry[], path: string, off?: string | boolean): Command[] =>
       entries.flatMap((entry): Command[] => {
         if (!entry || entry === "line") return [];
@@ -276,8 +331,10 @@ export class Menus {
       {
         name: "Open recent",
         off: recents.length ? undefined : "No other diagram was on show lately",
-        items: recents.map(({ title, source }) => ({
+        items: recents.map(({ title, source, at }) => ({
           name: title,
+          icon: typeInfo(typeOf(source)).icon,
+          note: ageOf(at),
           run: () => shell.replace(source),
         })),
       },
@@ -334,18 +391,36 @@ export class Menus {
         editor.editable || editor.structural
           ? undefined
           : `${typeInfo(editor.type).plural} are edited as text`,
-      // Copies stand at a place: only a diagram that places its elements has them.
-      placed = editor.editable ? text : "Elements of this diagram are not copied",
+      // The clipboard takes elements that stand at a place: only a block diagram has them.
+      placed = editor.editable ? text : "Parts of this diagram are not copied between diagrams yet",
       needs = placed ?? (elements.length ? undefined : "Select an element"),
+      // A part of a structure is copied in place, where its type has copies.
+      copies = editor.structural
+        ? !editor.can("copy")
+          ? `Parts of ${typeInfo(editor.type).plural.toLowerCase()} are not duplicated`
+          : elements.length === 1 && !editor.doc.picture?.parts?.get(elements[0])?.group
+            ? undefined
+            : "Select one part that is not a group"
+        : needs,
       [only] = editor.selection;
     return [
-      { name: "Undo", key: "Ctrl+Z", off: !doc.canUndo, run: () => doc.undo() },
-      { name: "Redo", key: "Ctrl+Shift+Z", off: !doc.canRedo, run: () => doc.redo() },
+      {
+        name: "Undo",
+        key: "Ctrl+Z",
+        off: doc.canUndo ? undefined : "There is nothing to undo",
+        run: () => doc.undo(),
+      },
+      {
+        name: "Redo",
+        key: "Ctrl+Shift+Z",
+        off: doc.canRedo ? undefined : "There is nothing to redo",
+        run: () => doc.redo(),
+      },
       "line",
       { name: "Cut", key: "Ctrl+X", off: needs, run: () => this.clip(true) },
       { name: "Copy", key: "Ctrl+C", off: needs, run: () => this.clip(false) },
       { name: "Paste", key: "Ctrl+V", off: placed, run: () => this.paste() },
-      { name: "Duplicate", key: "Ctrl+D", off: needs, run: () => editor.duplicateSelection() },
+      { name: "Duplicate", key: "Ctrl+D", off: copies, run: () => editor.duplicateSelection() },
       {
         name: "Delete",
         key: "Del",

@@ -580,7 +580,8 @@ const RESERVED =
  * Gives an actor, a use case or a system boundary another id, wherever the source names it: in
  * its declarations, relations, notes and styling lines. An element that has no label is shown
  * under its id, so it shows the new one; one whose quoted name is its id (`"Log out"`) keeps that
- * name as its label. The source comes back unchanged when the new id is not a word of letters,
+ * name as its label, and a label that says what the new id says goes (`actor Clerk`, not
+ * `actor Clerk(Clerk)`) where the shape does not hang on its brackets. The source comes back unchanged when the new id is not a word of letters,
  * digits and underscores, is a word of the syntax, or is taken.
  */
 export function renameUsecaseId(source: string, id: string, newId: string): string {
@@ -636,16 +637,58 @@ export function renameUsecaseId(source: string, id: string, newId: string): stri
       lines[found.index].slice(found.end);
   const result = lines.join("\n"),
     now = reads(result);
-  return now &&
-    (boundary ? now.boundaries.has(name) : now.elements.has(name)) &&
-    !now.elements.has(id) &&
-    !now.boundaries.has(id) &&
-    now.elements.size === diagram.elements.size &&
-    now.boundaries.size === diagram.boundaries.size &&
-    now.relations.length === diagram.relations.length &&
-    now.notes.length === diagram.notes.length
-    ? result
-    : source;
+  if (
+    !now ||
+    !(boundary ? now.boundaries.has(name) : now.elements.has(name)) ||
+    now.elements.has(id) ||
+    now.boundaries.has(id) ||
+    now.elements.size !== diagram.elements.size ||
+    now.boundaries.size !== diagram.boundaries.size ||
+    now.relations.length !== diagram.relations.length ||
+    now.notes.length !== diagram.notes.length
+  )
+    return source;
+  if (shown !== name) return result;
+  // The label says what the id says: without it the part is to read and to draw the same.
+  const bare = renameUseCase(result, name, name),
+    short = reads(bare),
+    same = (a: UseCaseDiagram, b: UseCaseDiagram) =>
+      boundary
+        ? a.boundaries.get(name)?.label === b.boundaries.get(name)?.label
+        : a.elements.get(name)?.label === b.elements.get(name)?.label &&
+          a.elements.get(name)?.shape === b.elements.get(name)?.shape &&
+          a.elements.get(name)?.boundary === b.elements.get(name)?.boundary;
+  return short && same(short, now) && short.elements.size === now.elements.size ? bare : result;
+}
+
+/** The ids a new part gets, before its first name. */
+const GENERATED = /^(?:usecase|actor|system)\d+$/;
+
+/** The id a copy of an element is made from, a number after it. */
+const copyBase = (id: string, kind: "actor" | "usecase") =>
+  notable(id) ? id : idWord(id) || (kind === "actor" ? "actor" : "usecase");
+
+/**
+ * Whether an actor, a use case or a boundary goes by an id that an edit made up and its first
+ * name may replace: `usecase1`, `actor1` or `system1` as a new one gets them, and the id of a
+ * copy (`browse2` beside `browse`) while the copy still shows the name of its original or its
+ * own id.
+ */
+export function isGeneratedUsecaseId(source: string, id: string): boolean {
+  const diagram = parseUseCaseDiagram(source),
+    item = diagram.elements.get(id);
+  if (!item) return diagram.boundaries.has(id) && GENERATED.test(id);
+  if (GENERATED.test(id)) return true;
+  return [...diagram.elements.values()].some((original) => {
+    const base = copyBase(original.id, original.kind),
+      number = id.startsWith(base) ? id.slice(base.length) : "";
+    return (
+      original !== item &&
+      /^\d+$/.test(number) &&
+      Number(number) > 1 &&
+      (item.label === id || item.label === original.label)
+    );
+  });
 }
 
 /**
@@ -694,11 +737,7 @@ export function duplicateUsecasePart(source: string, id: string): { source: stri
   const { diagram, lines, statements } = model(source),
     item = diagram.elements.get(id);
   if (!item) return { source, id: "" };
-  const copy = freshId(
-      diagram,
-      notable(id) ? id : idWord(id) || (item.kind === "actor" ? "actor" : "usecase"),
-      2,
-    ),
+  const copy = freshId(diagram, copyBase(id, item.kind), 2),
     [open, close] = item.shape === "rect" ? "[]" : "()",
     // A box is one by the brackets of its label.
     bare = item.label === id && notable(id) && item.shape !== "rect",
@@ -860,6 +899,145 @@ export function removeUseCase(source: string, ids: Iterable<string>): string {
     else if (rewritten.has(index)) lines.splice(index, 1, ...rewritten.get(index)!);
   }
   return lines.join("\n");
+}
+
+/**
+ * Joins two elements as `connectUseCase` does and says which relation it wrote. No edge when
+ * nothing is written, and none for a note, which has no join of its own.
+ */
+export function joinUseCase(
+  source: string,
+  from: string,
+  to: string,
+  kind?: string,
+): { source: string; edge: string } {
+  const result = connectUseCase(source, from, to, kind);
+  if (result === source) return { source, edge: "" };
+  const before = parseUseCaseDiagram(source).relations.length,
+    relations = parseUseCaseDiagram(result).relations;
+  // A new relation is the last statement, and so the last relation.
+  return { source: result, edge: relations.length > before ? relations.at(-1)!.id : "" };
+}
+
+/** What each kind of relation joins, as a sentence for the user. */
+const RULES: Record<string, string> = {
+  association: "An association joins an actor and a use case.",
+  undirected: "An association joins an actor and a use case.",
+  include: "«include» joins two use cases.",
+  extend: "«extend» joins two use cases.",
+  generalization: "A generalization joins two actors or two use cases.",
+};
+
+/**
+ * Why two parts are not joined by a relation of a kind, in words for the user: the rule of UML
+ * the kind follows, or what the parts are. Undefined when `connectUseCase` joins them.
+ */
+export function whyNotUsecase(
+  source: string,
+  from: string,
+  to: string,
+  kind?: string,
+): string | undefined {
+  const diagram = parseUseCaseDiagram(source),
+    ends = [from, to],
+    promised = `note${diagram.notes.length + 1}`,
+    isNote = (id: string) =>
+      !diagram.elements.has(id) &&
+      !diagram.boundaries.has(id) &&
+      (id === promised || diagram.notes.some((note) => note.id === id)),
+    notes = ends.filter(isNote);
+  if (notes.length === 2) return "A note is for an actor or a use case, not for another note.";
+  if (notes.length === 1) {
+    const target = diagram.elements.get(ends.find((id) => !isNote(id))!);
+    if (!target) return "A note is for an actor or a use case.";
+    return notable(target.id)
+      ? undefined
+      : "A note cannot name a part that goes by its quoted name: give it an id first.";
+  }
+  if (ends.some((id) => !diagram.elements.has(id)))
+    return ends.some((id) => diagram.boundaries.has(id))
+      ? "A system boundary has no relations of its own: join the use cases in it."
+      : "A relation joins actors and use cases.";
+  if (kind === undefined) return undefined;
+  if (!ARROWS[kind]) return "There is no relation of that kind.";
+  return fits(diagram, from, to, kind) ? undefined : RULES[kind];
+}
+
+/**
+ * Adds a piece at a part and says what it wrote: the id of the piece, and the id of the relation
+ * that joins it to the part when there is one. A use case added at an actor and an actor added at
+ * a use case are joined, from the actor; with a `link` every actor or use case is joined to the
+ * element it is added at, by a relation of that kind where UML has it between the two and else by
+ * the usual one. A use case stands in the boundary of the use case it is added at, or in the
+ * boundary it is added at. A note is the note of the element. The id is empty, with the source
+ * unchanged, when nothing is written: a note at a boundary.
+ */
+export function attachUsecase(
+  source: string,
+  piece: { kind: string; label?: string },
+  at: string,
+  link?: string,
+): { source: string; id: string; edge: string } {
+  const diagram = parseUseCaseDiagram(source),
+    host = diagram.elements.get(at),
+    kind = piece.kind as UseCasePiece,
+    added = addUseCasePiece(source, {
+      kind,
+      label: piece.label,
+      parent: kind === "note" ? at : host ? host.boundary : at,
+    });
+  if (!added.id || added.source === source) return { source, id: "", edge: "" };
+  if (!host || kind === "note" || kind === "boundary") return { ...added, edge: "" };
+  const own = usecaseStructure.pieces.find((item) => item.kind === kind),
+    suits = !!own?.joins && (!own.joinsTo || own.joinsTo.includes(host.kind));
+  if (!suits && link === undefined) return { ...added, edge: "" };
+  // An actor leads to its use case; any other piece follows the part it is added at.
+  const [from, to] = suits && own!.joins === "before" ? [added.id, at] : [at, added.id],
+    wanted = joinUseCase(added.source, from, to, link),
+    joined = wanted.edge || link === undefined ? wanted : joinUseCase(added.source, from, to);
+  return { source: joined.source, id: added.id, edge: joined.edge };
+}
+
+/** A count with its word: `1 use case`, `3 use cases`; nothing for none. */
+const counted = (count: number, word: string) =>
+  count > 0 ? [`${count} ${word}${count > 1 ? "s" : ""}`] : [];
+
+/** Words in a row: `a`, `a and b`, `a, b and c`. */
+const listed = (words: string[]) =>
+  words.length > 1 ? `${words.slice(0, -1).join(", ")} and ${words.at(-1)}` : (words[0] ?? "");
+
+/**
+ * What a removal takes with it, in words: the boundaries, actors and use cases it names, and how
+ * many use cases, relations and notes go with them, as in `System boundary Library with 3 use
+ * cases and 2 relations`; for relations and notes alone, how many go. Empty when the removal
+ * changes nothing.
+ */
+export function usecaseRemovalSummary(source: string, ids: Iterable<string>): string {
+  const chosen = new Set(ids),
+    before = parseUseCaseDiagram(source),
+    after = parseUseCaseDiagram(removeUseCase(source, chosen)),
+    plain = (label: string) => label.replace(/<br\s*\/?>/gi, " "),
+    elements = [...before.elements.values()],
+    names = [
+      ...[...before.boundaries.values()]
+        .filter((item) => chosen.has(item.id) && !before.elements.has(item.id))
+        .map((item) => `System boundary ${plain(item.label)}`),
+      ...elements.filter((item) => chosen.has(item.id)).map((item) => plain(item.label)),
+    ],
+    // What goes beside the parts the summary names: those are not counted again.
+    beside = (all: { id: string }[], left: number) =>
+      all.length - left - (names.length ? all.filter(({ id }) => chosen.has(id)).length : 0),
+    of = (kind: string, diagram: UseCaseDiagram) =>
+      [...diagram.elements.values()].filter((item) => item.kind === kind),
+    rest = [
+      ...counted(beside(of("usecase", before), of("usecase", after).length), "use case"),
+      ...counted(beside(of("actor", before), of("actor", after).length), "actor"),
+      ...counted(beside(before.relations, after.relations.length), "relation"),
+      ...counted(beside(before.notes, after.notes.length), "note"),
+    ];
+  return names.length
+    ? `${names.join(", ")}${rest.length ? ` with ${listed(rest)}` : ""}`
+    : listed(rest);
 }
 
 /**

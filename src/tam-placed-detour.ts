@@ -25,8 +25,8 @@ export interface Run {
   a: Point;
   b: Point;
   half: number;
-  /** The piece meets an element: wire ends on one side are told apart later, along the side. */
-  end?: boolean;
+  /** The sides of elements the piece ends on, by their keys: a wire end is told apart from the others on its side along that side. */
+  sides?: string[];
 }
 
 /** What a detour passes at a price rather than not at all. */
@@ -37,10 +37,12 @@ export interface Terrain {
   home?: { box: Box; cost: number };
   /** Containers: no run follows a border of one closer than BORDER. */
   borders?: Box[];
-  /** The wires that lie already: crossing one costs `cross`, running on one `overlap`. */
+  /** The wires that lie already: crossing one costs `cross`, running on one or turning on one `overlap`. */
   wires?: Run[];
   cross?: number;
   overlap?: number;
+  /** The keys of the sides of both ends, for the wire ends that lie on them already. */
+  sides?: [Record<Side, string>, Record<Side, string>];
   /** Half of the room the wire takes across: it passes everything that much further out. */
   half?: number;
 }
@@ -51,13 +53,17 @@ export const outward = (side: Side) => (side === "bottom" || side === "right" ? 
 /** A wire keeps this far from a container's border it runs along. */
 export const BORDER = 8;
 
+/** Two wires side by side keep GAP apart, so they read as two; TOUCH is how near a point lies on a line. */
+export const GAP = 10,
+  TOUCH = 1.5;
+
 /**
  * A detour passes elements at PASS and never nearer than KEEP; a corner costs as much as CORNER
  * pixels of wire, a pixel along a container's border as much as ALONG pixels elsewhere. It passes a
  * wire that lies already at LANE, and its grid has no two lines nearer than MERGE.
  */
 const PASS = 14,
-  KEEP = 9.5,
+  KEEP = 8,
   CORNER = 60,
   ALONG = 6,
   LANE = 18,
@@ -140,34 +146,38 @@ export function followsBorder(p: Point, q: Point, box: Box, keep = BORDER): bool
 
 /**
  * How the run p-q of a wire `half` thick meets a run that lies already: 2 when they run on each
- * other, 1 when they cross, 0 when they pass. A crossing at the far end `q` counts, one at `p` not,
- * so a line of several runs counts each crossing once.
+ * other or closer than GAP, or follow each other on one line as if they were one wire; 3 when an
+ * end of one lies on the other, which reads as a junction; 1 when they cross; 0 when they pass.
+ * Of a `step` of a longer straight run, a crossing at its far end `q` counts and one at `p` not, so
+ * each crossing counts once.
  */
-export function meets(p: Point, q: Point, half: number, run: Run): number {
+export function meets(p: Point, q: Point, half: number, run: Run, step = false): number {
   const upright = Math.abs(p.x - q.x) < 0.5,
     other = Math.abs(run.a.x - run.b.x) < 0.5;
   if (upright === other && Math.abs(run.a.x - run.b.x) + Math.abs(run.a.y - run.b.y) > 0.5) {
     const apart = upright ? Math.abs(p.x - run.a.x) : Math.abs(p.y - run.a.y);
-    if (apart >= half + run.half + 5) return 0;
+    if (apart >= half + run.half + GAP) return 0;
     const shared = upright
       ? Math.min(Math.max(p.y, q.y), Math.max(run.a.y, run.b.y)) -
         Math.max(Math.min(p.y, q.y), Math.min(run.a.y, run.b.y))
       : Math.min(Math.max(p.x, q.x), Math.max(run.a.x, run.b.x)) -
         Math.max(Math.min(p.x, q.x), Math.min(run.a.x, run.b.x));
-    return shared > 2 ? 2 : 0;
+    return shared > (apart < 3 && !step ? -GAP : 2) ? 2 : 0;
   }
-  if (upright) {
-    const y = run.a.y,
-      low = Math.min(run.a.x, run.b.x),
-      high = Math.max(run.a.x, run.b.x);
-    if (p.x <= low || p.x >= high) return 0;
-    return q.y > p.y ? +(y > p.y && y <= q.y) : +(y < p.y && y >= q.y);
-  }
-  const x = run.a.x,
-    low = Math.min(run.a.y, run.b.y),
-    high = Math.max(run.a.y, run.b.y);
-  if (p.y <= low || p.y >= high) return 0;
-  return q.x > p.x ? +(x > p.x && x <= q.x) : +(x < p.x && x >= q.x);
+  // The run across: where it lies, and from where to where; the run p-q likewise.
+  const level = upright ? run.a.y : run.a.x,
+    low = upright ? Math.min(run.a.x, run.b.x) : Math.min(run.a.y, run.b.y),
+    high = upright ? Math.max(run.a.x, run.b.x) : Math.max(run.a.y, run.b.y),
+    at = upright ? p.x : p.y,
+    from = upright ? p.y : p.x,
+    to = upright ? q.y : q.x;
+  if (at < low - TOUCH || at > high + TOUCH) return 0;
+  if (level < Math.min(from, to) - TOUCH || level > Math.max(from, to) + TOUCH) return 0;
+  const within = level > Math.min(from, to) + TOUCH && level < Math.max(from, to) - TOUCH,
+    across = at > low + TOUCH && at < high - TOUCH;
+  if (within) return across ? 1 : 3;
+  if (!step) return 3;
+  return Math.abs(level - to) <= TOUCH ? 1 : 0;
 }
 
 /**
@@ -204,8 +214,16 @@ export function detour(
   };
   const soft = [...costly.map((item) => item.box), ...borders];
   const lane = LANE + half;
+  // Beside its own ends a wire may pass as near as it may anywhere, through the gap to a neighbour.
+  const tight = KEEP + half + 0.5;
   const xs = grid(
-      [a, b].flatMap((box) => [box.x - pass, centerOf(box).x, box.x + box.width + pass]),
+      [a, b].flatMap((box) => [
+        box.x - pass,
+        box.x - tight,
+        centerOf(box).x,
+        box.x + box.width + tight,
+        box.x + box.width + pass,
+      ]),
       [
         ...blocked.flatMap(({ box }) => [box.x - pass, box.x + box.width + pass]),
         ...soft.flatMap((box) => [
@@ -222,7 +240,13 @@ export function detour(
       ],
     ),
     ys = grid(
-      [a, b].flatMap((box) => [box.y - pass, centerOf(box).y, box.y + box.height + pass]),
+      [a, b].flatMap((box) => [
+        box.y - pass,
+        box.y - tight,
+        centerOf(box).y,
+        box.y + box.height + tight,
+        box.y + box.height + pass,
+      ]),
       [
         ...blocked.flatMap(({ box }) => [box.y - pass, box.y + box.height + pass]),
         ...soft.flatMap((box) => [
@@ -264,8 +288,8 @@ export function detour(
         const p = upright ? run.a.x : run.a.y,
           q = upright ? run.b.x : run.b.y;
         return Math.abs(p - q) < 0.5
-          ? Math.abs(at - p) < half + run.half + 5
-          : at > Math.min(p, q) && at < Math.max(p, q);
+          ? Math.abs(at - p) < half + run.half + GAP
+          : at >= Math.min(p, q) - TOUCH && at <= Math.max(p, q) + TOUCH;
       }),
     };
   };
@@ -285,10 +309,27 @@ export function detour(
         if (followsBorder(p, q, box, margin)) cost += ALONG * length;
     }
     for (const run of around.wires) {
-      const how = meets(p, q, half, run);
-      if (how) cost += how === 2 ? overlap : cross;
+      const how = meets(p, q, half, run, true);
+      if (how) cost += how === 1 ? cross : overlap;
     }
     return cost;
+  };
+  /** Whether a crossing of the grid lies on a wire: a corner there reads as a junction of two wires. */
+  const wired = new Int8Array(width * height).fill(-1);
+  const onWire = (i: number, j: number): boolean => {
+    const cell = j * width + i;
+    if (wired[cell] < 0) {
+      const x = xs[i],
+        y = ys[j];
+      wired[cell] = +[...columns[i].wires, ...rows[j].wires].some(
+        (run) =>
+          x >= Math.min(run.a.x, run.b.x) - TOUCH &&
+          x <= Math.max(run.a.x, run.b.x) + TOUCH &&
+          y >= Math.min(run.a.y, run.b.y) - TOUCH &&
+          y <= Math.max(run.a.y, run.b.y) + TOUCH,
+      );
+    }
+    return wired[cell] === 1;
   };
   const state = (i: number, j: number, direction: number) => (j * width + i) * 4 + direction;
   // Tolls are worked out once per step and direction, as the search comes to it.
@@ -323,7 +364,7 @@ export function detour(
     came = new Int32Array(width * height * 4).fill(-1),
     queue = new Heap();
   /** What leaving or entering an element by a gate costs: the piece between the side and the gate. */
-  const entry = (box: Box, side: Side): number => {
+  const entry = (box: Box, side: Side, key?: string): number => {
     const center = centerOf(box),
       on = sidePoint(box, side, side === "top" || side === "bottom" ? center.x : center.y),
       move = STEPS[SIDES.indexOf(side)],
@@ -333,9 +374,10 @@ export function detour(
       if (within(out, item.box) && !within(centerOf(box), item.box)) cost += item.cost;
     if (home && !within(out, grow(home.box, 0.5))) cost += home.cost;
     for (const run of wires) {
-      const how = meets(on, out, half, run);
+      const how = meets(on, out, half, run, true);
       // Wire ends on one side are told apart along the side once every wire has its line.
-      if (how === 1 || (how === 2 && !run.end)) cost += how === 2 ? overlap : cross;
+      if (how === 1 || (how > 1 && !(key && run.sides?.includes(key))))
+        cost += how === 1 ? cross : overlap;
     }
     return cost;
   };
@@ -343,7 +385,7 @@ export function detour(
     const start = gate(a, side);
     if (!start) continue;
     const key = state(start.i, start.j, SIDES.indexOf(side)),
-      cost = pass + entry(a, side);
+      cost = pass + entry(a, side, terrain.sides?.[0][side]);
     costs[key] = cost;
     queue.push(cost + left(start.i, start.j), key);
   }
@@ -352,7 +394,10 @@ export function detour(
     const goal = gate(b, side);
     if (!goal) continue;
     const cell = goal.j * width + goal.i;
-    goals.set(cell, [...(goals.get(cell) ?? []), { ...goal, fee: entry(b, side) }]);
+    goals.set(cell, [
+      ...(goals.get(cell) ?? []),
+      { ...goal, fee: entry(b, side, terrain.sides?.[1][side]) },
+    ]);
   }
   if (!queue.size || !goals.size) return undefined;
   let best: { key: number; cost: number; goal: { on: Point; side: Side } } | undefined;
@@ -387,7 +432,7 @@ export function detour(
         Math.abs(xs[ni] - xs[i]) +
         Math.abs(ys[nj] - ys[j]) +
         fee +
-        (next === direction ? 0 : CORNER);
+        (next === direction ? 0 : CORNER + (overlap && onWire(i, j) ? overlap : 0));
       const target = state(ni, nj, next);
       if (total < costs[target]) {
         costs[target] = total;

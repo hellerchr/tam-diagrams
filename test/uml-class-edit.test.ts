@@ -5,17 +5,27 @@ import { CLASS_EXAMPLES } from "../src/samples/uml-examples.ts";
 import { parseClassDiagram } from "../src/uml-class.ts";
 import {
   addClassMember,
+  addLollipop,
+  attachClass,
   type ClassEdge,
+  classMemberIndex,
   classMembers,
   classRelationEnds,
+  classRemovalSummary,
   classStereotype,
   classStructure,
   duplicateClass,
+  isGeneratedClassId,
+  joinClasses,
   moveClassInto,
+  removeClassMember,
+  removeClassParts,
   renameClassId,
   reverseClassRelation,
   setClassKind,
+  setClassMember,
   setClassMembers,
+  whyNotClass,
   setClassMultiplicity,
   setClassStereotype,
   ungroupClassPackage,
@@ -105,6 +115,9 @@ const SOURCES = [STARTER, SHOP, RELATIONS, PACKAGES, ...CLASS_EXAMPLES.map(([, s
 
 const { read, add, connect, rename, label, relink, remove } = classStructure;
 
+/** The kinds of part that are classes. */
+const CLASSES = ["class", "interface", "abstract", "enumeration"];
+
 const ids = (source: string) => read(source).nodes.map((node) => node.id);
 
 const relations = (source: string) =>
@@ -161,7 +174,7 @@ describe("a class diagram as a structure", () => {
       "Payable:interface:null:25",
       "Basket:class:null:27",
       "Line:class:null:31",
-      "interface1:interface:null:33",
+      "interface1:lollipop:null:33",
       "note2:note:null:34",
     ]);
     expect(
@@ -319,7 +332,14 @@ describe("a class diagram as a structure", () => {
     expect(add("classDiagram\n", { kind: "class" }).source).toBe("classDiagram\n  class Class1\n");
     for (const source of SOURCES)
       for (const piece of classStructure.pieces) {
-        const added = add(source, { kind: piece.kind });
+        // A lollipop exists only at a class.
+        const host = read(source).nodes.find((node) => node.kind === "class")?.id,
+          added = add(source, {
+            kind: piece.kind,
+            parent: piece.kind === "lollipop" ? host : null,
+          });
+        if (piece.kind === "lollipop") expect(add(source, { kind: piece.kind }).id).toBe("");
+        if (piece.kind === "lollipop" && !host) continue;
         expect(changed(source, added.source).gone).toEqual([]);
         expect(read(added.source).nodes.find((node) => node.id === added.id)).toMatchObject({
           kind: piece.kind,
@@ -355,6 +375,7 @@ describe("a class diagram as a structure", () => {
       "abstract::undefined",
       "enumeration::undefined",
       "note:after:class,interface,abstract,enumeration",
+      "lollipop:after:class,interface,abstract,enumeration",
       "package::undefined",
     ]);
     // The way a canvas adds a note at a class: the note, then the class joined to it.
@@ -894,13 +915,17 @@ describe("the members of a class", () => {
 
   it("reads and sets the stereotype, which is no member", () => {
     const service = "classDiagram\n  class Api {\n    <<service>>\n  }";
+    const kindOf = (source: string, id: string) =>
+      read(source).nodes.find((node) => node.id === id)!.kind;
     expect(classStereotype(service, "Api")).toBe("service");
     expect(classMembers(service, "Api")).toEqual([]);
     expect(classStereotype(STARTER, "Order")).toBe("");
     expect(classStereotype(STARTER, "Nothing")).toBe("");
-    // What makes a class an interface or abstract is its kind, not its stereotype.
-    expect(classStereotype(SHOP, "Order")).toBe("");
-    expect(classStereotype(SHOP, "Payable")).toBe("");
+    // What makes a class an interface, abstract or an enumeration is its stereotype too.
+    expect(classStereotype(SHOP, "Order")).toBe("abstract");
+    expect(classStereotype(SHOP, "Payable")).toBe("interface");
+    expect(classStereotype(SHOP, "Status")).toBe("enumeration");
+    expect(classStereotype(PACKAGES, "User")).toBe("interface");
 
     const typed = setClassStereotype(STARTER, "Order", " <<service>> ");
     expect(changed(STARTER, typed)).toEqual({ gone: [], added: ["    <<service>>"] });
@@ -919,19 +944,72 @@ describe("the members of a class", () => {
     // The members of the panel go and come without the stereotype.
     expect(classStereotype(setClassMembers(typed, "Order", ["+only"]), "Order")).toBe("service");
 
-    // Beside the annotation of the kind, which stays.
-    const both = setClassStereotype(SHOP, "Order", "aggregate");
-    expect(changed(SHOP, both)).toEqual({ gone: [], added: ["      <<aggregate>>"] });
-    expect(classStereotype(both, "Order")).toBe("aggregate");
-    expect(read(both).nodes.find((node) => node.id === "Order")!.kind).toBe("abstract");
-    expect(setClassStereotype(both, "Order", "")).toBe(SHOP);
-    expect(setClassKind(both, "Order", "class")).toContain(
-      "    class Order {\n      <<aggregate>>\n      +id: string\n",
+    // A class has one: another takes the place of the one there, where that stands.
+    const one = setClassStereotype(SHOP, "Order", "service");
+    expect(changed(SHOP, one)).toEqual({
+      gone: ["      <<abstract>>"],
+      added: ["      <<service>>"],
+    });
+    expect(one.split("\n").indexOf("      <<service>>")).toBe(
+      SHOP.split("\n").indexOf("      <<abstract>>"),
     );
+    expect(parseClassDiagram(one).classes.get("Order")!.annotations).toEqual(["service"]);
+    expect(kindOf(one, "Order")).toBe("class");
+    expect(setClassStereotype(one, "Order", "abstract")).toBe(SHOP);
+    expect(changed(SHOP, setClassStereotype(SHOP, "Payable", "service"))).toEqual({
+      gone: ["  <<interface>> Payable"],
+      added: ["  <<service>> Payable"],
+    });
+    expect(changed(PACKAGES, setClassStereotype(PACKAGES, "User", "entity"))).toEqual({
+      gone: ["    class User <<interface>>"],
+      added: ["    class User <<entity>>"],
+    });
+    // An empty one makes an interface, an abstract class or an enumeration a plain class.
+    for (const [source, id, line] of [
+      [SHOP, "Order", "      <<abstract>>"],
+      [SHOP, "Payable", "  <<interface>> Payable"],
+      [SHOP, "Status", "      <<enumeration>>"],
+    ]) {
+      const plain = setClassStereotype(source, id, "");
+      expect(changed(source, plain)).toEqual({ gone: [line], added: [] });
+      expect(classStereotype(plain, id)).toBe("");
+      expect(kindOf(plain, id)).toBe("class");
+    }
+    expect(changed(PACKAGES, setClassStereotype(PACKAGES, "User", ""))).toEqual({
+      gone: ["    class User <<interface>>"],
+      added: ["    class User"],
+    });
+    // One that names a kind makes the class that kind, and can be taken away again.
+    const face = setClassStereotype(STARTER, "Customer", "interface");
+    expect(kindOf(face, "Customer")).toBe("interface");
+    expect(classStereotype(face, "Customer")).toBe("interface");
+    expect(kindOf(setClassStereotype(face, "Customer", ""), "Customer")).toBe("class");
+    expect(classStereotype(setClassStereotype(face, "Customer", ""), "Customer")).toBe("");
+    expect(kindOf(setClassStereotype(SHOP, "Order", "enum"), "Order")).toBe("enumeration");
+    const made = setClassStereotype(service, "Api", "interface");
+    expect(parseClassDiagram(made).classes.get("Api")!.annotations).toEqual(["interface"]);
+    expect(made).toBe(service.replace("service", "interface"));
+    // Of several the source gives a class, the first shows, and setting one leaves one.
+    const two =
+      "classDiagram\n  class A <<service>> {\n    <<abstract>>\n    +x\n  }\n  <<entity>> A";
+    expect(classStereotype(two, "A")).toBe("service");
+    expect(setClassStereotype(two, "A", "boundary")).toBe(
+      "classDiagram\n  class A <<boundary>> {\n    +x\n  }",
+    );
+    expect(setClassStereotype(two, "A", "service")).toBe(
+      "classDiagram\n  class A <<service>> {\n    +x\n  }",
+    );
+    expect(setClassStereotype(two, "A", "")).toBe("classDiagram\n  class A {\n    +x\n  }");
     // However it is written.
-    const forms = "classDiagram\n  class A <<service>>\n  <<entity>> B\n  class B";
+    const forms =
+      "classDiagram\n  class A <<service>>\n  <<entity>> B\n  class B\n  class C { <<x>> }";
     expect(setClassStereotype(forms, "A", "")).toContain("  class A\n");
     expect(setClassStereotype(forms, "B", "")).toBe(forms.replace("  <<entity>> B\n", ""));
+    expect(setClassStereotype(forms, "A", "y")).toContain("  class A <<y>>\n");
+    expect(classStereotype(setClassStereotype(forms, "B", "y"), "B")).toBe("y");
+    expect(setClassStereotype(forms, "C", "y")).toContain("  class C {\n    <<y>>\n  }");
+    expect(setClassStereotype(forms, "C", "")).toContain("  class C {\n  }");
+    expect(setClassStereotype(STARTER, "Nothing", "x")).toBe(STARTER);
     // Typed among the members it is the stereotype, and goes from there.
     const listed = setClassMembers(STARTER, "Customer", ["<<service>>", "+name"]);
     expect(classStereotype(listed, "Customer")).toBe("service");
@@ -942,26 +1020,18 @@ describe("the members of a class", () => {
     expect(setClassStereotype(listed, "Customer", "")).toContain(
       "  class Customer {\n    +name\n  }\n",
     );
-    expect(setClassStereotype(forms, "A", "y")).toContain("  class A {\n    <<y>>\n  }\n");
-    expect(classStereotype(setClassStereotype(forms, "B", "y"), "B")).toBe("y");
-    // A stereotype that names a kind makes the class that kind.
-    const made = setClassStereotype(service, "Api", "interface");
-    expect(parseClassDiagram(made).classes.get("Api")!.annotations).toEqual(["interface"]);
-    expect(classStereotype(made, "Api")).toBe("");
-    expect(setClassStereotype(STARTER, "Nothing", "x")).toBe(STARTER);
     for (const source of SOURCES)
-      for (const node of read(source).nodes) {
-        if (node.group || node.kind === "note" || /^interface\d+$/.test(node.id)) continue;
-        const set = setClassStereotype(source, node.id, "thing");
-        expect(classStereotype(set, node.id), node.id).toBe("thing");
-        expect(classMembers(set, node.id)).toEqual(classMembers(source, node.id));
-        expect(read(set).nodes).toEqual(
-          read(set).nodes.map((other, index) => ({
-            ...read(source).nodes[index],
-            line: other.line,
-          })),
-        );
-        expect(classStereotype(setClassStereotype(set, node.id, ""), node.id)).toBe("");
+      for (const node of read(source).nodes.filter((item) => CLASSES.includes(item.kind))) {
+        const set = setClassStereotype(source, node.id, "control"),
+          hint = `${node.id}`;
+        expect(parseClassDiagram(set).classes.get(node.id)!.annotations, hint).toEqual(["control"]);
+        expect(classMembers(set, node.id), hint).toEqual(classMembers(source, node.id));
+        expect(ids(set), hint).toEqual(ids(source));
+        expect(relations(set), hint).toEqual(relations(source));
+        const none = setClassStereotype(set, node.id, "");
+        expect(classStereotype(none, node.id), hint).toBe("");
+        expect(kindOf(none, node.id), hint).toBe("class");
+        expect(ids(none), hint).toEqual(ids(source));
       }
   });
 });
@@ -1040,7 +1110,9 @@ describe("the ids of a class diagram", () => {
     });
     expect(retitle!(STARTER, "Nothing", "Name")).toEqual({ source: STARTER, id: "Nothing" });
     for (const source of SOURCES)
-      for (const piece of classStructure.pieces.filter((piece) => piece.kind !== "note")) {
+      for (const piece of classStructure.pieces.filter(
+        (piece) => piece.kind !== "note" && piece.kind !== "lollipop",
+      )) {
         const fresh = add(source, { kind: piece.kind }),
           titled = retitle!(fresh.source, fresh.id, "Brand new");
         expect(titled.id).toBe(piece.group ? "ns:BrandNew" : "BrandNew");
@@ -1561,5 +1633,381 @@ describe("the places of the parts of a class diagram", () => {
         expect(joins(open)).toEqual(joins(source));
         await inScene(open);
       }
+  });
+});
+
+describe("what else a canvas does with a class diagram", () => {
+  const { retitle } = classStructure;
+  const drawn = async (source: string, hint: string) => {
+    const scene = await parseUml(source).layout(arialMeasure),
+      shapes = new Set(scene.shapes.map((shape) => shape.id)),
+      wires = new Set(scene.wires.map((wire) => wire.edge));
+    for (const node of read(source).nodes)
+      expect(shapes.has(node.id), `${hint} ${node.id}`).toBe(true);
+    for (const edge of read(source).edges)
+      expect(wires.has(edge.id), `${hint} ${edge.id}`).toBe(true);
+  };
+
+  it("edits one member where it stands", () => {
+    expect(changed(STARTER, setClassMember(STARTER, "Order", 1, "+total(): Money"))).toEqual({
+      gone: ["    +total(): number"],
+      added: ["    +total(): Money"],
+    });
+    expect(setClassMember(STARTER, "Order", 1, "+total(): number")).toBe(STARTER);
+    expect(setClassMember(STARTER, "Order", 2, "+x")).toBe(STARTER);
+    expect(setClassMember(STARTER, "Customer", 0, "+x")).toBe(STARTER);
+    expect(setClassMember(STARTER, "Nothing", 0, "+x")).toBe(STARTER);
+    // One written as a statement of its own stays one; annotations and comments are no members.
+    expect(changed(SHOP, setClassMember(SHOP, "Payable", 0, "+pay(amount: Money) bool"))).toEqual({
+      gone: ["  Payable : +pay(amount) bool"],
+      added: ["  Payable : +pay(amount: Money) bool"],
+    });
+    expect(changed(SHOP, setClassMember(SHOP, "Order", 1, "+sum()"))).toEqual({
+      gone: ["      +total(): number"],
+      added: ["      +sum()"],
+    });
+    expect(changed(SHOP, setClassMember(SHOP, "Status", 0, "NEW"))).toEqual({
+      gone: ["      OPEN"],
+      added: ["      NEW"],
+    });
+    // One that shares its line with a brace gets a line of its own.
+    expect(setClassMember(SHOP, "Basket", 0, "+things: List~Item~")).toContain(
+      "  class Basket~Item~ {\n    +things: List~Item~\n  }\n",
+    );
+    expect(setClassMember(PACKAGES, "Admin", 0, "+revoke()")).toContain(
+      "  class Admin{\n    +revoke()\n  }\n",
+    );
+    // Removing: by an empty text too.
+    expect(changed(STARTER, removeClassMember(STARTER, "Order", 0))).toEqual({
+      gone: ["    +id: string"],
+      added: [],
+    });
+    expect(setClassMember(STARTER, "Order", 0, "  ")).toBe(removeClassMember(STARTER, "Order", 0));
+    expect(removeClassMember(STARTER, "Order", 5)).toBe(STARTER);
+    expect(changed(SHOP, removeClassMember(SHOP, "Payable", 0))).toEqual({
+      gone: ["  Payable : +pay(amount) bool"],
+      added: [],
+    });
+    // A class that only its member statement names stays.
+    expect(removeClassMember("classDiagram\n  Dog : +bark()", "Dog", 0)).toBe(
+      "classDiagram\n  class Dog",
+    );
+    expect(removeClassMember("classDiagram\n  Dog : +bark()\n  Dog --> Cat", "Dog", 0)).toBe(
+      "classDiagram\n  Dog --> Cat",
+    );
+    for (const source of SOURCES)
+      for (const node of read(source).nodes) {
+        const members = classMembers(source, node.id);
+        members.forEach((_, index) => {
+          const set = setClassMember(source, node.id, index, "+changed(it) bool");
+          expect(classMembers(set, node.id)).toEqual(
+            members.map((text, at) => (at === index ? "+changed(it) bool" : text)),
+          );
+          expect(ids(set)).toEqual(ids(source));
+          const cut = removeClassMember(source, node.id, index);
+          expect(classMembers(cut, node.id)).toEqual(members.filter((_, at) => at !== index));
+          expect(ids(cut)).toEqual(ids(source));
+          expect(relations(cut)).toEqual(relations(source));
+        });
+      }
+  });
+
+  it("finds the member a row of the box shows", () => {
+    const mixed =
+      "classDiagram\n  class A {\n    +run()\n    +name\n    <<service>>\n    +stop()\n    +age\n  }";
+    // Drawn: name, age, run(), stop().
+    expect([0, 1, 2, 3, 4, -1].map((row) => classMemberIndex(mixed, "A", row))).toEqual([
+      1, 3, 0, 2, -1, -1,
+    ]);
+    expect(classMemberIndex(STARTER, "Customer", 0)).toBe(-1);
+    for (const source of SOURCES)
+      for (const [id, item] of parseClassDiagram(source).classes) {
+        const members = classMembers(source, id),
+          shown = [...item.attributes, ...item.methods];
+        expect(shown, id).toHaveLength(members.length);
+        shown.forEach((member, row) => {
+          const index = classMemberIndex(source, id, row),
+            set = setClassMember(source, id, index, member.method ? "renamed()" : "renamed"),
+            now = parseClassDiagram(set).classes.get(id)!;
+          expect([...now.attributes, ...now.methods][row].text, `${id} ${row}`).toBe(
+            member.method ? "renamed()" : "renamed",
+          );
+        });
+      }
+  });
+
+  it("drops a label that says what the id says, and knows a made-up id", () => {
+    const named = rename(STARTER, "Order", "Purchase");
+    expect(named).toContain('  class Order["Purchase"] {\n');
+    const renamed = renameClassId(named, "Order", "Purchase");
+    expect(renamed).toContain("  class Purchase {\n");
+    expect(renamed).not.toContain('["Purchase"]');
+    // Another label stays.
+    expect(
+      renameClassId(rename(STARTER, "Order", "Purchase order"), "Order", "Purchase"),
+    ).toContain('  class Purchase["Purchase order"] {\n');
+    expect(renameClassId(SHOP, "Invoice", "Bill")).toContain('      class Bill["Tax invoice"]\n');
+
+    // What `add` and `duplicateClass` make is made up, until it has a name.
+    for (const kind of ["class", "interface", "abstract", "enumeration"]) {
+      const added = add(STARTER, { kind });
+      expect(isGeneratedClassId(added.source, added.id), kind).toBe(true);
+    }
+    const space = add(STARTER, { kind: "package" });
+    expect(isGeneratedClassId(space.source, space.id)).toBe(true);
+    expect(
+      isGeneratedClassId(add(STARTER, { kind: "package", label: "Sales" }).source, "ns:Sales"),
+    ).toBe(false);
+    expect(
+      isGeneratedClassId(add(STARTER, { kind: "class", label: "Invoice" }).source, "Invoice"),
+    ).toBe(false);
+    const copy = duplicateClass(renamed, "Purchase");
+    expect(copy.id).toBe("Purchase2");
+    expect(isGeneratedClassId(copy.source, "Purchase2")).toBe(true);
+    expect(isGeneratedClassId(copy.source, "Purchase")).toBe(false);
+    const labelled = duplicateClass(SHOP, "Invoice");
+    expect(isGeneratedClassId(labelled.source, labelled.id)).toBe(true);
+    // Its first name becomes its id; then it is one of its own.
+    const refund = retitle!(copy.source, copy.id, "Refund");
+    expect(refund.id).toBe("Refund");
+    expect(refund.source).toContain("  class Refund {\n");
+    expect(refund.source).not.toContain("Purchase2");
+    expect(isGeneratedClassId(refund.source, "Refund")).toBe(false);
+    // A class that only looks like a copy and shows another name is none.
+    expect(
+      isGeneratedClassId(
+        'classDiagram\n  class Vector\n  class Vector2["Plane vector"]',
+        "Vector2",
+      ),
+    ).toBe(false);
+    for (const id of ["Nothing", "note1", "r1"]) expect(isGeneratedClassId(SHOP, id)).toBe(false);
+    for (const source of SOURCES)
+      for (const node of read(source).nodes) {
+        if (!CLASSES.includes(node.kind)) continue;
+        const made = duplicateClass(source, node.id);
+        expect(isGeneratedClassId(made.source, made.id), node.id).toBe(true);
+        const titled = retitle!(made.source, made.id, "Brand new");
+        expect(titled.id).toBe("BrandNew");
+        expect(isGeneratedClassId(titled.source, titled.id)).toBe(false);
+      }
+  });
+
+  it("adds a lollipop interface to a class", async () => {
+    const ball = addLollipop(STARTER, "Order", "Printable");
+    expect(ball).toEqual({ source: `${STARTER}\n  Printable ()-- Order`, id: "interface1" });
+    expect(read(ball.source).nodes.find((node) => node.id === "interface1")).toMatchObject({
+      kind: "lollipop",
+      label: "Printable",
+    });
+    expect(read(ball.source).edges.at(-1)).toMatchObject({
+      kind: "lollipop",
+      source: "interface1",
+      target: "Order",
+    });
+    expect(addLollipop(STARTER, "Order", "").source).toBe(`${STARTER}\n  Interface ()-- Order`);
+    expect(addLollipop(STARTER, "Order", "Print job").source).toBe(
+      `${STARTER}\n  \`Print job\` ()-- Order`,
+    );
+    expect(addLollipop(SHOP, "Order", "Billable").id).toBe("interface2");
+    for (const id of ["Nothing", "ns:Sales", "note1", "interface1"])
+      expect(addLollipop(SHOP, id, "X")).toEqual({ source: SHOP, id: "" });
+    // As a piece: at the class given as its parent; its name is the one on its relation.
+    expect(add(STARTER, { kind: "lollipop", label: "Printable", parent: "Order" })).toEqual(ball);
+    expect(add(STARTER, { kind: "lollipop" })).toEqual({ source: STARTER, id: "" });
+    expect(retitle!(ball.source, ball.id, "Paintable")).toEqual({
+      source: `${STARTER}\n  Paintable ()-- Order`,
+      id: "interface1",
+    });
+    expect(remove(ball.source, [ball.id])).toBe(STARTER);
+    for (const source of SOURCES)
+      for (const node of read(source).nodes.filter((item) => CLASSES.includes(item.kind))) {
+        const made = addLollipop(source, node.id, "Offered");
+        expect(changed(source, made.source).gone).toEqual([]);
+        expect(
+          read(made.source).nodes.find((item) => item.id === made.id),
+          node.id,
+        ).toMatchObject({
+          kind: "lollipop",
+          label: "Offered",
+        });
+        expect(read(made.source).nodes).toHaveLength(read(source).nodes.length + 1);
+      }
+    await drawn(ball.source, "starter");
+    await drawn(addLollipop(SHOP, "Order", "Billable").source, "shop");
+  });
+
+  it("adds a piece at a part and says what it wrote", async () => {
+    const joined = attachClass(
+      STARTER,
+      { kind: "class", label: "Invoice" },
+      "Order",
+      "composition",
+    );
+    expect(joined).toMatchObject({ id: "Invoice", edge: "r3" });
+    expect(changed(STARTER, joined.source)).toEqual({
+      gone: [],
+      added: ["  class Invoice", "  Order *-- Invoice"],
+    });
+    // Without a kind of relation a class stands beside the part, in its package.
+    expect(attachClass(STARTER, { kind: "class" }, "Order")).toEqual({
+      ...add(STARTER, { kind: "class" }),
+      edge: "",
+    });
+    const inside = attachClass(
+      SHOP,
+      { kind: "interface", label: "Billable" },
+      "Invoice",
+      "realization",
+    );
+    expect(read(inside.source).nodes.find((node) => node.id === "Billable")).toMatchObject({
+      kind: "interface",
+      parent: "ns:Sales.Billing",
+    });
+    expect(read(inside.source).edges.find((edge) => edge.id === inside.edge)).toMatchObject({
+      source: "Invoice",
+      target: "Billable",
+      kind: "realization",
+    });
+    // A note is the note of the class, a lollipop its interface.
+    const note = attachClass(STARTER, { kind: "note", label: "Paid first" }, "Order");
+    expect(note).toEqual({
+      source: `${STARTER}\n  note for Order "Paid first"`,
+      id: "note1",
+      edge: "note1:link",
+    });
+    expect(attachClass(STARTER, { kind: "lollipop", label: "Printable" }, "Order")).toEqual({
+      source: `${STARTER}\n  Printable ()-- Order`,
+      id: "interface1",
+      edge: "r3",
+    });
+    expect(attachClass(SHOP, { kind: "lollipop" }, "ns:Sales")).toEqual({
+      source: SHOP,
+      id: "",
+      edge: "",
+    });
+    // At a package the piece goes into it; at a part it has no join with, into the group of that part.
+    expect(
+      attachClass(SHOP, { kind: "class", label: "Receipt" }, "ns:Sales.Billing", "association"),
+    ).toEqual({
+      ...add(SHOP, { kind: "class", label: "Receipt", parent: "ns:Sales.Billing" }),
+      edge: "",
+    });
+    expect(attachClass(SHOP, { kind: "note", label: "x" }, "interface1")).toEqual({
+      ...add(SHOP, { kind: "note", label: "x" }),
+      edge: "",
+    });
+    expect(attachClass(SHOP, { kind: "package" }, "Invoice")).toEqual({
+      ...add(SHOP, { kind: "package", parent: "ns:Sales.Billing" }),
+      edge: "",
+    });
+    expect(attachClass(STARTER, { kind: "class" }, "Nothing", "association")).toEqual({
+      ...add(STARTER, { kind: "class" }),
+      edge: "",
+    });
+    for (const [name, source] of CLASS_EXAMPLES) {
+      const host = read(source).nodes.find((node) => node.kind === "class" && !/\s/.test(node.id))!;
+      for (const piece of classStructure.pieces) {
+        const made = attachClass(
+            source,
+            { kind: piece.kind, label: "New one" },
+            host.id,
+            "dependency",
+          ),
+          hint = `${name} ${piece.kind}`,
+          now = read(made.source);
+        expect(changed(source, made.source).gone, hint).toEqual([]);
+        expect(
+          now.nodes.find((node) => node.id === made.id),
+          hint,
+        ).toMatchObject({ kind: piece.kind });
+        if (piece.kind === "package") expect(made.edge).toBe("");
+        else {
+          const edge = now.edges.find((item) => item.id === made.edge)!;
+          expect([edge.source, edge.target].toSorted(), hint).toEqual(
+            [host.id, made.id].toSorted(),
+          );
+          expect(edge.kind, hint).toBe(
+            piece.kind === "note"
+              ? "anchor"
+              : piece.kind === "lollipop"
+                ? "lollipop"
+                : "dependency",
+          );
+        }
+        await drawn(made.source, hint);
+      }
+    }
+  });
+
+  it("says which join it wrote, and why two parts are not joined", () => {
+    expect(joinClasses(STARTER, "Customer", "OrderItem", "dependency")).toEqual({
+      source: `${STARTER}\n  Customer ..> OrderItem`,
+      edge: "r3",
+    });
+    const note = add(STARTER, { kind: "note" });
+    expect(joinClasses(note.source, note.id, "Order")).toEqual({
+      source: `${STARTER}\n  note for Order "Note"`,
+      edge: "note1:link",
+    });
+    expect(joinClasses(SHOP, "ns:Sales", "Order")).toEqual({ source: SHOP, edge: "" });
+
+    expect(whyNotClass(SHOP, "Order", "Payable")).toBeUndefined();
+    expect(whyNotClass(SHOP, "Order", "Order", "composition")).toBeUndefined();
+    expect(whyNotClass(SHOP, "note1", "Order")).toBeUndefined();
+    expect(whyNotClass(SHOP, "Order", "note2")).toBeUndefined();
+    expect(whyNotClass(SHOP, "ns:Sales", "Order")).toMatch(/package/i);
+    expect(whyNotClass(SHOP, "Order", "interface1")).toMatch(/lollipop/i);
+    expect(whyNotClass(SHOP, "note1", "note2")).toMatch(/another note/);
+    expect(whyNotClass(SHOP, "note1", "ns:Sales")).toMatch(/note is joined to a class/);
+    expect(whyNotClass(SHOP, "Order", "Nothing")).toMatch(/two classes/);
+    expect(whyNotClass(SHOP, "Order", "Payable", "nonsense")).toMatch(/kind/);
+    const noted = add(PACKAGES, { kind: "note" });
+    expect(whyNotClass(noted.source, noted.id, "Access Role")).toMatch(/spaces/);
+    // A reason exactly where nothing is written.
+    for (const source of SOURCES) {
+      const all = [...read(source).nodes.map((node) => node.id), "Nothing"].slice(0, 12);
+      for (const from of all)
+        for (const to of all) {
+          const why = whyNotClass(source, from, to, "association"),
+            written = connect(source, from, to, "association") !== source;
+          // A note joined to the class it is for already is written the same again.
+          if (!written && why === undefined) {
+            const kinds = [from, to].map(
+              (id) => read(source).nodes.find((node) => node.id === id)?.kind,
+            );
+            expect(kinds, `${from} ${to}`).toContain("note");
+          } else expect(why === undefined, `${from} ${to}`).toBe(written);
+        }
+    }
+  });
+
+  it("says what a removal takes with it", () => {
+    expect(classRemovalSummary(SHOP, ["ns:Sales"])).toBe(
+      "Package Sales with 3 classes, 1 package, 6 relations and 2 notes",
+    );
+    expect(classRemovalSummary(SHOP, ["ns:Sales.Billing"])).toBe(
+      "Package Billing with 1 class, 2 relations and 1 note",
+    );
+    expect(classRemovalSummary(STARTER, ["Order"])).toBe("Order with 2 relations");
+    expect(classRemovalSummary(STARTER, ["Order", "Customer", "r1"])).toBe(
+      "Order, Customer with 1 relation",
+    );
+    expect(classRemovalSummary(SHOP, ["Invoice"])).toBe("Tax invoice with 2 relations");
+    expect(classRemovalSummary(add(STARTER, { kind: "class" }).source, ["Class1"])).toBe("Class1");
+    expect(
+      classRemovalSummary(add(STARTER, { kind: "package", label: "billing" }).source, [
+        "ns:billing",
+      ]),
+    ).toBe("Package billing");
+    // Relations and notes alone: how many go.
+    expect(classRemovalSummary(STARTER, ["r1"])).toBe("1 relation");
+    expect(classRemovalSummary(SHOP, ["r1", "r2", "note1"])).toBe("2 relations and 1 note");
+    expect(classRemovalSummary(SHOP, ["Nothing"])).toBe("");
+    expect(classRemovalSummary(SHOP, [])).toBe("");
+    for (const source of SOURCES)
+      for (const node of read(source).nodes)
+        expect(classRemovalSummary(source, [node.id]) === "", node.id).toBe(
+          removeClassParts(source, [node.id]) === source,
+        );
   });
 });

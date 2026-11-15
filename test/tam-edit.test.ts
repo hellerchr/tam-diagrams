@@ -201,3 +201,32 @@ describe("boxes and ends", () => {
     expect(() => parseTam(setConnection(SHOP, "e1", { to: "customer" }))).toThrow();
   });
 });
+
+describe("giving an element another id", () => {
+  it("renames it in its declaration, its connections and its interfaces", async () => {
+    const { renameId, idFor, isGeneratedId } = await import("../src/tam-edit.ts");
+    const renamed = renameId(SHOP, "api", "orders_api");
+    expect(renamed).toContain("  agent orders_api[Order API]   %% entry".replace("   %%", " %%"));
+    expect(renamed).toContain("customer -- calls: HTTPS @TLS --> orders_api\n");
+    // A statement that names it with others is written out.
+    expect(renamed).toContain(
+      "orders_api -- reads/writes --> cart\norders_api -- reads/writes --> db\n",
+    );
+    expect(renameId(SHOP, "shop", "store")).toContain("store provides IShop");
+    expect(parseTam(renamed).nodes.has("api")).toBe(false);
+    // An element that showed its id keeps showing it.
+    expect(renameId("agent a\nagent b\na -- calls --> b", "a", "first")).toBe(
+      "agent first[a]\nagent b\nfirst -- calls --> b",
+    );
+    // Taken, reserved and unreadable ids leave the source as it is.
+    for (const bad of ["cart", "agent", "1x", "a b", "api"])
+      expect(renameId(SHOP, "api", bad)).toBe(SHOP);
+    expect(idFor(SHOP, "Order API")).toBe("order_api");
+    expect(idFor(SHOP, "Cart")).toBe("cart2");
+    expect([isGeneratedId("agent1"), isGeneratedId("storage12"), isGeneratedId("api")]).toEqual([
+      true,
+      true,
+      false,
+    ]);
+  });
+});

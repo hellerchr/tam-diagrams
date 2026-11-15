@@ -33,12 +33,11 @@ import {
   keymap,
   lineNumbers,
   tooltips,
-  ViewPlugin,
-  type ViewUpdate,
 } from "@codemirror/view";
 import { tags } from "@lezer/highlight";
 import type { Known } from "./completion.ts";
 import { completeSource, continues } from "./completion-uml.ts";
+import { h, iconButton } from "./dom.ts";
 import { newlineAfterBlock, syntaxOf, typingRules } from "./syntax.ts";
 import { type DiagramType, typeOf } from "./types.ts";
 
@@ -62,8 +61,10 @@ const drawing = (name: string) =>
   `.cm-completionIcon-uml-${name}, .cm-completionIcon-declare-uml-${name}`;
 
 const look = EditorView.theme({
+  // The pane fills its place below the find bar, when that shows.
   "&": {
-    height: "100%",
+    flex: "1 1 0",
+    minHeight: "0",
     fontSize: "12px",
     backgroundColor: "var(--field)",
     color: "var(--text)",
@@ -77,7 +78,10 @@ const look = EditorView.theme({
     scrollbarWidth: "thin",
     scrollbarColor: "var(--line-strong) transparent",
   },
-  ".cm-content": { caretColor: "var(--text)" },
+  // Room below the last line, for what lies over the foot of the pane.
+  ".cm-content": { caretColor: "var(--text)", paddingBottom: "32px" },
+  ".cm-found": { backgroundColor: "color-mix(in srgb, var(--warning) 28%, transparent)" },
+  ".cm-found-here": { backgroundColor: "color-mix(in srgb, var(--warning) 60%, transparent)" },
   ".cm-cursor": { borderLeftColor: "var(--text)" },
   ".cm-gutters": {
     backgroundColor: "transparent",
@@ -292,6 +296,56 @@ const selectedLines = StateField.define<DecorationSet>({
   provide: (field) => EditorView.decorations.from(field),
 });
 
+const markFound = StateEffect.define<{ from: number; to: number; here: boolean }[]>();
+
+const found = Decoration.mark({ class: "cm-found" }),
+  foundHere = Decoration.mark({ class: "cm-found cm-found-here" });
+
+/** The places of the text that the find bar looks for, the one it stands on marked stronger. */
+const foundPlaces = StateField.define<DecorationSet>({
+  create: () => Decoration.none,
+  update(places, transaction) {
+    for (const effect of transaction.effects)
+      if (effect.is(markFound))
+        return Decoration.set(
+          effect.value.map(({ from, to, here }) => (here ? foundHere : found).range(from, to)),
+        );
+    return places.map(transaction.changes);
+  },
+  provide: (field) => EditorView.decorations.from(field),
+});
+
+/** Where a text occurs in another, whatever the case of its letters: the start of each occurrence. */
+export function occurrences(text: string, sought: string): number[] {
+  const places: number[] = [];
+  if (!sought) return places;
+  const all = text.toLowerCase(),
+    part = sought.toLowerCase();
+  for (let at = all.indexOf(part); at >= 0; at = all.indexOf(part, at + part.length))
+    places.push(at);
+  return places;
+}
+
+/**
+ * Backspace at the end of a line that holds only spaces removes the line: the cursor is back at
+ * the end of the line above, as before Enter was pressed there. Left to the other bindings
+ * anywhere else.
+ */
+export const backspaceBlankLine: Command = (view) => {
+  const { state } = view,
+    range = state.selection.main,
+    line = state.doc.lineAt(range.head);
+  if (state.selection.ranges.length > 1 || !range.empty || range.head !== line.to) return false;
+  if (line.number === 1 || !line.text || line.text.trim()) return false;
+  view.dispatch({
+    changes: { from: line.from - 1, to: line.to },
+    selection: { anchor: line.from - 1 },
+    userEvent: "delete.backward",
+    scrollIntoView: true,
+  });
+  return true;
+};
+
 /**
  * The smallest change that turns one text into another: what lies between the start and the end
  * the two have in common. Where lines were only added or only removed, the change is whole lines:
@@ -366,39 +420,39 @@ export const tabBehindText: Command = (view) => {
   return true;
 };
 
-/** The lines that wrap continue two columns further in than they start, so the start of each statement stands out. */
-const hangingIndent = ViewPlugin.fromClass(
-  class {
-    decorations: DecorationSet;
+/** The hanging indent of a line that starts with some columns of space, made once per number of columns. */
+const HANGING = new Map<number, Decoration>();
 
-    constructor(view: EditorView) {
-      this.decorations = this.read(view);
-    }
+const hanging = (columns: number) => {
+  let made = HANGING.get(columns);
+  if (!made) {
+    made = Decoration.line({
+      attributes: { style: `text-indent: -${columns}ch; padding-left: calc(${columns}ch + 6px)` },
+    });
+    HANGING.set(columns, made);
+  }
+  return made;
+};
 
-    update(update: ViewUpdate) {
-      if (update.docChanged || update.viewportChanged) this.decorations = this.read(update.view);
-    }
+/**
+ * The lines that wrap continue two columns further in than they start, so the start of each
+ * statement stands out. Every line of the text has its indent, whether it is in view or not: what
+ * is in view changes with the heights of the lines, which must not change the lines in turn.
+ */
+const hangingIndent = StateField.define<DecorationSet>({
+  create: (state) => indents(state),
+  update: (lines, transaction) => (transaction.docChanged ? indents(transaction.state) : lines),
+  provide: (field) => EditorView.decorations.from(field),
+});
 
-    private read(view: EditorView): DecorationSet {
-      const lines = [];
-      for (const { from, to } of view.visibleRanges)
-        for (let pos = from; pos <= to;) {
-          const line = view.state.doc.lineAt(pos),
-            columns = line.text.length - line.text.trimStart().length + 2;
-          lines.push(
-            Decoration.line({
-              attributes: {
-                style: `text-indent: -${columns}ch; padding-left: calc(${columns}ch + 6px)`,
-              },
-            }).range(line.from),
-          );
-          pos = line.to + 1;
-        }
-      return Decoration.set(lines);
-    }
-  },
-  { decorations: (plugin) => plugin.decorations },
-);
+function indents(state: EditorState): DecorationSet {
+  const lines = [];
+  for (let number = 1; number <= state.doc.lines; number++) {
+    const line = state.doc.line(number);
+    lines.push(hanging(line.text.length - line.text.trimStart().length + 2).range(line.from));
+  }
+  return Decoration.set(lines);
+}
 
 /** How a place is brought into view: where in the pane it comes to stand, and how far from its edges at least. */
 interface Reveal {
@@ -478,8 +532,11 @@ function tooltipHolder(): HTMLElement {
 
 /** What the pane asks of the editor around it. */
 export interface SourceHost {
-  /** The text changed by typing. */
-  changed(text: string): void;
+  /**
+   * The text changed by typing. `whole` says that the change left a whole statement: it ended a
+   * line, took a completion, or was pasted or added, and is not a word half typed.
+   */
+  changed(text: string, whole: boolean): void;
   /** The elements of the diagram, to offer where one is named. */
   elements(): Known[];
   /** Whether the source is a block diagram, completed from its notation. */
@@ -512,6 +569,12 @@ export class SourcePane {
   private active = false;
   /** When Tab was last pressed anywhere on the page: the focus that comes right after came by it. */
   private tabbed = -Infinity;
+  /** The find bar: a field above the text, and how many places of the text it found. */
+  private readonly finder: {
+    bar: HTMLElement;
+    field: HTMLInputElement;
+    count: HTMLElement;
+  };
 
   constructor(parent: HTMLElement, host: SourceHost) {
     this.host = host;
@@ -547,7 +610,9 @@ export class SourcePane {
             { key: "Tab", run: acceptCompletion },
             { key: "Tab", run: tabBehindText },
             { key: "Enter", run: newlineAfterBlock(typed) },
+            { key: "Mod-f", run: () => (this.find(), true), preventDefault: true },
             ...closeBracketsKeymap,
+            { key: "Backspace", run: backspaceBlankLine },
             ...defaultKeymap,
             indentWithTab,
           ]),
@@ -576,6 +641,7 @@ export class SourcePane {
             },
           }),
           selectedLines,
+          foundPlaces,
           this.wrapping.of([]),
           look,
           EditorView.contentAttributes.of({ "aria-label": "Diagram source", spellcheck: "false" }),
@@ -587,7 +653,22 @@ export class SourcePane {
               this.pending = true;
               this.active = true;
               update.view.setTabFocusMode(false);
-              host.changed(update.state.doc.toString());
+              // A line that was ended, a completion, and text that came whole leave a statement.
+              const whole = own.some((transaction) => {
+                if (
+                  transaction.isUserEvent("input.complete") ||
+                  transaction.isUserEvent("input.paste") ||
+                  transaction.isUserEvent("input.drop")
+                )
+                  return true;
+                let lines = false;
+                transaction.changes.iterChanges((_from, _to, _start, _end, inserted) => {
+                  lines ||= inserted.lines > 1;
+                });
+                return lines;
+              });
+              host.changed(update.state.doc.toString(), whole);
+              if (!this.finder.bar.hidden) this.seek(0, false);
             }
             // A click or a key moved the cursor: the element declared there is selected.
             else if (update.selectionSet && own.length && update.view.hasFocus)
@@ -596,6 +677,7 @@ export class SourcePane {
         ],
       }),
     });
+    this.finder = this.findBar(parent);
     // What happens outside the pane: a press there ends the work in it, and Tab may bring the focus to it.
     document.addEventListener(
       "pointerdown",
@@ -630,6 +712,115 @@ export class SourcePane {
       }
     }
     return true;
+  }
+
+  /** Builds the find bar: a field, how many places it found, and the ways to the one before and after. */
+  private findBar(parent: HTMLElement) {
+    const field = h("input", {
+        class: "field",
+        type: "text",
+        spellcheck: "false",
+        placeholder: "Find in the source…",
+        "aria-label": "Find in the source",
+      }),
+      count = h("span", { class: "find-count", role: "status" }),
+      close = () => {
+        bar.hidden = true;
+        this.view.dispatch({ effects: markFound.of([]), annotations: fromDocument.of(true) });
+        this.view.focus();
+      },
+      bar = h(
+        "div",
+        { class: "find-bar", role: "search" },
+        field,
+        count,
+        iconButton(
+          "arrow-up",
+          { tip: "The one before", key: "Shift+Enter" },
+          () => this.seek(-1),
+          "button small",
+        ),
+        iconButton(
+          "arrow-down",
+          { tip: "The next", key: "Enter" },
+          () => this.seek(1),
+          "button small",
+        ),
+        iconButton("close", { tip: "Close", key: "Esc" }, close, "button small"),
+      );
+    bar.hidden = true;
+    field.addEventListener("input", () => this.seek(0));
+    bar.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") close();
+      else if (event.key === "Enter" && event.target === field) this.seek(event.shiftKey ? -1 : 1);
+      else if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "f") field.select();
+      else return;
+      event.preventDefault();
+      event.stopPropagation();
+    });
+    parent.prepend(bar);
+    return { bar, field, count };
+  }
+
+  /** Opens the find bar with what is selected in it, or what was looked for last. */
+  find() {
+    const { bar, field } = this.finder,
+      { state } = this.view,
+      range = state.selection.main,
+      chosen = state.sliceDoc(range.from, range.to);
+    bar.hidden = false;
+    if (chosen && !chosen.includes("\n")) field.value = chosen;
+    field.focus();
+    field.select();
+    this.seek(0);
+  }
+
+  /**
+   * Marks every place the text of the find bar occurs and selects one of them: the first from the
+   * cursor on (0), the next (1) or the one before (-1), going round at the ends. With `select`
+   * off the places are only marked, as after typing in the pane.
+   */
+  private seek(step: -1 | 0 | 1, select = true) {
+    const { field, count } = this.finder,
+      { state } = this.view,
+      sought = field.value,
+      places = occurrences(state.doc.toString(), sought),
+      range = state.selection.main,
+      here = places.indexOf(range.from),
+      // The place selected now is where the others are counted from.
+      at = !places.length
+        ? -1
+        : step === 0
+          ? Math.max(
+              0,
+              places.findIndex((place) => place >= range.from),
+            )
+          : here >= 0
+            ? (here + step + places.length) % places.length
+            : step > 0
+              ? Math.max(
+                  0,
+                  places.findIndex((place) => place >= range.from),
+                )
+              : (places.findLastIndex((place) => place < range.from) + places.length) %
+                places.length;
+    count.textContent = !sought ? "" : places.length ? `${at + 1} of ${places.length}` : "None";
+    this.view.dispatch({
+      effects: [
+        markFound.of(
+          places.map((from, index) => ({
+            from,
+            to: from + sought.length,
+            here: select && index === at,
+          })),
+        ),
+        ...(select && at >= 0 ? [EditorView.scrollIntoView(places[at], { y: "center" })] : []),
+      ],
+      ...(select && at >= 0
+        ? { selection: EditorSelection.range(places[at], places[at] + sought.length) }
+        : {}),
+      annotations: fromDocument.of(true),
+    });
   }
 
   get text() {
@@ -751,6 +942,7 @@ export class SourcePane {
       changes: { from, to: blank ? line.to : from, insert: `${lead}${text}${tail}` },
       selection: EditorSelection.range(from + lead.length, from + lead.length + text.length),
       effects: EditorView.scrollIntoView(from + lead.length, { y: "center" }),
+      userEvent: "input.complete",
     });
     this.active = true;
     this.view.focus();

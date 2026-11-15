@@ -50,7 +50,12 @@ export class Inspector {
     const key = [
       editor.type,
       ...editor.selection.map(
-        (part) => `${part.type}:${part.id}:${editor.doc.picture?.parts?.get(part.id)?.kind ?? ""}`,
+        (part) =>
+          `${part.type}:${part.id}:${
+            (part.type === "wire"
+              ? editor.doc.picture?.joins?.get(part.id)?.kind
+              : editor.doc.picture?.parts?.get(part.id)?.kind) ?? ""
+          }`,
       ),
     ].join(" ");
     if (key !== this.inspected || !this.element.childElementCount) {
@@ -70,7 +75,14 @@ export class Inspector {
                   : this.diagramPane()),
       );
     }
-    for (const sync of this.sync) sync();
+    // A field reads the source as it is; while that has an error it keeps what it showed.
+    for (const sync of this.sync) {
+      try {
+        sync();
+      } catch {
+        // The source does not read at the moment.
+      }
+    }
   }
 
   /** What the pane is about: an icon and a name, above the groups. */
@@ -395,7 +407,15 @@ export class Inspector {
             (kind) => editor.allowsElements({ kind }),
           ),
         ),
-        single && this.row("Id", h("code", { class: "id" }, id), "div"),
+        // The id is what the source calls the element: changed in every connection that names it.
+        single &&
+          this.row(
+            "Id",
+            this.text(
+              () => id,
+              (next) => editor.renameElementId(id, next),
+            ),
+          ),
       ),
       this.group(
         "Style",

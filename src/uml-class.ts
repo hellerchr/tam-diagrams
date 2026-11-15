@@ -134,7 +134,8 @@ export function parseMember(raw: string): ClassMember {
     if (match) {
       let [, visibility = "", name, parameters, classifier = "", returns] = match;
       classifier = classifier.trim();
-      returns = returns.trim();
+      // A return type may follow a colon of its own (`total(): Money`), which is not part of it.
+      returns = returns.trim().replace(/^:\s*/, "");
       if (!classifier && /[$*]$/.test(returns)) {
         classifier = returns.slice(-1);
         returns = returns.slice(0, -1).trim();

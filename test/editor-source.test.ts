@@ -3,7 +3,9 @@ import { currentCompletions, startCompletion } from "@codemirror/autocomplete";
 import { EditorSelection, EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import {
+  backspaceBlankLine,
   changeBetween,
+  occurrences,
   showText,
   SourcePane,
   type SourceHost,
@@ -93,7 +95,7 @@ describe("showing a text of the document", () => {
 describe("the source pane", () => {
   const made = (text: string, type: DiagramType = "tam") => {
     const host = {
-      changed: vi.fn<(text: string) => void>(),
+      changed: vi.fn<(text: string, whole: boolean) => void>(),
       elements: () => [],
       completes: () => type === "tam",
       type: () => type,
@@ -128,7 +130,58 @@ describe("the source pane", () => {
     expect(pane.text).toBe("agent a[A]\nagent b[B]");
     expect(host.changed).not.toHaveBeenCalled();
     pane.insert("agent c[C]");
-    expect(host.changed).toHaveBeenCalledWith("agent a[A]\nagent b[B]\nagent c[C]\n");
+    expect(host.changed).toHaveBeenCalledWith("agent a[A]\nagent b[B]\nagent c[C]\n", true);
+  });
+
+  it("says whether typing left a whole statement or a word half typed", () => {
+    const { host, parent } = made("agent a[A]"),
+      view = EditorView.findFromDOM(parent.querySelector<HTMLElement>(".cm-editor")!)!,
+      type = (insert: string, userEvent = "input.type") =>
+        view.dispatch({ changes: { from: view.state.doc.length, insert }, userEvent });
+    type("\nagent b");
+    expect(host.changed).toHaveBeenLastCalledWith("agent a[A]\nagent b", true);
+    type("[");
+    expect(host.changed).toHaveBeenLastCalledWith("agent a[A]\nagent b[", false);
+    type("B]", "input.complete");
+    expect(host.changed).toHaveBeenLastCalledWith("agent a[A]\nagent b[B]", true);
+    type(" x", "input.paste");
+    expect(host.changed).toHaveBeenLastCalledWith("agent a[A]\nagent b[B] x", true);
+  });
+
+  it("finds a text whatever its case, marks every place and selects them in turn", () => {
+    const { host, pane, parent } = made("agent a[Agent]\nstorage s[S]\nAGENT b[B]"),
+      bar = parent.querySelector<HTMLElement>(".find-bar")!,
+      field = bar.querySelector("input")!,
+      view = EditorView.findFromDOM(parent.querySelector<HTMLElement>(".cm-editor")!)!,
+      key = (name: string, shiftKey = false) =>
+        field.dispatchEvent(
+          new KeyboardEvent("keydown", { key: name, shiftKey, bubbles: true, cancelable: true }),
+        ),
+      selected = () =>
+        view.state.sliceDoc(view.state.selection.main.from, view.state.selection.main.to);
+    expect(bar.hidden).toBe(true);
+    pane.find();
+    expect(bar.hidden).toBe(false);
+    field.value = "agent";
+    field.dispatchEvent(new Event("input"));
+    expect(bar.querySelector(".find-count")!.textContent).toBe("1 of 3");
+    expect(view.state.selection.main.from).toBe(0);
+    key("Enter");
+    expect(view.state.selection.main.from).toBe(8);
+    expect(selected()).toBe("Agent");
+    key("Enter");
+    key("Enter");
+    expect(view.state.selection.main.from).toBe(0);
+    key("Enter", true);
+    expect(selected()).toBe("AGENT");
+    expect(bar.querySelector(".find-count")!.textContent).toBe("3 of 3");
+    field.value = "nothing";
+    field.dispatchEvent(new Event("input"));
+    expect(bar.querySelector(".find-count")!.textContent).toBe("None");
+    key("Escape");
+    expect(bar.hidden).toBe(true);
+    // Looking for a text is not typing.
+    expect(host.changed).not.toHaveBeenCalled();
   });
 
   it("steps through the document's history, and has none of its own", () => {
@@ -189,6 +242,43 @@ describe("the source pane", () => {
     expect(holder.style.position).toBe("fixed");
     expect([holder.style.width, holder.style.height]).toEqual(["0px", "0px"]);
     expect(parent.contains(holder)).toBe(false);
+  });
+});
+
+describe("the places a text occurs", () => {
+  it("are found whatever the case, one after the other", () => {
+    expect(occurrences("Agent agent AGENT", "agent")).toEqual([0, 6, 12]);
+    expect(occurrences("aaaa", "aa")).toEqual([0, 2]);
+    expect(occurrences("abc", "")).toEqual([]);
+    expect(occurrences("abc", "x")).toEqual([]);
+  });
+});
+
+describe("Backspace on a line of spaces", () => {
+  const run = (doc: string, anchor: number, head = anchor) => {
+    const view = new EditorView({
+      state: EditorState.create({ doc, selection: EditorSelection.range(anchor, head) }),
+    });
+    const handled = backspaceBlankLine(view);
+    return { handled, doc: view.state.doc.toString(), head: view.state.selection.main.head };
+  };
+
+  it("removes the line, as if Enter had not been pressed", () => {
+    expect(run("agent a {\n  agent b[B]\n  \n}", 25)).toEqual({
+      handled: true,
+      doc: "agent a {\n  agent b[B]\n}",
+      head: 22,
+    });
+    expect(run("a\n    ", 6)).toEqual({ handled: true, doc: "a", head: 1 });
+  });
+
+  it("is left to the other bindings on any other line", () => {
+    // A line with text, an empty line, the first line, a cursor inside the spaces, a selection.
+    expect(run("a\n  b", 5).handled).toBe(false);
+    expect(run("a\n", 2).handled).toBe(false);
+    expect(run("  ", 2).handled).toBe(false);
+    expect(run("a\n    ", 4).handled).toBe(false);
+    expect(run("a\n    ", 2, 6).handled).toBe(false);
   });
 });
 

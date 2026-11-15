@@ -82,6 +82,39 @@ export function diagramIn(name: string, content: string): Opened {
   };
 }
 
+/**
+ * A picture with room around it: its area grows by a margin on every side, and so does the size it
+ * is shown at.
+ */
+export function withMargin(svg: string, margin: number): string {
+  const head = svg.match(
+    /viewBox="(-?[\d.]+) (-?[\d.]+) (-?[\d.]+) (-?[\d.]+)" width="([\d.]+)" height="([\d.]+)"/,
+  );
+  if (!head || !(margin > 0)) return svg;
+  const [all, x, y, width, height] = head,
+    wide = Number(width) + 2 * margin,
+    high = Number(height) + 2 * margin;
+  return svg.replace(
+    all,
+    `viewBox="${Number(x) - margin} ${Number(y) - margin} ${wide} ${high}" width="${wide}" height="${high}"`,
+  );
+}
+
+/**
+ * A picture without the halos of a color: the outline in the color of the page that a label on a
+ * line is drawn with, so the line stops short of it. With nothing behind the picture there is no
+ * such color, and the labels stand on the lines as they are.
+ */
+export function withoutHalos(svg: string, color: string): string {
+  return svg.replaceAll(
+    new RegExp(
+      ` stroke="${color.replace(/[^\w#]/g, "\\$&")}" stroke-width="[\\d.]+" stroke-linejoin="round" paint-order="stroke"`,
+      "g",
+    ),
+    "",
+  );
+}
+
 /** A picture with a color behind it: a rectangle over its whole area, below everything else. */
 export function withBackground(svg: string, color: string): string {
   const box = svg.match(/viewBox="(-?[\d.]+) (-?[\d.]+) (-?[\d.]+) (-?[\d.]+)"/);
@@ -94,21 +127,41 @@ export function withBackground(svg: string, color: string): string {
   return svg.replace(/(<svg[^>]*>)/, `$1${rect}`);
 }
 
-/** A diagram that was on show lately: its title and its source. */
+/** A short name for a text that two different texts hardly ever share: its FNV-1a hash in base 36. */
+export function shortHash(text: string): string {
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < text.length; index++)
+    hash = Math.imul(hash ^ text.charCodeAt(index), 0x01000193);
+  return (hash >>> 0).toString(36);
+}
+
+/** A diagram that was on show lately: its title, its source, and when it left. */
 export interface Recent {
   title: string;
   source: string;
+  /** Whether the diagram has a title of its own; one without goes by the name of its type. */
+  named?: boolean;
+  /** When it was on show last, in milliseconds since 1970. */
+  at?: number;
 }
 
 /** The most diagrams the list of recent ones keeps. */
 const RECENT = 5;
 
-/** The list of recent diagrams with one more at its head: one entry per title, the newest first. */
+/**
+ * What makes two recent diagrams the same one: the type and the title where the diagram has one,
+ * and its text where it has none, so that several untitled diagrams of a type are all kept.
+ */
+const recentKey = (recent: Recent) =>
+  `${detectUml(recent.source) ?? "tam"}:${recent.named === false ? shortHash(recent.source) : recent.title}`;
+
+/** The list of recent diagrams with one more at its head: one entry per diagram, the newest first. */
 export function withRecent(list: Recent[], entry: Recent): Recent[] {
   if (!entry.source.trim()) return list;
+  const key = recentKey(entry);
   return [
     entry,
-    ...list.filter((other) => other.title !== entry.title && other.source !== entry.source),
+    ...list.filter((other) => recentKey(other) !== key && other.source !== entry.source),
   ].slice(0, RECENT);
 }
 
@@ -126,5 +179,74 @@ export function readRecents(stored: string | null): Recent[] {
       : [];
   } catch {
     return [];
+  }
+}
+
+/** How long ago a moment was, in a word or two: "just now", "5 min ago", "3 h ago", "2 d ago". */
+export function ageOf(at: number | undefined, now = Date.now()): string {
+  if (!at) return "";
+  const minutes = Math.floor((now - at) / 60000);
+  if (minutes < 1) return "just now";
+  if (minutes < 60) return `${minutes} min ago`;
+  if (minutes < 60 * 24) return `${Math.floor(minutes / 60)} h ago`;
+  return `${Math.floor(minutes / (60 * 24))} d ago`;
+}
+
+/** What belongs to a diagram besides its source: the file it came from, and whether it was saved. */
+export interface Kept<File> {
+  file: File | undefined;
+  saved: boolean;
+}
+
+/**
+ * The replacements of one diagram by another, each a step of the history. The file of a diagram
+ * and whether it was saved belong to the diagram: a step across a replacement, back or forth,
+ * leaves them with the diagram that goes and brings back those of the diagram that comes.
+ */
+export class Replacements<File> {
+  /** The replacements in their order: those taken, then those undone, which Redo takes again. */
+  private steps: { before: string; after: string; left: Kept<File>; right: Kept<File> }[] = [];
+  /** How many of the replacements are taken and not undone. */
+  private taken = 0;
+
+  /** Notes that the diagram `before`, with what belongs to it, is being replaced by `after`. */
+  add(before: string, after: string, kept: Kept<File>) {
+    this.steps.length = this.taken;
+    this.steps.push({ before, after, left: kept, right: { file: undefined, saved: true } });
+    if (this.steps.length > 100) this.steps.shift();
+    this.taken = this.steps.length;
+  }
+
+  /**
+   * A step of the history from one source to another: an edit, Undo or Redo. When it crosses a
+   * replacement, `now` is kept with the diagram that goes, and what belongs to the diagram that
+   * comes is returned; undefined for a step within one diagram. Undo crosses the replacement
+   * taken last, Redo the one undone last, so that two replacements between the same sources are
+   * told apart. An edit ends what Redo could take again.
+   */
+  cross(
+    from: string,
+    to: string,
+    now: Kept<File>,
+    how: "edit" | "undo" | "redo" = "edit",
+  ): Kept<File> | undefined {
+    const step = this.steps[how === "redo" ? this.taken : this.taken - 1],
+      crossed =
+        !!step &&
+        (how === "undo"
+          ? step.after === from && step.before === to
+          : step.before === from && step.after === to);
+    if (!crossed) {
+      if (how === "edit") this.steps.length = this.taken;
+      return undefined;
+    }
+    if (how === "undo") {
+      this.taken--;
+      step.right = now;
+      return step.left;
+    }
+    if (how === "redo") this.taken++;
+    step.left = now;
+    return step.right;
   }
 }

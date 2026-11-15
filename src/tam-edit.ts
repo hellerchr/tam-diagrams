@@ -460,6 +460,81 @@ export function addInterface(
   return lines.join("\n");
 }
 
+/** Whether an id is one a new element got without a name of its own: its kind and a number. */
+export const isGeneratedId = (id: string) =>
+  new RegExp(`^(${ELEMENT_KINDS.join("|")}|element)\\d+$`).test(id);
+
+/** The id a name gives, among the ids a source has: `Order API` gives `order_api`. */
+export function idFor(source: string, name: string): string {
+  return freshId(idsOf(parseTam(source)), name);
+}
+
+/**
+ * Gives an element another id: in its declaration and in every connection and interface that
+ * names it. A statement that names it with others (`a & b`, a chain) is written out, one
+ * connection a line. The source stays as it is when the id is taken, reserved, or no id.
+ */
+export function renameId(source: string, id: string, next: string): string {
+  const diagram = parseTam(source),
+    node = declared(diagram, id),
+    lines = linesOf(source);
+  if (
+    !isElement(node) ||
+    !/^[A-Za-z_]\w*$/.test(next) ||
+    RESERVED.has(next) ||
+    diagram.nodes.has(next) ||
+    next === node.id
+  )
+    return source;
+  const declaration = read(lines[node.line - 1]);
+  if (!declaration) return source;
+  // Bottom up, so the lines above keep their numbers.
+  for (let index = lines.length - 1; index >= 0; index--) {
+    if (index === node.line - 1) {
+      lines[index] = write({ ...declaration, id: next, label: declaration.label ?? node.id });
+      continue;
+    }
+    const statement = statementOf(lines[index]);
+    if (read(lines[index])) continue;
+    const offer = statement.match(INTERFACE);
+    if (offer) {
+      if (offer[1] === node.id)
+        lines[index] = lines[index].replace(new RegExp(`^(\\s*)${node.id}\\b`), `$1${next}`);
+      continue;
+    }
+    const connections = quietly(() => readConnections(statement, 0));
+    if (!connections?.some((item) => item.from === node.id || item.to === node.id)) continue;
+    // A statement that names only this element among its ends keeps its text.
+    const only = connections.length === 1;
+    if (only) {
+      const [left, ...rest] = lines[index].split(/(?=\s(?:<--|--|-\.|---))/),
+        tail = rest.join("");
+      const renamed = (text: string) =>
+        text.replace(new RegExp(`(^|[^\\w])${node.id}(?![\\w])`, "g"), `$1${next}`);
+      const [connection] = connections,
+        end = tail.match(/(-->|---|\.->)\s*\w+\s*(%%.*)?$/);
+      if (end && left !== undefined) {
+        const at = tail.lastIndexOf(end[0]) + end[1].length;
+        lines[index] =
+          (connection.from === node.id ? renamed(left) : left) +
+          tail.slice(0, at) +
+          (connection.to === node.id ? renamed(tail.slice(at)) : tail.slice(at));
+        continue;
+      }
+    }
+    rewrite(
+      lines,
+      index,
+      connections.map((item) => ({
+        ...item,
+        from: item.from === node.id ? next : item.from,
+        to: item.to === node.id ? next : item.to,
+      })),
+    );
+  }
+  return lines.join("\n");
+}
+
 /** Removes elements, with what they hold and every connection at them, and connections, by id. */
 export function remove(source: string, ids: Iterable<string>): string {
   const diagram = parseTam(source),

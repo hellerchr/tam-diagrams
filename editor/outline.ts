@@ -1,7 +1,8 @@
 /**
  * The Outline tab of the left panel: the elements of the diagram as a tree. The arrow opens and
  * closes an element that holds others, a click selects, a double click names, a drag puts an
- * element inside another.
+ * element inside another. The tree is one stop for Tab: the arrow keys go from row to row inside
+ * it, and select.
  */
 
 import { h, icon, iconButton } from "./dom.ts";
@@ -110,6 +111,11 @@ export class Outline {
       item.children.some(matches);
     const kinds = [...(editor.doc.picture?.parts?.values() ?? [])].map((part) => part.kind);
     const key = JSON.stringify([items, kinds, [...this.folded], words, editor.type]);
+    // The keyboard is in the tree: it stays there, whatever happens to the row it was on.
+    const active = document.activeElement,
+      held = this.tree.contains(active)
+        ? [...this.rows.values()].indexOf(active as HTMLElement)
+        : -1;
     if (key !== this.shown) {
       this.shown = key;
       this.rows.clear();
@@ -134,6 +140,15 @@ export class Outline {
     }
     for (const [id, line] of this.rows)
       line.setAttribute("aria-selected", String(selected.includes(id)));
+    // One row is the tree's stop for Tab: the one selected last, else the one the keyboard is on
+    // or was on, else the first.
+    const lines = [...this.rows.values()],
+      stop =
+        this.rows.get(selected.at(-1) ?? "") ??
+        (active instanceof HTMLElement && lines.includes(active) ? active : undefined) ??
+        lines[Math.max(0, Math.min(held, lines.length - 1))];
+    for (const line of lines) line.tabIndex = line === stop ? 0 : -1;
+    if (held >= 0 && stop && document.activeElement !== stop) stop.focus();
     if (mark !== this.marked) {
       this.marked = mark;
       // The row of what was selected last comes into view, without taking the focus from the canvas.
@@ -247,16 +262,25 @@ export class Outline {
     line.addEventListener("keydown", (event) => {
       const lines = [...this.rows.values()],
         at = lines.indexOf(line);
+      // The keys of the history and of the window are not the tree's.
+      if (event.ctrlKey || event.metaKey || event.altKey) return;
+      // A row the keyboard came to is selected by the keys that act on it.
+      const chosen = () => {
+        if (!editor.isSelected({ type: "element", id: item.id })) line.click();
+      };
       if (event.key === "ArrowRight" && parent && folded) toggle(false);
       else if (event.key === "ArrowLeft" && parent && !folded) toggle(false);
       else if (event.key === "ArrowDown") lines[at + 1]?.click();
       else if (event.key === "ArrowUp") lines[at - 1]?.click();
-      else if (event.key === "Enter" || event.key === "F2") editor.rename(item.id);
-      else if (event.key === "Delete" || event.key === "Backspace") editor.deleteSelection();
+      else if (event.key === "Home") lines[0]?.click();
+      else if (event.key === "End") lines.at(-1)?.click();
+      else if (event.key === " ") chosen();
+      else if (event.key === "Enter" || event.key === "F2") (chosen(), editor.rename(item.id));
+      else if (event.key === "Delete" || event.key === "Backspace")
+        (chosen(), editor.deleteSelection());
       else return;
       event.preventDefault();
       event.stopPropagation();
-      this.rows.get(item.id)?.focus();
     });
     line.addEventListener("dragstart", (event) => {
       // The arrow opens and closes; it does not start a drag.

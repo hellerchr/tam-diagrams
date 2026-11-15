@@ -425,6 +425,32 @@ select.field {
   min-width: 0;
 }
 
+/* The letter that opens a menu with Alt shows while Alt is held. */
+
+.menu-title {
+  gap: 0;
+}
+
+.menu-title u {
+  text-decoration: none;
+}
+
+.app.alt .menu-title u {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.file-name {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 16vw;
+  margin: 0 4px 0 2px;
+  overflow: hidden;
+  color: var(--text-2);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* The title is a field as wide as its text: the text lies under the field and gives the box its width. */
 
 .doc-title {
@@ -487,7 +513,7 @@ select.field {
   flex: none;
   width: 6px;
   height: 6px;
-  margin-left: 2px;
+  margin: 0 4px 0 -2px;
   border-radius: 50%;
   background: var(--accent);
 }
@@ -622,9 +648,11 @@ select.field {
   transform: rotate(-90deg);
 }
 
+/* As many tiles in a row as the panel has room for; they share its width. */
+
 .tiles {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(72px, 1fr));
   align-items: start;
   gap: 2px;
   padding: 4px 6px 8px;
@@ -654,6 +682,10 @@ select.field {
 .tile .icon svg {
   width: 24px;
   height: 24px;
+}
+
+.tile:hover {
+  box-shadow: inset 0 0 0 1px var(--line);
 }
 
 .tile.sticky {
@@ -726,7 +758,7 @@ select.field {
   background: var(--accent-soft);
 }
 
-.node:focus-visible {
+.tree:focus-within .node:focus {
   box-shadow: inset 0 0 0 2px var(--accent);
 }
 
@@ -922,56 +954,35 @@ canvas.layer {
   top: 48px;
 }
 
-/* The greeting of a first visit. */
+/* The greeting of a first visit: a strip along the foot of the canvas, above which the diagram is fitted. */
 
 .welcome {
   position: absolute;
   left: 12px;
+  right: 12px;
   bottom: 12px;
   z-index: 2;
   display: flex;
-  flex-direction: column;
+  align-items: center;
   gap: 8px;
-  width: min(320px, calc(100% - 24px));
-  padding: 12px;
+  max-width: 880px;
+  margin: 0 auto;
+  padding: 8px 8px 8px 12px;
   border: 1px solid var(--line-strong);
   border-radius: 8px;
   background: var(--raised);
   box-shadow: var(--shadow);
 }
 
-.welcome header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin: -4px -4px -4px 0;
-}
-
-.welcome strong {
-  font-size: 13px;
-  font-weight: 600;
-}
-
 .welcome p {
+  flex: 1;
+  min-width: 0;
   color: var(--text-2);
 }
 
-.welcome b {
+.welcome strong {
   color: var(--text);
   font-weight: 600;
-}
-
-.welcome kbd {
-  font:
-    11px system-ui,
-    sans-serif;
-  color: var(--text);
-}
-
-.welcome footer {
-  display: flex;
-  gap: 8px;
-  margin-top: 4px;
 }
 
 .preview-label {
@@ -993,7 +1004,7 @@ canvas.layer {
 .minimap {
   position: absolute;
   right: 12px;
-  bottom: 12px;
+  bottom: calc(12px + var(--foot, 0px));
   width: 180px;
   height: 120px;
   border: 1px solid var(--line-strong);
@@ -1004,12 +1015,20 @@ canvas.layer {
   touch-action: none;
 }
 
+/* Notices stand side by side at the foot of the canvas, above the greeting while it shows. */
+
 .toasts {
   position: absolute;
   left: 50%;
-  bottom: 16px;
+  bottom: calc(16px + var(--foot, 0px));
   transform: translateX(-50%);
-  max-width: min(560px, 90%);
+  display: flex;
+  flex-wrap: wrap-reverse;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: max-content;
+  max-width: 94%;
   pointer-events: none;
 }
 
@@ -1101,9 +1120,10 @@ canvas.layer {
   flex: none;
 }
 
-/* The source keeps a few lines below the properties, however high they were dragged. */
+/* Each of the two keeps a few lines, however far the line between them was dragged. */
 
 .side.split .section.properties {
+  min-height: min(160px, 50%);
   max-height: calc(100% - 160px);
 }
 
@@ -1181,10 +1201,83 @@ canvas.layer {
   border-top: 1px solid var(--line);
 }
 
+/* The title of a group folds it. */
+
 .group h3 {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin: -4px -6px;
+  padding: 4px 6px;
+  border-radius: var(--radius);
   font-size: 11px;
   font-weight: 600;
   color: var(--text-2);
+  cursor: pointer;
+}
+
+.group h3:hover {
+  background: var(--hover);
+}
+
+.group h3:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.group h3 .icon {
+  margin-left: -4px;
+}
+
+.group h3 .icon svg {
+  width: 12px;
+  height: 12px;
+  transition: transform 0.12s;
+}
+
+.group h3[aria-expanded="false"] .icon svg {
+  transform: rotate(-90deg);
+}
+
+.group.closed {
+  padding-bottom: 8px;
+}
+
+.group.closed > :not(h3) {
+  display: none;
+}
+
+/* A list to choose one of: a field that names the choice and opens the list. */
+
+.field.choice {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.field.choice .name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.field.choice .name.mixed,
+.field.choice .icon {
+  color: var(--text-2);
+}
+
+.field.choice .icon svg {
+  width: 12px;
+  height: 12px;
+}
+
+.field.choice[aria-expanded="true"] {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
 }
 
 .row {
@@ -1313,12 +1406,33 @@ code.id {
 
 /* The source and its problems. */
 
+.section.source {
+  position: relative;
+}
+
 .source {
+  position: relative;
+  display: flex;
+  flex-direction: column;
   flex: 1;
   min-height: 0;
   width: 100%;
   background: var(--field);
 }
+
+/* The problems lie over the foot of the source: the text does not move when one comes or goes. */
+
+.strips {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+}
+
+/* A problem is said in one line; a click shows it whole. */
 
 .problem {
   display: block;
@@ -1326,11 +1440,19 @@ code.id {
   width: 100%;
   padding: 6px 12px;
   border: 0;
-  border-bottom: 1px solid var(--line);
+  border-top: 1px solid color-mix(in srgb, var(--danger) 30%, var(--line));
   background: color-mix(in srgb, var(--danger) 10%, var(--panel));
   color: var(--danger);
   text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
   cursor: pointer;
+}
+
+.problem.whole {
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .problem code {
@@ -1340,23 +1462,50 @@ code.id {
 }
 
 .problem.warning {
+  border-top-color: color-mix(in srgb, var(--warning) 30%, var(--line));
   background: var(--warning-soft);
   color: var(--warning);
-  cursor: default;
 }
 
-/* The status bar. */
+/* The find bar: a row above the text, while something is looked for. */
+
+.find-bar {
+  display: flex;
+  align-items: center;
+  flex: none;
+  gap: 2px;
+  padding: 4px 4px 4px 8px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+  user-select: none;
+}
+
+.find-bar .field {
+  flex: 1;
+  height: 24px;
+}
+
+.find-count {
+  min-width: 52px;
+  padding: 0 4px;
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+  white-space: nowrap;
+}
+
+/* The status bar: its parts stand in groups with a line between them. */
 
 .status {
   grid-area: status;
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 0;
   padding: 0 4px 0 12px;
   background: var(--panel-2);
   border-top: 1px solid var(--line);
   color: var(--text-2);
-  font-size: 11px;
+  font-size: 12px;
   white-space: nowrap;
   min-width: 0;
 }
@@ -1364,18 +1513,38 @@ code.id {
 .hint {
   flex: 1;
   min-width: 0;
+  margin-right: 8px;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
+.status-item,
+.status-button.problem-item,
+.zooms,
+.modes {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  height: 16px;
+  padding: 0 8px;
+  border-left: 1px solid var(--line-strong);
+}
+
 .status-item {
-  padding: 0 6px;
   font-variant-numeric: tabular-nums;
 }
 
 .status-item.position {
-  min-width: 76px;
-  text-align: right;
+  min-width: 84px;
+  justify-content: flex-end;
+}
+
+.status-item:empty {
+  display: none;
+}
+
+.zooms {
+  padding-right: 0;
 }
 
 .status-button {
@@ -1394,12 +1563,9 @@ code.id {
   padding: 0;
 }
 
-.status-button.zoom {
-  min-width: 52px;
-  font-variant-numeric: tabular-nums;
-}
-
 .status-button.problem-item {
+  height: 20px;
+  border-radius: 0;
   color: var(--danger);
 }
 
@@ -1407,15 +1573,38 @@ code.id {
   color: var(--warning);
 }
 
-.zooms,
-.modes {
+/* The zoom: a number to type over, and beside it the list of the usual ones. */
+
+.zoom-box {
   display: flex;
   align-items: center;
-  gap: 2px;
-  height: 16px;
-  margin-left: 4px;
-  padding-left: 6px;
-  border-left: 1px solid var(--line-strong);
+}
+
+.zoom-field {
+  width: 44px;
+  height: 20px;
+  padding: 0 2px;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  background: none;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.zoom-field:hover {
+  background: var(--hover);
+}
+
+.zoom-field:focus {
+  outline: none;
+  border-color: var(--accent);
+  background: var(--field);
+  color: var(--text);
+}
+
+.status-button.zoom {
+  width: 16px;
+  padding: 0;
 }
 
 /* Menus. */
@@ -1495,6 +1684,13 @@ code.id {
 
 .menu > button > .icon {
   color: var(--text-2);
+}
+
+.menu .row-note {
+  flex: none;
+  margin-left: 16px;
+  color: var(--text-3);
+  font-size: 11px;
 }
 
 .menu hr {
@@ -1915,6 +2111,10 @@ code.id {
   grid-template-columns: 88px minmax(0, 1fr);
 }
 
+.export-options .note {
+  padding-left: 96px;
+}
+
 /* The list of all commands. */
 
 .dialog.commands {
@@ -1978,6 +2178,14 @@ code.id {
     11px system-ui,
     sans-serif;
   color: var(--text-2);
+}
+
+.command-said {
+  flex: none;
+  padding: 8px 16px;
+  border-top: 1px solid var(--line);
+  background: var(--warning-soft);
+  color: var(--warning);
 }
 
 .command[aria-selected="true"] {

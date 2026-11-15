@@ -30,6 +30,29 @@ export function zoomLevel(zoom: number, direction: 1 | -1): number {
   return (direction > 0 ? above : below) ?? zoom;
 }
 
+/**
+ * How far a box has to move to lie inside a frame: the least along each axis, and to the start of
+ * the frame along an axis on which the box is the longer one. Undefined when it lies inside already.
+ */
+export function panTo(box: Box, frame: Box): Point | undefined {
+  const along = (at: number, length: number, from: number, room: number) =>
+    at < from || length > room
+      ? from - at
+      : at + length > from + room
+        ? from + room - at - length
+        : 0;
+  // A box longer than the frame that covers it already stays where it is.
+  const covers = (at: number, length: number, from: number, room: number) =>
+    length > room && at <= from && at + length >= from + room;
+  const x = covers(box.x, box.width, frame.x, frame.width)
+      ? 0
+      : along(box.x, box.width, frame.x, frame.width),
+    y = covers(box.y, box.height, frame.y, frame.height)
+      ? 0
+      : along(box.y, box.height, frame.y, frame.height);
+  return x || y ? { x, y } : undefined;
+}
+
 /** The zoom range, and the grid dots' distance in diagram coordinates. */
 const MIN_ZOOM = 0.1,
   MAX_ZOOM = 8,
@@ -59,6 +82,8 @@ export class View {
   private pending = false;
   /** The box the view was fitted to last, with the viewport that gave: a canvas that changes its size fits it again while the viewport is still that one. */
   private fitted: { box: Box; margin: number; zoom: number; origin: Point } | undefined;
+  /** The strips at the top and the bottom of the canvas that something lies over: a fit leaves them free. */
+  private insets = { top: 0, bottom: 0 };
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
@@ -69,13 +94,7 @@ export class View {
     canvas.before(this.back);
     new ResizeObserver(() => {
       const { fitted } = this;
-      if (
-        fitted &&
-        fitted.zoom === this.zoom &&
-        fitted.origin.x === this.origin.x &&
-        fitted.origin.y === this.origin.y
-      )
-        this.fit(fitted.box, fitted.margin);
+      if (fitted && this.isFitted) this.fit(fitted.box, fitted.margin);
       this.draw();
     }).observe(canvas);
     // A pinch or Ctrl with the wheel zooms about the pointer; the wheel alone is left to move the view.
@@ -170,10 +189,15 @@ export class View {
     this.changed();
   }
 
-  /** Shows a box of the diagram whole and centered, as large as the canvas allows up to FIT_ZOOM. */
+  /**
+   * Shows a box of the diagram whole and centered, as large as the canvas allows up to FIT_ZOOM,
+   * in the part of the canvas that nothing lies over.
+   */
   fit(box: Box, margin = 56) {
-    const { width, height } = this.size;
-    if (!width || !height) return;
+    const { width } = this.size,
+      { top, bottom } = this.insets,
+      height = this.size.height - top - bottom;
+    if (!width || height <= 0) return;
     const zoom = Math.min(
       FIT_ZOOM,
       (width - 2 * margin) / Math.max(1, box.width),
@@ -182,10 +206,58 @@ export class View {
     this.zoom = Math.max(MIN_ZOOM, zoom);
     this.origin = {
       x: width / 2 - (box.x + box.width / 2) * this.zoom,
-      y: height / 2 - (box.y + box.height / 2) * this.zoom,
+      y: top + height / 2 - (box.y + box.height / 2) * this.zoom,
     };
     this.fitted = { box, margin, zoom: this.zoom, origin: this.origin };
     this.changed();
+  }
+
+  /** Whether the viewport is still the one the last fit gave: nothing zoomed or moved it since. */
+  get isFitted(): boolean {
+    const { fitted } = this;
+    return (
+      !!fitted &&
+      fitted.zoom === this.zoom &&
+      fitted.origin.x === this.origin.x &&
+      fitted.origin.y === this.origin.y
+    );
+  }
+
+  /**
+   * Says which strips at the top and the bottom of the canvas something lies over. A view that
+   * was fitted is fitted again into what is left.
+   */
+  setInsets(top: number, bottom: number) {
+    if (top === this.insets.top && bottom === this.insets.bottom) return;
+    const again = this.isFitted ? this.fitted : undefined;
+    this.insets = { top, bottom };
+    if (again) this.fit(again.box, again.margin);
+  }
+
+  /** Whether a box of the diagram shows whole in the part of the canvas that nothing lies over. */
+  shows(box: Box): boolean {
+    return !panTo(this.boxOnScreen(box), this.frame(0));
+  }
+
+  /**
+   * Brings a box of the diagram into view by moving the view the least that does it: not at all
+   * when the box shows whole already, and to its top left corner when it is larger than the canvas.
+   */
+  reveal(box: Box, margin = 24) {
+    const by = panTo(this.boxOnScreen(box), this.frame(margin));
+    if (by) this.panBy(by.x, by.y);
+  }
+
+  /** The part of the canvas that nothing lies over, a margin in from its edges. */
+  private frame(margin: number): Box {
+    const { width, height } = this.size,
+      { top, bottom } = this.insets;
+    return {
+      x: margin,
+      y: top + margin,
+      width: width - 2 * margin,
+      height: height - top - bottom - 2 * margin,
+    };
   }
 
   private changed() {

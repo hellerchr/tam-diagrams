@@ -120,6 +120,31 @@ describe("class diagram syntax", () => {
     );
   });
 
+  it("shows the return type of an operation after one colon, however it is written", async () => {
+    expect(parseMember("+total(): Money").text).toBe("+total() : Money");
+    expect(parseMember("+total() : Money").text).toBe("+total() : Money");
+    expect(parseMember("+total() Money").text).toBe("+total() : Money");
+    expect(parseMember("+total():Money").text).toBe("+total() : Money");
+    expect(parseMember("+f(): Promise<void>").text).toBe("+f() : Promise<void>");
+    expect(parseMember("+f(): List~Item~").text).toBe("+f() : List<Item>");
+    expect(parseMember("+f(a: int, b: int): int").text).toBe("+f(a: int, b: int) : int");
+    expect(parseMember("+count(): int$")).toMatchObject({
+      text: "+count() : int",
+      underline: true,
+    });
+    expect(parseMember("+draw()* : void")).toMatchObject({ text: "+draw() : void", italic: true });
+    expect(parseMember("+run()").text).toBe("+run()");
+    expect(parseMember("+run():").text).toBe("+run()");
+    // An attribute keeps its colon.
+    expect(parseMember("+id: string").text).toBe("+id: string");
+    const { scene } = await renderUml(
+      "classDiagram\n  class Order {\n    +total(): Money\n    +sum() Money\n    +f(): Promise<void>\n  }",
+      umlColors,
+    );
+    const drawn = scene.texts.map((text) => text.text).filter((text) => text.includes("("));
+    expect(drawn).toEqual(["+total() : Money", "+sum() : Money", "+f() : Promise<void>"]);
+  });
+
   it("reports errors with line numbers", () => {
     expect(error("classDiagram\n  class A {\n    +x").message).toBe(
       "Line 2: Class `A` is missing its closing `}`.",

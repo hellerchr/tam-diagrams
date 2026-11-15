@@ -6,7 +6,7 @@
 
 import { svgUrl } from "../src/index.ts";
 import { h, icon, iconButton, setOff } from "./dom.ts";
-import type { Recent } from "./files.ts";
+import { ageOf, type Recent } from "./files.ts";
 import type { Command } from "./menus.ts";
 import { STARTER } from "./starter.ts";
 import { structureOf } from "./structures.ts";
@@ -21,7 +21,8 @@ interface DialogParts {
 /**
  * A dialog with its title and a close button at the top, its body, and its buttons at the bottom,
  * open over the page. It is never higher than the window: the body scrolls, the title and the
- * buttons stay. It leaves the page when it closes: by its button, by Escape, or by a click beside it.
+ * buttons stay. Tab goes round inside it and never leaves it. It leaves the page when it closes:
+ * by its button, by Escape, or by a click beside it.
  */
 function dialog(kind: string, title: string, parts: DialogParts): HTMLDialogElement {
   const box = h(
@@ -40,6 +41,27 @@ function dialog(kind: string, title: string, parts: DialogParts): HTMLDialogElem
   box.addEventListener("pointerdown", (event) => {
     if (event.target === box) box.close();
   });
+  box.addEventListener("keydown", (event) => {
+    if (event.key !== "Tab") return;
+    const stops = [
+        ...box.querySelectorAll<HTMLElement>("button, input, select, textarea, [tabindex]"),
+      ].filter((stop) => stop.tabIndex >= 0 && stop.getClientRects().length > 0),
+      first = stops[0],
+      last = stops.at(-1),
+      active = document.activeElement,
+      // From the last stop on to the first, and back from the first to the last.
+      next = event.shiftKey
+        ? active === first || active === box
+          ? last
+          : undefined
+        : active === last
+          ? first
+          : undefined;
+    if (!first) return event.preventDefault();
+    if (!next) return;
+    event.preventDefault();
+    next.focus();
+  });
   document.body.append(box);
   box.showModal();
   // The focus starts on the dialog, not on its close button.
@@ -49,6 +71,12 @@ function dialog(kind: string, title: string, parts: DialogParts): HTMLDialogElem
 
 /** Whether a dialog is open over the page. */
 export const dialogOpen = () => !!document.querySelector("dialog[open]");
+
+/** Puts the focus into the open dialog when it is somewhere else on the page. */
+export function focusDialog() {
+  const box = document.querySelector<HTMLElement>("dialog[open]");
+  if (box && !box.contains(document.activeElement)) box.focus();
+}
 
 /** What the pointer does, which a sheet writes as words between the keys. */
 const GESTURES = new Set(["Click", "Drag", "Wheel"]);
@@ -90,7 +118,7 @@ const VIEW_KEYS: SheetGroup = [
   [
     ["Wheel", "Move the view; Space-drag and the middle button do too"],
     [["Shift", "Wheel"], "Move the view sideways"],
-    [["Ctrl", "Wheel"], "Zoom; + and − do too"],
+    [["Ctrl", "Wheel"], "Zoom; + and − do too, and the zoom in the status bar takes a number"],
     [["1"], "Fit the diagram"],
     [["2"], "Fit the selection"],
     [["Ctrl", "0"], "Zoom to 100%"],
@@ -98,8 +126,9 @@ const VIEW_KEYS: SheetGroup = [
     [["Ctrl", "S"], "Save; with Shift, save as another file"],
     [["Ctrl", "O"], "Open a file"],
     [["Ctrl", "Alt", "N"], "New diagram"],
-    [["Ctrl", "K"], "All commands, to pick by typing"],
-    [["Alt"], "The menu bar; F10 does too"],
+    [["Ctrl", "K"], "All commands, tools and shapes, to pick by typing"],
+    [["Alt"], "The menu bar; F10 does too. With a letter, its menu: Alt+F for File"],
+    [["Ctrl", "F"], "Find in the source, with the cursor there"],
   ],
 ];
 
@@ -112,9 +141,8 @@ const BLOCK_KEYS: SheetGroup[] = [
       [["A", "U", "S", "G"], "Agent, human, storage, group: then click"],
       ["Double-click a shape", "Keep the tool to place several; Escape ends it"],
       ["Double-click the canvas", "Add an agent"],
-      ["Click a dot", "Add a connected agent on that side"],
-      ["Drag a dot", "Connect to another element, or to a new one"],
-      [["C"], "Connect tool"],
+      ["Drag a dot", "Connect to another element; released on the empty canvas, to a new one"],
+      [["C"], "Connect tool: drag from one element to another"],
     ],
   ],
   [
@@ -122,7 +150,7 @@ const BLOCK_KEYS: SheetGroup[] = [
     [
       ["Click", "Select"],
       [["Shift", "Click"], "Add to the selection, or take from it"],
-      ["Drag on the canvas", "Select with a frame"],
+      ["Drag on the canvas", "Select with a frame; inside a container, its parts"],
       [["Ctrl", "A"], "Select everything"],
       [["Escape"], "End a gesture or a tool; then clear the selection"],
       [["Enter", "F2"], "Name an element; a double click does too"],
@@ -136,7 +164,10 @@ const BLOCK_KEYS: SheetGroup[] = [
   [
     "Move and arrange",
     [
-      ["Drag", "Move; into a container to put it inside"],
+      [
+        "Drag",
+        "Move; into a container to put it inside. A container moves by its title, or once selected",
+      ],
       [["Shift", "Drag"], "Keep to one axis"],
       [["Ctrl", "Drag"], "Drag a copy away"],
       [["Alt", "Drag"], "No snapping"],
@@ -152,7 +183,8 @@ const BLOCK_KEYS: SheetGroup[] = [
 
 /** What the keyboard and the mouse do in a diagram that lays itself out: its parts are added, named, joined and removed. */
 const structureKeys = (info: TypeInfo): SheetGroup[] => {
-  const usual = structureOf(info.type)?.pieces[0]?.name.toLowerCase() ?? "part";
+  const structure = structureOf(info.type),
+    usual = structure?.pieces[0]?.name.toLowerCase() ?? "part";
   return [
     [
       "Add and connect",
@@ -160,7 +192,12 @@ const structureKeys = (info: TypeInfo): SheetGroup[] => {
         ["Click a shape", "Add it at the selected part"],
         ["Drag a shape", "Carry it onto a part, into a group, or to the empty canvas"],
         ["Double-click the canvas", `Add a ${usual}`],
-        ["Drag a dot", "Connect to another part, with the kind picked under Shapes"],
+        [
+          "Drag a dot",
+          (structure?.links.length ?? 0) > 1
+            ? "Connect to another part, with the kind picked under Shapes; released on the empty canvas, to a new part"
+            : "Connect to another part; released on the empty canvas, to a new part",
+        ],
         [["C"], "Connect tool: drag from one part to another"],
       ],
     ],
@@ -174,6 +211,17 @@ const structureKeys = (info: TypeInfo): SheetGroup[] => {
         ["Double-click", "Name a part, or label a connection"],
         [["Enter", "F2"], "Name the selected part"],
         ["Right-click", "Menu: add here, change a kind, delete"],
+        ...(info.type === "sequence"
+          ? ([
+              [
+                ["←", "↑", "→", "↓"],
+                "Move the selected message earlier or later, a participant along its row",
+              ],
+            ] satisfies SheetRow[])
+          : []),
+        ...(structure?.copy
+          ? ([[["Ctrl", "D"], "Duplicate the selected part"]] satisfies SheetRow[])
+          : []),
         [["Delete"], "Remove, with the connections"],
         [["Ctrl", "Z"], "Undo"],
         [["Ctrl", "Y"], "Redo; Ctrl+Shift+Z does too"],
@@ -501,6 +549,8 @@ export interface ExportOptions {
   /** The pixels of a PNG per unit of the diagram. */
   scale: 1 | 2 | 3;
   backdrop: Backdrop;
+  /** The room around the picture, in units of the diagram. */
+  margin: number;
 }
 
 /** What the export dialog needs from the page. */
@@ -511,15 +561,18 @@ export interface ExportHost {
   dark: boolean;
   /** The file name a format is saved under. */
   name(format: "svg" | "png"): string;
-  /** The picture as an SVG with a backdrop, and its size in units of the diagram. */
-  picture(backdrop: Backdrop): { svg: string; width: number; height: number } | undefined;
+  /** The picture as an SVG with a backdrop and room around it, and its size in units of the diagram. */
+  picture(
+    backdrop: Backdrop,
+    margin: number,
+  ): { svg: string; width: number; height: number } | undefined;
   /** Writes the picture as a file. */
   save(options: ExportOptions): void;
 }
 
 /**
- * The export of the picture: its format, the scale of a PNG, what is behind it, and a preview of
- * what the file will hold. The picture is drawn in the light colors unless the editor's theme is asked for.
+ * The export of the picture: its format, the scale of a PNG, what is behind it, the room around
+ * it, and a preview of what the file will hold. The picture is drawn in the light colors unless the editor's theme is asked for.
  */
 export function exportDialog(host: ExportHost) {
   if (document.querySelector("dialog.export")) return;
@@ -564,10 +617,28 @@ export function exportDialog(host: ExportHost) {
       show();
     },
   );
+  const margin = segments(
+    "Margin",
+    [
+      ["0", "None"],
+      ["16", "16 px"],
+      ["32", "32 px"],
+    ],
+    String(options.margin) as "0" | "16" | "32",
+    (value) => {
+      options.margin = Number(value);
+      show();
+    },
+  );
+  const bare = h(
+    "p",
+    { class: "note" },
+    "With nothing behind them, labels on lines have no light outline, and shapes keep their fill. The picture is drawn for a light page.",
+  );
   const row = (name: string, control: HTMLElement) =>
     h("div", { class: "row" }, h("span", {}, name), control);
   const show = () => {
-    const picture = host.picture(options.backdrop),
+    const picture = host.picture(options.backdrop, options.margin),
       png = options.format === "png",
       times = png ? options.scale : 1;
     scale.setOff(png ? undefined : "An SVG is sharp at every size");
@@ -575,6 +646,7 @@ export function exportDialog(host: ExportHost) {
     size.textContent = picture
       ? `${host.name(options.format)} · ${Math.ceil(picture.width * times)} × ${Math.ceil(picture.height * times)}${png ? " pixels" : ""}`
       : "";
+    bare.hidden = options.backdrop !== "transparent";
     file.textContent = `Export ${png ? "PNG" : "SVG"}`;
   };
   const file = h("button", {
@@ -595,6 +667,8 @@ export function exportDialog(host: ExportHost) {
         row("Format", format.element),
         row("Scale", scale.element),
         row("Background", backdrop.element),
+        row("Margin", margin.element),
+        bare,
       ),
     ],
     footer: [
@@ -610,12 +684,56 @@ export function exportDialog(host: ExportHost) {
   show();
 }
 
-/** The most commands the list shows at a time. */
-const LISTED = 60;
+/** The commands asked for most, by name: the list starts with them while nothing is typed. */
+const USUAL = ["Save", "Undo", "Redo", "New…", "Open…", "Export SVG…", "Export PNG…"];
+
+/** A name as it is typed: lower case, without the dots that say a dialog follows. */
+const plain = (name: string) => name.toLowerCase().replace(/…$/, "");
+
+/**
+ * The commands a text typed into the list of all commands asks for, the likeliest first: those
+ * whose name or menu holds every word typed. A name that is the text comes first, then a name
+ * that starts with it, a name with a word that starts with it, a name that holds it, a command
+ * only the menu of which holds it, and last the diagrams to open; among equals, one that can be
+ * run comes first. With
+ * nothing typed the list is every command: the usual ones, then the menus in their order, and the
+ * diagrams to open last.
+ */
+export function findCommands(commands: Command[], typed: string): Command[] {
+  const text = typed.trim().toLowerCase(),
+    words = text.split(/\s+/).filter(Boolean);
+  const diagram = (command: Command) => /Open (recent|example)/.test(command.path);
+  if (!words.length) {
+    const usual = USUAL.flatMap(
+        (name) =>
+          commands.find((command) => command.name === name && !command.path.includes("▸")) ?? [],
+      ),
+      rest = commands.filter((command) => !usual.includes(command));
+    return [...usual, ...rest.filter((command) => !diagram(command)), ...rest.filter(diagram)];
+  }
+  const rank = (command: Command) => {
+    const name = plain(command.name);
+    // A diagram to open is asked for less than a command of the same name.
+    if (diagram(command)) return 5;
+    if (name === text) return 0;
+    if (name.startsWith(text)) return 1;
+    if (name.split(/[^\p{L}\p{N}]+/u).some((word) => word.startsWith(words[0]))) return 2;
+    return words.every((word) => name.includes(word)) ? 3 : 4;
+  };
+  return commands
+    .filter((command) => {
+      const all = `${command.path} ${command.name}`.toLowerCase();
+      return words.every((word) => all.includes(word));
+    })
+    .map((command) => ({ command, rank: rank(command) }))
+    .toSorted((a, b) => a.rank - b.rank || Number(!!a.command.off) - Number(!!b.command.off))
+    .map(({ command }) => command);
+}
 
 /**
  * The list of all commands: typing narrows it to the commands whose name or menu holds every word
- * typed, the arrow keys go through it, Enter runs the marked one.
+ * typed, the arrow keys go through it, Enter runs the marked one. A command that cannot be run
+ * now says why when it is asked for.
  */
 export function commandDialog(commands: Command[]) {
   const existing = document.querySelector<HTMLDialogElement>("dialog.commands");
@@ -632,34 +750,32 @@ export function commandDialog(commands: Command[]) {
     "aria-controls": "command-list",
     "aria-expanded": "true",
   });
+  const said = h("p", { class: "command-said", role: "status" });
+  said.hidden = true;
   let found: Command[] = [],
     at = 0;
-  const mark = () =>
+  const mark = (scroll = true) =>
     [...list.children].forEach((row, index) => {
       row.setAttribute("aria-selected", String(index === at));
-      if (index === at) row.scrollIntoView({ block: "nearest" });
+      if (index === at && scroll) row.scrollIntoView({ block: "nearest" });
     });
   const run = (command: Command | undefined) => {
-    if (!command || command.off) return;
+    if (!command) return;
+    if (command.off) {
+      said.textContent = `${command.name} is not available: ${
+        typeof command.off === "string"
+          ? `${command.off[0].toLowerCase()}${command.off.slice(1)}`
+          : "it does not apply now"
+      }.`;
+      said.hidden = false;
+      return;
+    }
     box.close();
     command.run();
   };
   const show = () => {
-    const words = field.value.toLowerCase().split(/\s+/).filter(Boolean);
-    found = commands
-      .filter((command) => {
-        const text = `${command.path} ${command.name}`.toLowerCase();
-        return words.every((word) => text.includes(word));
-      })
-      // What can be run comes before what cannot; a name that starts with what was typed comes first.
-      .toSorted(
-        (a, b) =>
-          Number(!!a.off) - Number(!!b.off) ||
-          Number(!!words[0] && b.name.toLowerCase().startsWith(words[0])) -
-            Number(!!words[0] && a.name.toLowerCase().startsWith(words[0])),
-      )
-      .slice(0, LISTED);
-    // The first command that can be run is the marked one.
+    found = findCommands(commands, field.value);
+    said.hidden = true;
     at = 0;
     list.replaceChildren(
       ...(found.length
@@ -669,24 +785,25 @@ export function commandDialog(commands: Command[]) {
               {
                 class: "command",
                 role: "option",
+                "aria-disabled": command.off ? "true" : undefined,
                 "data-tip": typeof command.off === "string" ? command.off : undefined,
                 "data-side": "right",
                 onClick: () => run(command),
                 onPointermove: () => {
                   if (at === index) return;
                   at = index;
-                  mark();
+                  mark(false);
                 },
               },
               h("span", { class: "name" }, command.name),
               h("span", { class: "path" }, command.path),
               command.key && h("kbd", {}, command.key),
             );
-            setOff(row, command.off);
             return row;
           })
         : [h("p", { class: "note" }, "No command has these words.")]),
     );
+    list.scrollTop = 0;
     mark();
   };
   field.addEventListener("input", show);
@@ -695,13 +812,14 @@ export function commandDialog(commands: Command[]) {
     if (step && found.length) {
       event.preventDefault();
       at = (at + step + found.length) % found.length;
+      said.hidden = true;
       mark();
     } else if (event.key === "Enter") {
       event.preventDefault();
       run(found[at]);
     }
   });
-  const box = dialog("commands", "All commands", { body: [field, list] });
+  const box = dialog("commands", "All commands", { body: [field, list, said] });
   show();
 }
 
@@ -816,7 +934,7 @@ export function startsOf(info: TypeInfo, recents: Recent[]): Start[] {
         name: recent.title,
         source: recent.source,
         icon: "file",
-        tag: "Recent",
+        tag: recent.at ? `Recent · ${ageOf(recent.at)}` : "Recent",
       })),
     ...examples,
   ];

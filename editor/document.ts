@@ -82,6 +82,9 @@ function structureDiagram(nodes: StructureNode[], edges: StructureEdge[]): TamDi
   return diagram;
 }
 
+/** Steps of one run made within this many milliseconds of each other are undone together. */
+const RUN = 1200;
+
 /** The most steps that can be undone. */
 const HISTORY = 300;
 
@@ -97,6 +100,9 @@ export class Doc {
   private undone: string[] = [];
   private redone: string[] = [];
   private run = 0;
+  /** The run the last step belonged to, and when it was made. */
+  private lastRun: string | undefined;
+  private lastTime = 0;
   private readonly measure: Measure;
   private readonly elk: ElkLayout | undefined;
 
@@ -177,9 +183,14 @@ export class Doc {
   }
 
   /** Replaces the source; the step can be undone. A source that does not parse is kept as text. */
-  apply(source: string): Promise<void> {
+  apply(source: string, run?: string): Promise<void> {
     if (source === this.source) return this.show(source);
-    this.undone.push(this.source);
+    // Steps of one run made in quick succession, such as presses of an arrow key, are one step.
+    const now = performance.now(),
+      joined = !!run && run === this.lastRun && now - this.lastTime < RUN;
+    this.lastRun = run;
+    this.lastTime = now;
+    if (!joined) this.undone.push(this.source);
     if (this.undone.length > HISTORY) this.undone.shift();
     this.redone = [];
     this.source = source;
@@ -187,13 +198,13 @@ export class Doc {
   }
 
   /** Replaces the source when it parses and says why not else; for edits made on the canvas. */
-  tryApply(source: string): Problem | undefined {
+  tryApply(source: string, run?: string): Problem | undefined {
     try {
       parseTam(source);
     } catch (reason) {
       return problemOf(reason);
     }
-    void this.apply(source);
+    void this.apply(source, run);
     return undefined;
   }
 

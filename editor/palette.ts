@@ -175,6 +175,7 @@ export class Palette {
       chip.style.transform = `translate(${event.clientX + 10}px, ${event.clientY + 10}px)`;
       editor.showPieceTarget(
         over(event) ? editor.view.toScene(editor.view.pointOf(event)) : undefined,
+        piece.kind,
       );
     });
     control.addEventListener("pointerup", (event) => {

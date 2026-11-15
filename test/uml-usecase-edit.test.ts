@@ -5,8 +5,11 @@ import { USECASE_EXAMPLES } from "../src/samples/uml-examples.ts";
 import { parseUseCaseDiagram } from "../src/uml-usecase.ts";
 import {
   addUseCasePiece,
+  attachUsecase,
   connectUseCase,
   duplicateUsecasePart,
+  isGeneratedUsecaseId,
+  joinUseCase,
   labelUseCaseRelation,
   moveUsecaseInto,
   relinkUseCase,
@@ -16,7 +19,9 @@ import {
   reverseUsecaseRelation,
   ungroupUsecaseBoundary,
   type UseCaseEdge,
+  usecaseRemovalSummary,
   usecaseStructure,
+  whyNotUsecase,
 } from "../src/uml-usecase-edit.ts";
 
 const SHOP = `usecase-beta
@@ -1004,5 +1009,245 @@ describe("a use case diagram as a structure", () => {
         await inScene(open);
       }
     }
+  });
+});
+
+describe("what else a canvas does with a use case diagram", () => {
+  const { read, add, retitle } = usecaseStructure;
+  const drawn = async (source: string, hint: string) => {
+    const scene = await parseUml(source).layout(arialMeasure),
+      shapes = new Set(scene.shapes.map((shape) => shape.id)),
+      wires = new Set(scene.wires.map((wire) => wire.edge));
+    for (const node of read(source).nodes)
+      expect(shapes.has(node.id), `${hint} ${node.id}`).toBe(true);
+    for (const edge of read(source).edges)
+      expect(wires.has(edge.id), `${hint} ${edge.id}`).toBe(true);
+  };
+  /** The lines of `after` that `before` does not have. */
+  const added = (before: string, after: string) => changed(after, before);
+
+  it("says why two parts are not joined", () => {
+    expect(whyNotUsecase(SHOP, "User", "browse", "generalization")).toBe(
+      "A generalization joins two actors or two use cases.",
+    );
+    expect(whyNotUsecase(SHOP, "User", "browse", "include")).toBe("«include» joins two use cases.");
+    expect(whyNotUsecase(SHOP, "User", "Admin", "extend")).toBe("«extend» joins two use cases.");
+    expect(whyNotUsecase(SHOP, "User", "Admin", "association")).toBe(
+      "An association joins an actor and a use case.",
+    );
+    expect(whyNotUsecase(SHOP, "browse", "order", "undirected")).toBe(
+      "An association joins an actor and a use case.",
+    );
+    expect(whyNotUsecase(SHOP, "User", "shop", "association")).toMatch(/system boundary/i);
+    expect(whyNotUsecase(SHOP, "User", "nothing")).toMatch(/actors and use cases/);
+    expect(whyNotUsecase(SHOP, "User", "browse", "nonsense")).toMatch(/kind/);
+    expect(whyNotUsecase(MIXED, "note1", "note2")).toMatch(/another note/);
+    expect(whyNotUsecase(MIXED, "note1", "Club")).toMatch(/note is for/);
+    expect(whyNotUsecase(MIXED, "note1", "Log out")).toMatch(/quoted name/);
+    for (const [from, to, kind] of [
+      ["User", "browse", undefined],
+      ["User", "browse", "association"],
+      ["browse", "User", "undirected"],
+      ["browse", "order", "include"],
+      ["order", "browse", "extend"],
+      ["User", "Admin", "generalization"],
+      ["browse", "order", "generalization"],
+      ["User", "Admin", undefined],
+      ["note1", "User", undefined],
+    ] as const)
+      expect(whyNotUsecase(SHOP, from, to, kind), `${from} ${to} ${kind}`).toBeUndefined();
+    expect(whyNotUsecase(MIXED, "note1", "Guest")).toBeUndefined();
+    // A reason exactly where nothing is written.
+    for (const [name, source] of [["shop", SHOP], ["mixed", MIXED], ...USECASE_EXAMPLES]) {
+      const all = [...read(source).nodes.map((node) => node.id), "nothing"].slice(0, 10);
+      for (const from of all)
+        for (const to of all)
+          for (const link of [undefined, ...usecaseStructure.links.map((item) => item.kind)]) {
+            const why = whyNotUsecase(source, from, to, link),
+              written = connectUseCase(source, from, to, link) !== source;
+            // A note that hangs on the element already is written the same again.
+            if (!written && why === undefined)
+              expect(
+                [from, to].some((id) => /^note\d+$/.test(id)),
+                `${name} ${from} ${to} ${link}`,
+              ).toBe(true);
+            else expect(why === undefined, `${name} ${from} ${to} ${link}`).toBe(written);
+          }
+    }
+  });
+
+  it("says which relation it wrote", () => {
+    expect(joinUseCase(SHOP, "Admin", "browse")).toEqual({
+      source: `${SHOP}\n  Admin --> browse`,
+      edge: "r4",
+    });
+    expect(joinUseCase(SHOP, "order", "browse", "include")).toEqual({
+      source: `${SHOP}\n  order ..> : include browse`,
+      edge: "r4",
+    });
+    expect(joinUseCase(SHOP, "User", "browse", "generalization")).toEqual({
+      source: SHOP,
+      edge: "",
+    });
+    // A note has no join of its own.
+    const note = joinUseCase(SHOP, "note1", "browse");
+    expect(note.edge).toBe("");
+    expect(added(SHOP, note.source)).toEqual(['  note for browse "Note"']);
+  });
+
+  it("adds a piece at a part and says what it wrote", async () => {
+    // A use case at an actor, an actor at a use case: joined, from the actor.
+    const use = attachUsecase(SHOP, { kind: "usecase", label: "Pay" }, "User");
+    expect(use).toMatchObject({ id: "usecase1", edge: "r4" });
+    expect(added(SHOP, use.source)).toEqual(["  usecase1(Pay)", "  User --> usecase1"]);
+    const actor = attachUsecase(SHOP, { kind: "actor", label: "Clerk" }, "manage");
+    expect(actor).toMatchObject({ id: "actor1", edge: "r4" });
+    expect(added(SHOP, actor.source)).toEqual(["  actor actor1(Clerk)", "  actor1 --> manage"]);
+    // A use case at a use case stands in its boundary, joined only with a kind of relation.
+    const beside = attachUsecase(SHOP, { kind: "usecase" }, "order");
+    expect(beside).toEqual({ ...add(SHOP, { kind: "usecase", parent: "shop" }), edge: "" });
+    const included = attachUsecase(SHOP, { kind: "usecase", label: "Pay" }, "order", "include");
+    expect(added(SHOP, included.source)).toEqual([
+      "    usecase1(Pay)",
+      "  order ..> : include usecase1",
+    ]);
+    expect(read(included.source).edges.find((edge) => edge.id === included.edge)).toMatchObject({
+      source: "order",
+      target: "usecase1",
+      kind: "include",
+    });
+    // A kind UML does not have between the two gives way to the usual one.
+    const usual = attachUsecase(SHOP, { kind: "usecase" }, "User", "include");
+    expect(read(usual.source).edges.find((edge) => edge.id === usual.edge)).toMatchObject({
+      source: "User",
+      target: "usecase1",
+      kind: "association",
+    });
+    expect(
+      read(attachUsecase(SHOP, { kind: "actor" }, "User", "generalization").source).edges.at(-1),
+    ).toMatchObject({
+      source: "User",
+      target: "actor1",
+      kind: "generalization",
+    });
+    // Into a boundary; a note for its element; a boundary alone; a note at a boundary is nothing.
+    expect(attachUsecase(SHOP, { kind: "usecase" }, "shop", "include")).toEqual({
+      ...add(SHOP, { kind: "usecase", parent: "shop" }),
+      edge: "",
+    });
+    expect(attachUsecase(SHOP, { kind: "note", label: "slow" }, "browse")).toEqual({
+      source: `${SHOP}\n  note for browse "slow"`,
+      id: "note1",
+      edge: "",
+    });
+    expect(attachUsecase(SHOP, { kind: "boundary" }, "browse")).toEqual({
+      ...add(SHOP, { kind: "boundary" }),
+      edge: "",
+    });
+    expect(attachUsecase(SHOP, { kind: "note" }, "shop")).toEqual({
+      source: SHOP,
+      id: "",
+      edge: "",
+    });
+    expect(attachUsecase(SHOP, { kind: "note" }, "nothing")).toEqual({
+      source: SHOP,
+      id: "",
+      edge: "",
+    });
+    for (const [name, source] of USECASE_EXAMPLES) {
+      const nodes = read(source).nodes;
+      for (const host of [
+        nodes.find((node) => node.kind === "actor")!,
+        nodes.find((node) => node.kind === "usecase")!,
+      ])
+        for (const piece of usecaseStructure.pieces) {
+          const made = attachUsecase(
+              source,
+              { kind: piece.kind, label: "New one" },
+              host.id,
+              "association",
+            ),
+            hint = `${name} ${piece.kind} at ${host.id}`;
+          if (!made.id) continue;
+          const now = read(made.source);
+          expect(
+            now.nodes.find((node) => node.id === made.id),
+            hint,
+          ).toMatchObject({
+            kind: piece.kind,
+            label: "New one",
+          });
+          if (piece.kind === "usecase" || piece.kind === "actor") {
+            const edge = now.edges.find((item) => item.id === made.edge)!;
+            expect([edge.source, edge.target].toSorted(), hint).toEqual(
+              [host.id, made.id].toSorted(),
+            );
+          } else expect(made.edge, hint).toBe("");
+          expect(changed(source, made.source), hint).toEqual([]);
+          await drawn(made.source, hint);
+        }
+    }
+  });
+
+  it("drops a label that says what the id says, and knows a made-up id", () => {
+    const named = renameUseCase(SHOP, "User", "Customer");
+    expect(named).toContain("  actor User(Customer)\n");
+    expect(renameUsecaseId(named, "User", "Customer")).toContain("  actor Customer\n");
+    expect(renameUsecaseId(SHOP, "browse", "Browse")).toContain("    Browse(Browse Products)\n");
+    expect(renameUsecaseId(SHOP, "shop", "Web")).toContain("  systemBoundary Web[Web Shop]\n");
+    // A box is one by the brackets of its label: they stay.
+    const box = "usecase-beta\n  pay[Pay]\n  actor A --> pay";
+    expect(renameUsecaseId(box, "pay", "Pay")).toBe("usecase-beta\n  Pay[Pay]\n  actor A --> Pay");
+
+    for (const kind of ["usecase", "actor", "boundary"]) {
+      const made = add(SHOP, { kind });
+      expect(isGeneratedUsecaseId(made.source, made.id), kind).toBe(true);
+      expect(
+        isGeneratedUsecaseId(retitle!(made.source, made.id, "Fresh one").source, "freshOne"),
+      ).toBe(false);
+    }
+    const copy = duplicateUsecasePart(SHOP, "browse");
+    expect(copy.id).toBe("browse2");
+    expect(isGeneratedUsecaseId(copy.source, "browse2")).toBe(true);
+    expect(isGeneratedUsecaseId(copy.source, "browse")).toBe(false);
+    // Its first name becomes its id.
+    const search = retitle!(copy.source, copy.id, "Search catalog");
+    expect(search.id).toBe("searchCatalog");
+    expect(search.source).toContain("    searchCatalog(Search catalog)\n");
+    expect(isGeneratedUsecaseId(search.source, search.id)).toBe(false);
+    expect(isGeneratedUsecaseId(duplicateUsecasePart(SHOP, "User").source, "User2")).toBe(true);
+    // One that only looks like a copy and shows another name is none.
+    expect(isGeneratedUsecaseId("usecase-beta\n  pay(Pay)\n  pay2(Pay twice)", "pay2")).toBe(false);
+    for (const id of ["nothing", "note1", "r1", "shop"])
+      expect(isGeneratedUsecaseId(SHOP, id)).toBe(false);
+    for (const [name, source] of [["mixed", MIXED], ...USECASE_EXAMPLES])
+      for (const node of read(source).nodes) {
+        expect(isGeneratedUsecaseId(source, node.id), `${name} ${node.id}`).toBe(false);
+        const made = duplicateUsecasePart(source, node.id);
+        if (made.id)
+          expect(isGeneratedUsecaseId(made.source, made.id), `${name} ${node.id}`).toBe(true);
+      }
+  });
+
+  it("says what a removal takes with it", () => {
+    expect(usecaseRemovalSummary(SHOP, ["shop"])).toBe(
+      "System boundary Web Shop with 3 use cases and 3 relations",
+    );
+    expect(usecaseRemovalSummary(SHOP, ["User"])).toBe("User with 2 relations");
+    // What is named is not counted again: the relation `r1` goes beside the three.
+    expect(usecaseRemovalSummary(SHOP, ["User", "browse", "r2"])).toBe(
+      "User, Browse Products with 1 relation",
+    );
+    expect(usecaseRemovalSummary(SHOP, ["r1"])).toBe("1 relation");
+    expect(usecaseRemovalSummary(MIXED, ["pay"])).toBe("Pay fee with 2 relations and 1 note");
+    expect(usecaseRemovalSummary(MIXED, ["note1", "r1"])).toBe("1 relation and 1 note");
+    expect(usecaseRemovalSummary(add(SHOP, { kind: "actor" }).source, ["actor1"])).toBe("Actor");
+    expect(usecaseRemovalSummary(SHOP, ["nothing"])).toBe("");
+    expect(usecaseRemovalSummary(SHOP, [])).toBe("");
+    for (const [name, source] of [["mixed", MIXED], ...USECASE_EXAMPLES])
+      for (const node of read(source).nodes)
+        expect(usecaseRemovalSummary(source, [node.id]) === "", `${name} ${node.id}`).toBe(
+          removeUseCase(source, [node.id]) === source,
+        );
   });
 });

@@ -218,8 +218,18 @@ describe("a statement with fields", () => {
     const decision = filled("${id}{${Question}}", { label: "decision" });
     expect(applied(decision, 1)).toMatchObject({ from: 3, to: 11, more: true });
     expect(applied(decision, 2)).toMatchObject({ from: 12, to: 12, more: false });
+  });
+
+  it("ends a block with a stop on a line of its own: what is typed next is the next statement", () => {
     const block = filled("subgraph ${id}\n\t${}\nend", { label: "subgraph" });
-    expect(applied(block, 2)).toMatchObject({ text: "subgraph id\n  \nend", from: 18, to: 18 });
+    expect(applied(block, 2)).toMatchObject({
+      text: "subgraph id\n  \nend\n",
+      from: 19,
+      to: 19,
+      more: false,
+    });
+    const braces = filled("group {\n\t${}\n}", { label: "group" });
+    expect(applied(braces, 1)).toMatchObject({ text: "group {\n  \n}\n", from: 13, to: 13 });
   });
 
   it("has no stop behind a field that ends it, which would take in what is typed there", () => {

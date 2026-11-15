@@ -21,9 +21,28 @@ import {
   replyTo,
   retitleSequence,
   sequenceStructure,
+  addFragmentBranch,
+  attachSequence,
+  duplicateParticipant,
+  fragmentBranches,
+  fragmentKind,
+  fragmentKinds,
+  hasAutonumber,
+  insertMessageAt,
+  insertNote,
+  isGeneratedParticipantId,
+  moveFragment,
+  moveMessageTo,
+  moveNote,
+  removeFragmentBranch,
+  reverseMessage,
   setAutonumber,
+  setFragmentBranch,
+  setFragmentKind,
+  setParticipantKind,
   toggleActivation,
   unwrapFragment,
+  whyNotSequence,
   wrapMessages,
 } from "../src/uml-sequence-edit.ts";
 
@@ -755,11 +774,11 @@ describe("placing participants, and what the canvas does with notes, fragments a
     expect(
       nodes.slice(2).map((node) => `${node.id}:${node.kind}:${node.parent}:${node.label}`),
     ).toEqual([
-      "block1:fragment:null:loop daily",
+      "block1:fragment:null:daily",
       "note1:note:block1:wake",
-      "block2:fragment:block1:opt awake",
+      "block2:fragment:block1:awake",
       "note2:note:block2:got it",
-      "block3:fragment:null:rect",
+      "block3:fragment:null:",
     ]);
     const scene = await parseUml(nested).layout(arialMeasure),
       shapes = new Set(scene.shapes.map((shape) => shape.id));
@@ -774,9 +793,9 @@ describe("placing participants, and what the canvas does with notes, fragments a
       added: ["    opt wide awake"],
       lost: ["    opt awake"],
     });
-    // The name as the part is labelled, with its keyword, gives the same.
-    expect(renameSequence(nested, "block2", "opt wide awake")).toBe(
-      renameSequence(nested, "block2", "wide awake"),
+    // The name is the condition alone: a keyword typed into it is part of the condition.
+    expect(renameSequence(nested, "block2", "opt wide awake").split("\n")[4]).toBe(
+      "    opt opt wide awake",
     );
     expect(renameSequence(nested, "block1", "").split("\n")[2]).toBe("  loop");
     expect(renameSequence(nested, "block3", "grey")).toBe(nested);
@@ -833,7 +852,7 @@ describe("placing participants, and what the canvas does with notes, fragments a
       id: "note2",
       source: `${note.source}\n  note over U: Note`,
     });
-    for (const parent of [undefined, null, "box0", "block1", "note1", "head:nobody"])
+    for (const parent of [undefined, null, "box0", "block1", "note9", "m99", "head:nobody"])
       expect(sequenceStructure.add(BARS, { kind: "note", parent })).toEqual({
         source: BARS,
         id: "",
@@ -878,7 +897,7 @@ describe("placing participants, and what the canvas does with notes, fragments a
     expect(around.id).toBe("block1");
     expect(
       sequenceStructure.read(around.source).nodes.find((node) => node.id === "block2"),
-    ).toMatchObject({ parent: "block1", label: "alt all in stock" });
+    ).toMatchObject({ parent: "block1", label: "all in stock" });
     expect(around.source.split("\n").slice(10, 13)).toEqual([
       "  critical stock",
       "    W->>+I: reserve items",
@@ -1194,10 +1213,10 @@ describe("a sequence diagram as a structure", () => {
       "Back office",
       "Inventory",
       "Orders",
-      "alt all in stock",
+      "all in stock",
       "both keep a log",
       "alone",
-      "loop until shipped",
+      "until shipped",
     ]);
     expect(nodes.map((node) => node.group)).toEqual([
       false,
@@ -1329,11 +1348,11 @@ describe("a sequence diagram as a structure", () => {
           sequenceStructure.rename(source, node.id, "Another name"),
         );
         expect(renamed.nodes.map((item) => item.id)).toEqual(nodes.map((item) => item.id));
-        // A fragment is labelled with its keyword before the name; a `rect` has no name.
+        // A fragment is labelled with its condition; a `rect` has none.
         const label = renamed.nodes.find((item) => item.id === node.id)!.label;
-        if (node.kind !== "fragment") expect(label).toBe("Another name");
-        else if (!node.label.startsWith("rect"))
-          expect(label).toBe(`${node.label.split(" ")[0]} Another name`);
+        if (node.kind !== "fragment" || fragmentKind(source, node.id) !== "rect")
+          expect(label).toBe("Another name");
+        else expect(label).toBe("");
         expect(renamed.edges).toHaveLength(edges.length);
       }
       for (const edge of edges) {
@@ -1356,22 +1375,787 @@ describe("a sequence diagram as a structure", () => {
         expect(sequenceStructure.read(sent).edges).toHaveLength(edges.length + 1);
       }
       for (const piece of sequenceStructure.pieces) {
-        // A note stands over a participant; the other pieces stand alone.
+        // A note stands over a participant, a fragment frames a message; the others stand alone.
+        const frames = ["alt", "opt", "loop"].includes(piece.kind);
+        if (frames)
+          expect(sequenceStructure.add(source, { kind: piece.kind, parent: null })).toEqual({
+            source,
+            id: "",
+          });
         const added = sequenceStructure.add(source, {
           kind: piece.kind,
           label: "New one",
-          parent: piece.kind === "note" ? nodes.find((node) => !node.group)!.id : undefined,
+          parent: frames
+            ? edges[0].id
+            : piece.kind === "note"
+              ? nodes.find((node) => !node.group)!.id
+              : undefined,
         });
         expect((await ids(added.source)).shapes.has(added.id), `${name} ${piece.kind}`).toBe(true);
         expect(
           sequenceStructure.read(added.source).nodes.find((node) => node.id === added.id),
         ).toMatchObject({
           label: "New one",
-          kind: piece.kind,
+          kind: frames ? "fragment" : piece.kind,
           group: !!piece.group,
         });
+        if (frames) expect(fragmentKind(added.source, added.id)).toBe(piece.kind);
         const joined = sequenceStructure.connect(added.source, nodes[0].id, nodes.at(-1)!.id);
         await parseUml(joined).layout(arialMeasure);
+      }
+    }
+  });
+});
+
+describe("placing messages, notes and fragments in time", () => {
+  const drawn = async (source: string, hint: string) => {
+    const scene = await parseUml(source).layout(arialMeasure),
+      shapes = new Set(scene.shapes.map((shape) => shape.id)),
+      wires = new Set(scene.wires.map((wire) => wire.edge)),
+      read = sequenceStructure.read(source);
+    for (const node of read.nodes) expect(shapes.has(node.id), `${hint} ${node.id}`).toBe(true);
+    for (const edge of read.edges) expect(wires.has(edge.id), `${hint} ${edge.id}`).toBe(true);
+  };
+  /** The lines of a source as a sorted list: what a move keeps, whatever the order and the indent. */
+  const bag = (source: string) =>
+    source
+      .split("\n")
+      .map((line) => line.trim())
+      .toSorted();
+  const textOf = (source: string, edge: string) =>
+    sequenceStructure.read(source).edges.find((item) => item.id === edge)?.label;
+
+  it("says which id a moved message has, so that it can be moved on", () => {
+    const down = moveMessageTo(SHOP, "m1", 1);
+    expect(down.edge).toBe("m2");
+    expect(textOf(down.source, down.edge)).toBe("place order");
+    const again = moveMessageTo(down.source, down.edge, 1);
+    expect(again.edge).toBe("m3");
+    expect(messages(again.source)).toEqual([
+      "S>P:charge",
+      "P>S:paid",
+      "U>S:place order",
+      "S>U:confirmation",
+    ]);
+    // Up again twice gives the source back.
+    const back = moveMessageTo(moveMessageTo(again.source, "m3", -1).source, "m2", -1);
+    expect(back).toEqual({ source: SHOP, edge: "m1" });
+    expect(moveMessage(SHOP, "m1", 1)).toBe(down.source);
+    // Where it cannot move, the source and the id stay.
+    expect(moveMessageTo(SHOP, "m1", -1)).toEqual({ source: SHOP, edge: "m1" });
+    expect(moveMessageTo(SHOP, "m4", 1)).toEqual({ source: SHOP, edge: "m4" });
+    expect(moveMessageTo(SHOP, "m9", 1)).toEqual({ source: SHOP, edge: "m9" });
+    // Over a note and over the border of a fragment the message keeps its number.
+    expect(moveMessageTo(BARS, "m8", -1).edge).toBe("m8");
+    expect(moveMessageTo(BARS, "m2", 1).edge).toBe("m2");
+    // Past a note it keeps the note's id too.
+    const noted = "sequenceDiagram\n  A->>B: one\n  note over A: n\n  B->>A: two";
+    const past = moveMessageTo(noted, "m1", 1);
+    expect(past).toEqual({
+      source: "sequenceDiagram\n  note over A: n\n  A->>B: one\n  B->>A: two",
+      edge: "m1",
+    });
+    expect(sequenceStructure.read(past.source).nodes.at(-1)).toMatchObject({
+      id: "note1",
+      label: "n",
+    });
+  });
+
+  it("follows a message through every example", async () => {
+    for (const [name, source] of [["bars", BARS], ["life", LIFE], ...SEQUENCE_EXAMPLES])
+      for (const edge of sequenceStructure.read(source).edges)
+        for (const delta of [-1, 1] as const) {
+          const moved = moveMessageTo(source, edge.id, delta),
+            hint = `${name} ${edge.id} ${delta}`;
+          if (moved.source === source) {
+            expect(moved.edge, hint).toBe(edge.id);
+            continue;
+          }
+          expect(bag(moved.source), hint).toEqual(bag(source));
+          const now = sequenceStructure
+            .read(moved.source)
+            .edges.find((item) => item.id === moved.edge);
+          expect(now, hint).toMatchObject({
+            source: edge.source,
+            target: edge.target,
+            label: edge.label,
+          });
+          await drawn(moved.source, hint);
+        }
+  });
+
+  it("sends a message at a place: before or after a part, or first in a branch", () => {
+    // After a message in a fragment: in that fragment, at that place.
+    const after = insertMessageAt(BARS, "head:W", "head:O", "sync", { after: "m3", label: "log" });
+    expect(after.edge).toBe("m4");
+    expect(changed(BARS, after.source)).toEqual({ added: ["    W->>O: log"], lost: [] });
+    expect(after.source.split("\n")[13]).toBe("    W->>O: log");
+    expect(messageContext(after.source, after.edge)).toEqual({ fragment: "block1", index: 3 });
+    // Before a message: in its place, the message follows.
+    const before = insertMessageAt(BARS, "head:W", "head:O", "async", { before: "m6" });
+    expect(before.edge).toBe("m6");
+    expect(before.source.split("\n").slice(16, 19)).toEqual([
+      "  else something missing",
+      "    W-)O: message",
+      "    I-->>W: missing items",
+    ]);
+    // After a note, and before and after a whole fragment.
+    expect(
+      insertMessageAt(BARS, "head:U", "head:W", undefined, { after: "note1" }).source.split(
+        "\n",
+      )[21],
+    ).toBe("  U->>W: message");
+    const behind = insertMessageAt(BARS, "head:U", "head:W", "reply", { after: "block1" });
+    expect(behind.source.split("\n").slice(18, 20)).toEqual(["  end", "  U-->>W: message"]);
+    expect(messageContext(behind.source, behind.edge)).toEqual({ fragment: null, index: 6 });
+    const ahead = insertMessageAt(BARS, "head:U", "head:W", "reply", { before: "block2" });
+    expect(ahead.source.split("\n").slice(22, 24)).toEqual([
+      "  U-->>W: message",
+      "  loop until shipped",
+    ]);
+    // First in a branch, also in one that holds nothing yet.
+    const first = insertMessageAt(BARS, "head:W", "head:O", "sync", { into: "block1" });
+    expect(first.edge).toBe("m3");
+    expect(first.source.split("\n").slice(11, 13)).toEqual([
+      "  alt all in stock",
+      "    W->>O: message",
+    ]);
+    const second = insertMessageAt(BARS, "head:W", "head:O", "sync", { into: "block1", branch: 1 });
+    expect(second.edge).toBe("m6");
+    expect(second.source.split("\n").slice(16, 18)).toEqual([
+      "  else something missing",
+      "    W->>O: message",
+    ]);
+    const divided = addFragmentBranch(BARS, "block1", "no answer"),
+      third = insertMessageAt(divided, "head:W", "head:U", "reply", {
+        into: "block1",
+        branch: 2,
+        label: "sorry",
+      });
+    expect(third.source.split("\n").slice(18, 21)).toEqual([
+      "  else no answer",
+      "    W-->>U: sorry",
+      "  end",
+    ]);
+    expect(messageContext(third.source, third.edge)).toEqual({ fragment: "block1", index: 6 });
+    // Before the message that a `create` belongs to: before the `create`.
+    expect(
+      insertMessageAt(LIFE, "head:web", "head:dyn", "sync", { before: "m2" })
+        .source.split("\n")
+        .slice(3, 6),
+    ).toEqual([
+      "  web->>dyn: message",
+      "  create participant link as newLink",
+      "  dyn-)link: create",
+    ]);
+    // A place that names nothing is the end; ends that are no participants send nothing.
+    expect(insertMessageAt(SHOP, "head:U", "head:P", "sync", { after: "m99" }).source).toBe(
+      `${SHOP}\n  U->>P: message`,
+    );
+    expect(insertMessageAt(BARS, "head:U", "block1", "sync", { after: "m1" })).toEqual({
+      source: BARS,
+      edge: "",
+    });
+  });
+
+  it("places a note in time, and moves it", () => {
+    const note = insertNote(SHOP, { over: ["head:S", "head:P"], text: "by card", after: "m2" });
+    expect(note.id).toBe("note1");
+    expect(changed(SHOP, note.source)).toEqual({ added: ["  note over S,P: by card"], lost: [] });
+    expect(note.source.split("\n")[6]).toBe("  note over S,P: by card");
+    expect(
+      insertNote(SHOP, { over: ["U"], side: "left of", before: "m1" }).source.split("\n")[4],
+    ).toBe("  note left of U: Note");
+    expect(insertNote(SHOP, { over: ["head:U"] }).source).toBe(`${SHOP}\n  note over U: Note`);
+    // In a fragment, at the depth of the statement it follows; the notes are numbered anew.
+    const inner = insertNote(BARS, { over: ["head:O"], text: "new", after: "m4" });
+    expect(inner.id).toBe("note1");
+    expect(inner.source.split("\n")[15]).toBe("    note over O: new");
+    expect(
+      sequenceStructure.read(inner.source).nodes.find((node) => node.id === "note1"),
+    ).toMatchObject({
+      parent: "block1",
+      label: "new",
+    });
+    expect(insertNote(BARS, { over: ["head:O"], into: "block2" }).id).toBe("note3");
+    for (const over of [[], ["head:nobody"], ["head:U", "head:W", "head:I"]])
+      expect(insertNote(BARS, { over })).toEqual({ source: BARS, id: "" });
+    expect(insertNote(BARS, { over: ["head:U", "head:W"], side: "right of" }).id).toBe("");
+
+    // As a piece at a message: after it, over its sender and its receiver; over one for a message to itself.
+    const piece = sequenceStructure.add(SHOP, {
+      kind: "note",
+      label: "Checks the card",
+      parent: "m2",
+    });
+    expect(piece).toEqual({
+      id: "note1",
+      source: SHOP.replace("  S->>P: charge", "  S->>P: charge\n  note over S,P: Checks the card"),
+    });
+    expect(
+      sequenceStructure.add("sequenceDiagram\n  A->>A: think", { kind: "note", parent: "m1" })
+        .source,
+    ).toBe("sequenceDiagram\n  A->>A: think\n  note over A: Note");
+    // At a note: after that one, over the same participants.
+    expect(sequenceStructure.add(BARS, { kind: "note", parent: "note1" })).toMatchObject({
+      id: "note2",
+    });
+    expect(
+      sequenceStructure.add(BARS, { kind: "note", parent: "note1" }).source.split("\n")[21],
+    ).toBe("  note over W,O: Note");
+
+    // Moving: past a message, into a fragment, past another note, which changes the ids.
+    const up = moveNote(note.source, "note1", -1);
+    expect(up.id).toBe("note1");
+    expect(up.source.split("\n").slice(5, 7)).toEqual([
+      "  note over S,P: by card",
+      "  S->>P: charge",
+    ]);
+    expect(moveNote(up.source, "note1", 1)).toEqual(note);
+    const into = moveNote(BARS, "note2", 1);
+    expect(into.source.split("\n").slice(21, 24)).toEqual([
+      "  loop until shipped",
+      "    note right of O: alone",
+      "    O->>I: poll status",
+    ]);
+    expect(
+      sequenceStructure.read(into.source).nodes.find((node) => node.id === into.id),
+    ).toMatchObject({
+      label: "alone",
+      parent: "block2",
+    });
+    const swapped = moveNote(BARS, "note1", 1);
+    expect(swapped.id).toBe("note2");
+    expect(
+      sequenceStructure.read(swapped.source).nodes.find((node) => node.id === "note2")!.label,
+    ).toBe("both keep a log");
+    expect(moveNote(BARS, "note9", 1)).toEqual({ source: BARS, id: "note9" });
+    const last = `${SHOP}\n  note over U: end`;
+    expect(moveNote(last, "note1", 1)).toEqual({ source: last, id: "note1" });
+  });
+
+  it("moves a fragment as a block", () => {
+    // Past the message after it, and back.
+    const down = moveFragment(BARS, "block2", 1);
+    expect(down.id).toBe("block2");
+    expect(down.source.split("\n").slice(22)).toEqual([
+      "  W-->>U: done",
+      "  loop until shipped",
+      "    O->>I: poll status",
+      "  end",
+    ]);
+    expect(moveFragment(down.source, "block2", -1)).toEqual({ source: BARS, id: "block2" });
+    expect(moveFragment(down.source, "block2", 1)).toEqual(down);
+    // Up past the notes, then past the `deactivate`, then into the fragment before it.
+    let at = { source: BARS, id: "block2" };
+    for (let count = 0; count < 3; count++) at = moveFragment(at.source, at.id, -1);
+    expect(at.source.split("\n").slice(18, 25)).toEqual([
+      "  end",
+      "  loop until shipped",
+      "    O->>I: poll status",
+      "  end",
+      "  deactivate I",
+      "  note over W,O: both keep a log",
+      "  note right of O: alone",
+    ]);
+    const nested = moveFragment(at.source, at.id, -1);
+    expect(nested.id).toBe("block2");
+    expect(nested.source.split("\n").slice(16, 23)).toEqual([
+      "  else something missing",
+      "    I-->>W: missing items",
+      "    loop until shipped",
+      "      O->>I: poll status",
+      "    end",
+      "  end",
+      "  deactivate I",
+    ]);
+    expect(
+      sequenceStructure.read(nested.source).nodes.find((node) => node.id === "block2")!.parent,
+    ).toBe("block1");
+    // And out of it again, the way it came.
+    expect(moveFragment(nested.source, "block2", 1)).toEqual(at);
+    // A fragment that passes another takes its number.
+    const two =
+      "sequenceDiagram\n  opt a\n    A->>B: one\n  end\n  A->>B: mid\n  loop b\n    B->>A: two\n  end";
+    const passed = moveFragment(moveFragment(two, "block2", -1).source, "block2", -1);
+    expect(passed.source).toBe(
+      "sequenceDiagram\n  opt a\n    A->>B: one\n    loop b\n      B->>A: two\n    end\n  end\n  A->>B: mid",
+    );
+    expect(fragmentKind(passed.source, passed.id)).toBe("loop");
+    expect(moveFragment(BARS, "block9", 1)).toEqual({ source: BARS, id: "block9" });
+    expect(moveFragment(BARS, "note1", 1)).toEqual({ source: BARS, id: "note1" });
+  });
+
+  it("keeps every example drawn when notes and fragments move", async () => {
+    for (const [name, source] of [["bars", BARS], ...SEQUENCE_EXAMPLES])
+      for (const node of sequenceStructure.read(source).nodes)
+        for (const delta of [-1, 1] as const) {
+          if (node.kind !== "note" && node.kind !== "fragment") continue;
+          const moved = (node.kind === "note" ? moveNote : moveFragment)(source, node.id, delta),
+            hint = `${name} ${node.id} ${delta}`;
+          if (moved.source === source) {
+            expect(moved.id, hint).toBe(node.id);
+            continue;
+          }
+          expect(bag(moved.source), hint).toEqual(bag(source));
+          expect(messages(moved.source).toSorted(), hint).toEqual(messages(source).toSorted());
+          const now = sequenceStructure
+            .read(moved.source)
+            .nodes.find((item) => item.id === moved.id);
+          expect(now, hint).toMatchObject({ label: node.label, kind: node.kind });
+          if (node.kind === "fragment")
+            expect(fragmentKind(moved.source, moved.id), hint).toBe(fragmentKind(source, node.id));
+          await drawn(moved.source, hint);
+        }
+  });
+});
+
+describe("the fragments of a sequence diagram", () => {
+  const TRIAGE =
+    "sequenceDiagram\n  A->>B: how are you\n  alt is sick\n    B-->>A: not so good\n  else is well\n    B-->>A: fine\n  else\n    B-->>A: no answer\n  end\n  loop Every minute\n    A->>B: ping\n  end\n  rect rgb(240, 240, 240)\n    B-->>A: pong\n  end";
+
+  it("tells the keyword of a fragment from its condition", () => {
+    expect(sequenceStructure.read(TRIAGE).nodes.filter((node) => node.group)).toMatchObject([
+      { id: "block1", kind: "fragment", label: "is sick" },
+      { id: "block2", kind: "fragment", label: "Every minute" },
+      { id: "block3", kind: "fragment", label: "" },
+    ]);
+    expect(
+      ["block1", "block2", "block3", "block4", "note1"].map((id) => fragmentKind(TRIAGE, id)),
+    ).toEqual(["alt", "loop", "rect", "", ""]);
+    // The name is the condition; the keyword stays.
+    expect(changed(TRIAGE, sequenceStructure.rename(TRIAGE, "block2", "opt maybe"))).toEqual({
+      added: ["  loop opt maybe"],
+      lost: ["  loop Every minute"],
+    });
+    expect(sequenceStructure.retitle!(TRIAGE, "block2", "Every hour")).toEqual({
+      source: TRIAGE.replace("loop Every minute", "loop Every hour"),
+      id: "block2",
+    });
+    // A condition that would read as a message is not written.
+    expect(sequenceStructure.rename(TRIAGE, "block2", "A->>B: x")).toBe(TRIAGE);
+  });
+
+  it("makes a fragment one of another kind", () => {
+    expect(fragmentKinds(TRIAGE, "block2")).toEqual([
+      "alt",
+      "opt",
+      "loop",
+      "par",
+      "critical",
+      "break",
+    ]);
+    expect(fragmentKinds(TRIAGE, "block1")).toEqual(["alt", "par", "critical"]);
+    expect(fragmentKinds(TRIAGE, "block3")).toEqual(["rect"]);
+    expect(fragmentKinds(TRIAGE, "m1")).toEqual([]);
+    expect(changed(TRIAGE, setFragmentKind(TRIAGE, "block2", "opt"))).toEqual({
+      added: ["  opt Every minute"],
+      lost: ["  loop Every minute"],
+    });
+    // A divided fragment keeps its branches under the keyword of the new kind.
+    const par = setFragmentKind(TRIAGE, "block1", "par");
+    expect(changed(TRIAGE, par)).toEqual({
+      added: ["  par is sick", "  and is well", "  and"],
+      lost: ["  alt is sick", "  else is well", "  else"],
+    });
+    expect(fragmentBranches(par, "block1")).toEqual(fragmentBranches(TRIAGE, "block1"));
+    expect(
+      setFragmentKind(par, "block1", "critical")
+        .split("\n")
+        .filter((line) => /option/.test(line)),
+    ).toEqual(["  option is well", "  option"]);
+    expect(setFragmentKind(par, "block1", "alt")).toBe(TRIAGE);
+    // It does not become a kind without branches, and a `rect` stays one.
+    for (const kind of ["opt", "loop", "break", "rect", "nonsense", "alt"])
+      expect(setFragmentKind(TRIAGE, "block1", kind)).toBe(TRIAGE);
+    expect(setFragmentKind(TRIAGE, "block3", "loop")).toBe(TRIAGE);
+    expect(setFragmentKind(TRIAGE, "block2", "rect")).toBe(TRIAGE);
+    expect(setFragmentKind(TRIAGE, "block9", "loop")).toBe(TRIAGE);
+  });
+
+  it("reads, labels, adds and removes the branches of a fragment", () => {
+    expect(fragmentBranches(TRIAGE, "block1")).toEqual([
+      { label: "is sick" },
+      { label: "is well" },
+      { label: "" },
+    ]);
+    expect(fragmentBranches(TRIAGE, "block2")).toEqual([{ label: "Every minute" }]);
+    expect(fragmentBranches(TRIAGE, "m1")).toEqual([]);
+    expect(changed(TRIAGE, setFragmentBranch(TRIAGE, "block1", 1, "feels fine; really"))).toEqual({
+      added: ["  else feels fine#59; really"],
+      lost: ["  else is well"],
+    });
+    expect(setFragmentBranch(TRIAGE, "block1", 2, "silent").split("\n")[6]).toBe("  else silent");
+    expect(setFragmentBranch(TRIAGE, "block1", 1, "").split("\n")[4]).toBe("  else");
+    expect(setFragmentBranch(TRIAGE, "block1", 0, "ill")).toBe(
+      TRIAGE.replace("alt is sick", "alt ill"),
+    );
+    expect(setFragmentBranch(TRIAGE, "block1", 3, "x")).toBe(TRIAGE);
+    expect(setFragmentBranch(TRIAGE, "block2", 1, "x")).toBe(TRIAGE);
+    const added = addFragmentBranch(TRIAGE, "block1", "asleep");
+    expect(changed(TRIAGE, added)).toEqual({ added: ["  else asleep"], lost: [] });
+    expect(added.split("\n").slice(8, 10)).toEqual(["  else asleep", "  end"]);
+    expect(fragmentBranches(added, "block1").map((branch) => branch.label)).toEqual([
+      "is sick",
+      "is well",
+      "",
+      "asleep",
+    ]);
+    expect(
+      addFragmentBranch(setFragmentKind(TRIAGE, "block2", "par"), "block2", "meanwhile").split(
+        "\n",
+      )[11],
+    ).toBe("  and meanwhile");
+    expect(addFragmentBranch(TRIAGE, "block2", "x")).toBe(TRIAGE);
+    expect(addFragmentBranch(TRIAGE, "block3", "x")).toBe(TRIAGE);
+    expect(removeFragmentBranch(added, "block1", 3)).toBe(TRIAGE);
+    expect(changed(TRIAGE, removeFragmentBranch(TRIAGE, "block1", 1))).toEqual({
+      added: [],
+      lost: ["  else is well"],
+    });
+    expect(removeFragmentBranch(TRIAGE, "block1", 0)).toBe(TRIAGE);
+  });
+
+  it("frames a message as a piece, and says when a fragment goes with its last message", () => {
+    for (const kind of ["alt", "opt", "loop"]) {
+      expect(sequenceStructure.pieces.find((piece) => piece.kind === kind)).toMatchObject({
+        group: true,
+        named: true,
+      });
+      expect(sequenceStructure.add(SHOP, { kind, parent: null })).toEqual({ source: SHOP, id: "" });
+      expect(sequenceStructure.add(SHOP, { kind, parent: "head:U" })).toEqual({
+        source: SHOP,
+        id: "",
+      });
+      const framed = sequenceStructure.add(SHOP, { kind, parent: "m2" });
+      expect(framed.id).toBe("block1");
+      expect(framed.source.split("\n").slice(5, 8)).toEqual([
+        `  ${kind}`,
+        "    S->>P: charge",
+        "  end",
+      ]);
+      // Its first name is its condition.
+      expect(
+        sequenceStructure.retitle!(framed.source, framed.id, "card").source.split("\n")[5],
+      ).toBe(`  ${kind} card`);
+    }
+    const loop = sequenceStructure.add(SHOP, { kind: "loop", parent: "m2", label: "retry" });
+    expect(removalSummary(loop.source, ["m2"])).toBe("1 message, 1 fragment");
+    expect(removeSequence(loop.source, ["m2"])).toBe(SHOP.replace("  S->>P: charge\n", ""));
+  });
+
+  it("goes through the fragments of every example", async () => {
+    for (const [name, source] of SEQUENCE_EXAMPLES)
+      for (const node of sequenceStructure
+        .read(source)
+        .nodes.filter((item) => item.kind === "fragment")) {
+        const kind = fragmentKind(source, node.id),
+          branches = fragmentBranches(source, node.id);
+        expect(branches[0].label, name).toBe(node.label);
+        for (const next of fragmentKinds(source, node.id)) {
+          const changedTo = setFragmentKind(source, node.id, next);
+          expect(fragmentKind(changedTo, node.id), `${name} ${node.id} ${next}`).toBe(next);
+          expect(fragmentBranches(changedTo, node.id)).toEqual(branches);
+          expect(messages(changedTo)).toEqual(messages(source));
+          await parseUml(changedTo).layout(arialMeasure);
+          if (next !== kind) expect(setFragmentKind(changedTo, node.id, kind)).toBe(source);
+        }
+        branches.forEach((_, index) => {
+          if (kind === "rect") return;
+          const labelled = setFragmentBranch(source, node.id, index, "Other text");
+          expect(fragmentBranches(labelled, node.id)[index].label, `${name} ${node.id}`).toBe(
+            "Other text",
+          );
+          expect(changed(source, labelled).lost).toHaveLength(1);
+        });
+        const more = addFragmentBranch(source, node.id, "more");
+        if (["alt", "par", "critical"].includes(kind)) {
+          expect(fragmentBranches(more, node.id)).toHaveLength(branches.length + 1);
+          const sent = insertMessageAt(
+            more,
+            sequenceStructure.read(source).edges[0].source,
+            sequenceStructure.read(source).edges[0].target,
+            "sync",
+            {
+              into: node.id,
+              branch: branches.length,
+            },
+          );
+          expect(messageContext(sent.source, sent.edge)!.fragment).toBe(node.id);
+          await parseUml(sent.source).layout(arialMeasure);
+          expect(removeFragmentBranch(more, node.id, branches.length)).toBe(source);
+        } else expect(more).toBe(source);
+      }
+  });
+});
+
+describe("what else a canvas does with a sequence diagram", () => {
+  it("says whether the messages are numbered", () => {
+    expect(hasAutonumber(SHOP)).toBe(false);
+    expect(hasAutonumber(setAutonumber(SHOP, true))).toBe(true);
+    expect(hasAutonumber(setAutonumber(setAutonumber(SHOP, true), false))).toBe(false);
+    expect(hasAutonumber("sequenceDiagram\n  autonumber off\n  A->>B: x")).toBe(false);
+    expect(hasAutonumber("sequenceDiagram\n  autonumber 10 5\n  A->>B: x")).toBe(true);
+    for (const [, source] of SEQUENCE_EXAMPLES)
+      expect(hasAutonumber(source)).toBe(
+        parseSequenceDiagram(source).events.some(
+          (event) => event.type === "message" && event.number !== undefined,
+        ),
+      );
+  });
+
+  it("turns a message round", () => {
+    expect(changed(SHOP, reverseMessage(SHOP, "m2"))).toEqual({
+      added: ["  P->>S: charge"],
+      lost: ["  S->>P: charge"],
+    });
+    expect(reverseMessage(reverseMessage(SHOP, "m2"), "m2")).toBe(SHOP);
+    expect(reverseMessage(SHOP, "m9")).toBe(SHOP);
+    expect(reverseMessage("sequenceDiagram\n  A -) B", "m1")).toBe("sequenceDiagram\n  B -) A");
+    // An activation that no longer matches goes with its other end.
+    const turned = reverseMessage(BARS, "m4");
+    expect(changed(BARS, turned)).toEqual({
+      added: ["    O->>W: create order", "    O-->>W: order id"],
+      lost: ["    W->>+O: create order", "    O-->>-W: order id"],
+    });
+    for (const [name, source] of [["bars", BARS], ["life", LIFE], ...SEQUENCE_EXAMPLES])
+      for (const edge of sequenceStructure.read(source).edges) {
+        const now = reverseMessage(source, edge.id);
+        if (now === source) continue;
+        expect(
+          sequenceStructure.read(now).edges.find((item) => item.id === edge.id),
+          `${name} ${edge.id}`,
+        ).toMatchObject({
+          source: edge.target,
+          target: edge.source,
+          kind: edge.kind,
+          label: edge.label,
+        });
+        expect(sequenceStructure.read(now).edges).toHaveLength(
+          sequenceStructure.read(source).edges.length,
+        );
+      }
+  });
+
+  it("makes a participant an actor and back", () => {
+    expect(changed(SHOP, setParticipantKind(SHOP, "head:U", "actor"))).toEqual({
+      added: ["  actor U as User"],
+      lost: ["  participant U as User"],
+    });
+    expect(setParticipantKind(SHOP, "head:U", "participant")).toBe(SHOP);
+    expect(
+      setParticipantKind(setParticipantKind(SHOP, "head:U", "actor"), "head:U", "participant"),
+    ).toBe(SHOP);
+    expect(setParticipantKind(BARS, "head:U", "participant").split("\n")[2]).toBe(
+      "  participant U as Customer",
+    );
+    // One that only messages name is declared, in its column; one a message creates keeps its `create`.
+    const dyn = setParticipantKind(LIFE, "head:dyn", "actor");
+    expect(changed(LIFE, dyn)).toEqual({ added: ["  actor dyn"], lost: [] });
+    expect(columnsOf(dyn)).toEqual(columnsOf(LIFE));
+    expect(setParticipantKind(LIFE, "head:link", "actor").split("\n")[3]).toBe(
+      "  create actor link as newLink",
+    );
+    expect(setParticipantKind(SHOP, "box0", "actor")).toBe(SHOP);
+    for (const [name, source] of SEQUENCE_EXAMPLES)
+      for (const node of sequenceStructure
+        .read(source)
+        .nodes.filter((item) => item.id.startsWith("head:"))) {
+        const other = node.kind === "actor" ? "participant" : "actor",
+          now = setParticipantKind(source, node.id, other),
+          read = sequenceStructure.read(now);
+        expect(
+          read.nodes.find((item) => item.id === node.id),
+          `${name} ${node.id}`,
+        ).toMatchObject({
+          kind: other,
+          label: node.label,
+          parent: node.parent,
+        });
+        expect(columnsOf(now)).toEqual(columnsOf(source));
+        expect(read.edges).toEqual(
+          sequenceStructure
+            .read(source)
+            .edges.map((edge) => ({ ...edge, line: expect.any(Number) })),
+        );
+      }
+  });
+
+  it("copies a participant beside it, and knows a made-up id", async () => {
+    const copy = duplicateParticipant(SHOP, "head:S");
+    expect(copy.id).toBe("head:S2");
+    expect(changed(SHOP, copy.source)).toEqual({ added: ["  participant S2 as Shop"], lost: [] });
+    expect(columnsOf(copy.source)).toEqual(["U", "S", "S2", "P"]);
+    expect(duplicateParticipant(copy.source, "head:S").id).toBe("head:S3");
+    // One without a name of its own shows its id, and so does its copy.
+    const web = duplicateParticipant(LIFE, "head:web");
+    expect(web).toMatchObject({ id: "head:web2" });
+    expect(web.source.split("\n").slice(1, 3)).toEqual(["  participant web", "  participant web2"]);
+    expect(duplicateParticipant(BARS, "head:U").source.split("\n")[3]).toBe(
+      "  actor U2 as Customer",
+    );
+    expect(duplicateParticipant(BARS, "head:I").source.split("\n").slice(6, 9)).toEqual([
+      "    participant I as Inventory",
+      "    participant I2 as Inventory",
+      "    participant O as Orders",
+    ]);
+    expect(duplicateParticipant(SHOP, "box0")).toEqual({ source: SHOP, id: "" });
+    expect(duplicateParticipant(SHOP, "m1")).toEqual({ source: SHOP, id: "" });
+
+    // The id of a copy and of a new participant are made up; the first name replaces them.
+    expect(isGeneratedParticipantId(copy.source, "head:S2")).toBe(true);
+    expect(isGeneratedParticipantId(web.source, "head:web2")).toBe(true);
+    expect(isGeneratedParticipantId(copy.source, "head:S")).toBe(false);
+    expect(
+      isGeneratedParticipantId(addSequencePiece(SHOP, { kind: "actor" }).source, "head:actor1"),
+    ).toBe(true);
+    expect(isGeneratedParticipantId(SHOP, "box0")).toBe(false);
+    expect(
+      isGeneratedParticipantId(
+        "sequenceDiagram\n  participant A\n  participant A2 as Other",
+        "head:A2",
+      ),
+    ).toBe(false);
+    expect(retitleSequence(copy.source, "head:S2", "Stock")).toEqual({
+      source: copy.source.replace("participant S2 as Shop", "participant Stock"),
+      id: "head:Stock",
+    });
+    expect(
+      isGeneratedParticipantId(
+        retitleSequence(copy.source, "head:S2", "Stock").source,
+        "head:Stock",
+      ),
+    ).toBe(false);
+    for (const [name, source] of SEQUENCE_EXAMPLES)
+      for (const node of sequenceStructure
+        .read(source)
+        .nodes.filter((item) => item.id.startsWith("head:"))) {
+        expect(isGeneratedParticipantId(source, node.id), `${name} ${node.id}`).toBe(false);
+        const made = duplicateParticipant(source, node.id);
+        if (!made.id) continue;
+        const read = sequenceStructure.read(made.source);
+        expect(
+          read.nodes.find((item) => item.id === made.id),
+          `${name} ${node.id}`,
+        ).toMatchObject({
+          kind: node.kind,
+          parent: node.parent,
+        });
+        expect(read.edges).toHaveLength(sequenceStructure.read(source).edges.length);
+        expect(isGeneratedParticipantId(made.source, made.id), `${name} ${node.id}`).toBe(true);
+        expect(
+          (await parseUml(made.source).layout(arialMeasure)).shapes.some(
+            (shape) => shape.id === made.id,
+          ),
+        ).toBe(true);
+      }
+  });
+
+  it("leaves no name beside an id that says the same, and gives no id to what has none", () => {
+    const named = renameSequence(SHOP, "head:S", "Store");
+    expect(renameParticipantId(named, "head:S", "Store").split("\n")[2]).toBe(
+      "  participant Store",
+    );
+    expect(renameParticipantId(SHOP, "head:S", "Store").split("\n")[2]).toBe(
+      "  participant Store as Shop",
+    );
+    for (const id of ["box0", "note1", "block1", "block2", "m1", "head:nobody"])
+      for (const next of ["Other", "box1", "note7"])
+        expect(renameParticipantId(BARS, id, next)).toBe(BARS);
+  });
+
+  it("says why two parts are not joined", () => {
+    expect(whyNotSequence(BARS, "head:U", "head:W")).toBeUndefined();
+    expect(whyNotSequence(BARS, "head:U", "head:U", "async")).toBeUndefined();
+    expect(whyNotSequence(BARS, "note1", "head:U")).toBeUndefined();
+    expect(whyNotSequence(BARS, "head:U", "block1")).toMatch(/between two participants/);
+    expect(whyNotSequence(BARS, "box0", "head:U")).toMatch(/between two participants/);
+    expect(whyNotSequence(BARS, "note1", "note2")).toMatch(/note/);
+    expect(whyNotSequence(BARS, "note1", "box0")).toMatch(/note/);
+    expect(whyNotSequence(BARS, "head:U", "head:W", "nonsense")).toMatch(/kind/);
+    // A reason exactly where nothing is written.
+    for (const [from, to] of [
+      ["head:U", "head:W"],
+      ["note1", "head:U"],
+      ["head:U", "block1"],
+      ["note1", "note2"],
+      ["box0", "head:O"],
+    ])
+      expect(whyNotSequence(BARS, from, to) === undefined).toBe(
+        connectSequence(BARS, from, to).source !== BARS,
+      );
+  });
+
+  it("adds a piece at a part and says what it wrote", async () => {
+    const joined = attachSequence(
+      SHOP,
+      { kind: "participant", label: "Mailer" },
+      "head:S",
+      "async",
+    );
+    expect(joined.id).toBe("head:participant1");
+    expect(joined.edge).toBe("m5");
+    expect(changed(SHOP, joined.source)).toEqual({
+      added: ["  participant participant1 as Mailer", "  S-)participant1: message"],
+      lost: [],
+    });
+    expect(columnsOf(joined.source)).toEqual(["U", "S", "participant1", "P"]);
+    // Without a kind of message it stands beside the part.
+    expect(attachSequence(SHOP, { kind: "actor" }, "head:S")).toEqual({
+      ...addSequencePiece(SHOP, { kind: "actor", parent: "head:S" }),
+      edge: "",
+    });
+    expect(attachSequence(SHOP, { kind: "note", label: "n" }, "m1", "sync")).toEqual({
+      ...insertNote(SHOP, { over: ["U", "S"], text: "n", after: "m1" }),
+      edge: "",
+    });
+    expect(attachSequence(SHOP, { kind: "loop" }, "m1")).toMatchObject({ id: "block1", edge: "" });
+    expect(attachSequence(BARS, { kind: "participant" }, "box0", "sync")).toMatchObject({
+      id: "head:participant1",
+      edge: "",
+    });
+    expect(attachSequence(SHOP, { kind: "loop" }, "head:U")).toEqual({
+      source: SHOP,
+      id: "",
+      edge: "",
+    });
+    expect(attachSequence(SHOP, { kind: "note" }, "block9")).toEqual({
+      source: SHOP,
+      id: "",
+      edge: "",
+    });
+    for (const [name, source] of SEQUENCE_EXAMPLES) {
+      const { nodes, edges } = sequenceStructure.read(source),
+        head = nodes.find((node) => node.id.startsWith("head:"))!;
+      for (const piece of sequenceStructure.pieces) {
+        const at = ["alt", "opt", "loop"].includes(piece.kind) ? edges[0].id : head.id,
+          made = attachSequence(source, { kind: piece.kind, label: "New one" }, at, "sync"),
+          hint = `${name} ${piece.kind}`;
+        if (!made.id) continue;
+        const scene = await parseUml(made.source).layout(arialMeasure),
+          read = sequenceStructure.read(made.source);
+        expect(
+          scene.shapes.some((shape) => shape.id === made.id),
+          hint,
+        ).toBe(true);
+        expect(
+          read.nodes.find((node) => node.id === made.id),
+          hint,
+        ).toMatchObject({ label: "New one" });
+        if (piece.kind === "participant" || piece.kind === "actor") {
+          expect(
+            read.edges.find((edge) => edge.id === made.edge),
+            hint,
+          ).toMatchObject({ source: head.id, target: made.id });
+          expect(
+            scene.wires.some((wire) => wire.edge === made.edge),
+            hint,
+          ).toBe(true);
+        } else expect(made.edge, hint).toBe("");
+        // A box or a fragment indents the line it frames.
+        expect(changed(source, made.source).lost.length, hint).toBeLessThanOrEqual(
+          piece.group ? 1 : 0,
+        );
       }
     }
   });

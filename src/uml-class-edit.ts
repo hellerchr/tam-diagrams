@@ -15,7 +15,7 @@
 
 import type { Structure, StructureEdge, StructureNode } from "./structure.ts";
 import { accessibilityLines, scan } from "./uml.ts";
-import { type ClassDiagram, parseClassDiagram, type Relation } from "./uml-class.ts";
+import { type ClassDiagram, parseClassDiagram, parseMember, type Relation } from "./uml-class.ts";
 
 /** The kinds of class a canvas adds, by the annotation that makes a class one. */
 const ANNOTATIONS: Record<string, string> = {
@@ -478,6 +478,72 @@ export function setClassMembers(source: string, id: string, members: string[]): 
 }
 
 /**
+ * The member of a class at a place in `classMembers`, in a source where it stands on a line of
+ * its own: a member that shares its line with a brace of the body gets one first.
+ */
+function memberAt(source: string, id: string, index: number) {
+  const pick = (outline: Outline) =>
+    outline.classes.get(id)?.entries.filter((entry) => !entry.annotation && entry.text)[index];
+  let outline = outlineOf(source),
+    entry = pick(outline);
+  if (entry?.inline) {
+    outline = outlineOf(withBody(source, id));
+    entry = pick(outline);
+  }
+  return entry && !entry.inline ? { outline, entry } : undefined;
+}
+
+/**
+ * Gives one member of a class another text, by its place in `classMembers`, where it stands: in
+ * the body or as a `Class : member` statement. An empty text removes the member.
+ */
+export function setClassMember(source: string, id: string, index: number, text: string): string {
+  const member = memberText(text);
+  if (!member) return removeClassMember(source, id, index);
+  const found = memberAt(source, id, index);
+  if (!found || found.entry.text === member) return source;
+  const { lines } = found.outline,
+    line = lines[found.entry.index],
+    head = found.entry.outside ? line.match(/^\s*[^:]+:\s*/)![0] : indentOf(line);
+  lines[found.entry.index] = head + member;
+  const result = lines.join("\n");
+  return reads(result) ? result : source;
+}
+
+/**
+ * Removes one member of a class, by its place in `classMembers`. A class that only its
+ * `Class : member` statement names stays, as a `class` statement in its place.
+ */
+export function removeClassMember(source: string, id: string, index: number): string {
+  const found = memberAt(source, id, index);
+  if (!found) return source;
+  const { lines, classes } = found.outline,
+    item = classes.get(id)!,
+    at = found.entry.index,
+    alone = found.entry.outside && item.mentions.every((mention) => mention === at);
+  if (alone) lines[at] = `${indentOf(lines[at])}class ${declared(parseClassDiagram(source), id)}`;
+  else lines.splice(at, 1);
+  const result = lines.join("\n");
+  return reads(result) ? result : source;
+}
+
+/**
+ * The place in `classMembers` of the member a class shows in a row of its box, counted from 0
+ * over its attributes and then its operations, as they are drawn; -1 for a row it does not have.
+ */
+export function classMemberIndex(source: string, id: string, row: number): number {
+  const shown = classMembers(source, id)
+    .map((text, index) => ({ index, member: parseMember(text) }))
+    .filter(({ member }) => member.text);
+  return (
+    [
+      ...shown.filter(({ member }) => !member.method),
+      ...shown.filter(({ member }) => member.method),
+    ][row]?.index ?? -1
+  );
+}
+
+/**
  * Makes a class a plain class, an interface, an abstract class or an enumeration: the annotation
  * that said what it was goes, and the new one stands first in its body. Other annotations stay.
  */
@@ -533,21 +599,19 @@ function annotate(
 }
 
 /**
- * The stereotype of a class: its first annotation that is not the one that makes it an interface,
- * an abstract class or an enumeration (`service` for `<<service>>`); empty when it has none.
+ * The stereotype of a class: the annotation it is drawn under, whatever it says (`interface`,
+ * `abstract`, `enumeration`, `service`); empty when it has none. A class has one: of several the
+ * source gives it, this is the first.
  */
 export function classStereotype(source: string, id: string): string {
-  return (
-    parseClassDiagram(source)
-      .classes.get(id)
-      ?.annotations.find((annotation) => !kindOfAnnotation(annotation)) ?? ""
-  );
+  return parseClassDiagram(source).classes.get(id)?.annotations[0] ?? "";
 }
 
 /**
- * Gives a class another stereotype, written with or without its `<<` `>>`; an empty one removes
- * it. The annotation that makes the class an interface, an abstract class or an enumeration
- * stays, and a stereotype that names one of these makes the class that kind.
+ * Gives a class another stereotype, written with or without its `<<` `>>`, in the place of the
+ * one it has: where that stands, and else as the first line of its body. Every other annotation
+ * of the class goes, so it has one. An empty stereotype removes it, which makes an interface, an
+ * abstract class or an enumeration a plain class; one that names such a kind makes the class it.
  */
 export function setClassStereotype(source: string, id: string, text: string): string {
   const name = text
@@ -555,12 +619,35 @@ export function setClassStereotype(source: string, id: string, text: string): st
       .replace(/\s+/g, " ")
       .trim(),
     found = parseClassDiagram(source).classes.get(id);
-  if (!found || name === classStereotype(source, id)) return source;
-  const plain = (annotation: string) => !kindOfAnnotation(annotation),
-    kind = kindOfAnnotation(name);
-  return kind
-    ? setClassKind(annotate(source, id, plain), id, kind)
-    : annotate(source, id, plain, name || undefined);
+  if (!found || (name && name === classStereotype(source, id) && found.annotations.length < 2))
+    return source;
+  if (!name || !found.annotations.length)
+    return annotate(source, id, () => true, name || undefined);
+  const outline = outlineOf(source),
+    item = outline.classes.get(id)!,
+    { lines } = outline,
+    written = /<<\s*[^>]+?\s*>>/,
+    places = [
+      ...item.entries
+        .filter((entry) => entry.annotation)
+        .map((entry) => ({ index: entry.index, line: !entry.inline, whole: true })),
+      ...item.marks.map((mark) => ({ index: mark.index, line: true, whole: true })),
+      ...item.declarations
+        .filter((declaration) => declaration.annotation)
+        .map((declaration) => ({ index: declaration.index, line: true, whole: false })),
+    ].toSorted((a, b) => a.index - b.index);
+  // An annotation on a line with a brace has no place of its own to be rewritten in.
+  if (places.some((place) => !place.line)) return annotate(source, id, () => true, name);
+  const [kept, ...rest] = places,
+    gone = new Set<number>();
+  lines[kept.index] = lines[kept.index].replace(written, () => `<<${name}>>`);
+  for (const place of rest)
+    if (place.whole) gone.add(place.index);
+    else lines[place.index] = lines[place.index].replace(new RegExp(`\\s*${written.source}`), "");
+  const result = lines.filter((_, index) => !gone.has(index)).join("\n");
+  return reads(result)?.classes.get(id)?.annotations.join() === name
+    ? result
+    : annotate(source, id, () => true, name);
 }
 
 /** The ways a kind of relation is written: from its first end to its second, and the other way round. */
@@ -616,8 +703,9 @@ const spaceOf = (diagram: ClassDiagram, id: string | null | undefined) =>
  * namespace when given, and else where its kind stands in the source: a class after the last
  * class, a package after the last package, a note after the last note. A class takes its id from
  * its name (`Order Item` is `OrderItem`, shown under its name), a package likewise; without a name
- * the id is a kind with a number that no class or package of the diagram has. Returns the id of
- * its shape.
+ * the id is a kind with a number that no class or package of the diagram has. A lollipop is the
+ * interface of the class given as its parent, and nothing without one. Returns the id of its
+ * shape, empty when nothing is added.
  */
 export function addClassPiece(
   source: string,
@@ -628,6 +716,7 @@ export function addClassPiece(
     step = stepOf(outline.lines),
     label = (piece.label ?? "").replace(/\s*\n\s*/g, " ").trim(),
     parent = spaceOf(diagram, piece.parent);
+  if (piece.kind === "lollipop") return addLollipop(source, piece.parent ?? "", label);
   let id = "",
     text: string[];
   if (piece.kind === "note") text = [`note "${labelText(piece.label ?? "") || "Note"}"`];
@@ -806,8 +895,9 @@ function renameSpace(source: string, diagram: ClassDiagram, space: string, name:
 
 /**
  * Gives a class another id, wherever the source names it: in its declarations, relations, notes,
- * `Class : member` and annotation statements and styling lines; its type arguments stay. A
- * namespace (`ns:Sales.Billing`) gets another last name the same way, in every statement that
+ * `Class : member` and annotation statements and styling lines; its type arguments stay, and a
+ * label that says what the new id says goes (`class Purchase`, not `class Purchase["Purchase"]`).
+ * A namespace (`ns:Sales.Billing`) gets another last name the same way, in every statement that
  * opens it or a namespace inside it. The source comes back unchanged when the new id is not one
  * the syntax can write, is a word of the syntax, or is taken by another class or namespace.
  */
@@ -851,13 +941,48 @@ export function renameClassId(source: string, id: string, newId: string): string
   }
   const result = lines.join("\n"),
     now = reads(result);
-  return now?.classes.has(name) &&
-    !now.classes.has(id) &&
-    now.classes.size === diagram.classes.size &&
-    now.relations.length === diagram.relations.length &&
-    now.notes.length === diagram.notes.length
-    ? result
-    : source;
+  if (
+    !now?.classes.has(name) ||
+    now.classes.has(id) ||
+    now.classes.size !== diagram.classes.size ||
+    now.relations.length !== diagram.relations.length ||
+    now.notes.length !== diagram.notes.length
+  )
+    return source;
+  const labelled = outlineOf(result)
+    .classes.get(name)!
+    .declarations.some((declaration) => declaration.labelled);
+  return labelled && now.classes.get(name)!.label === name
+    ? renameClassPart(result, name, name)
+    : result;
+}
+
+/** The ids a new class gets when it has no name yet, and the name a new package gets. */
+const GENERATED = /^(?:Class|Interface|Abstract|Enumeration|Package)\d+$/;
+
+/**
+ * Whether a class or a package goes by an id that an edit made up and its first name may
+ * replace: `Class1`, `Interface1` or `Package1` as a new one gets them, and the id of a copy
+ * (`Order2` beside `Order`) while the copy still shows the name of its original or its own id.
+ */
+export function isGeneratedClassId(source: string, id: string): boolean {
+  const diagram = parseClassDiagram(source),
+    space = spaceOf(diagram, id),
+    item = diagram.classes.get(id);
+  if (space) return GENERATED.test(space.split(".").at(-1)!);
+  if (!item) return false;
+  if (GENERATED.test(id)) return true;
+  // A copy goes by the id of its original as one word, with a number from 2 where that is taken.
+  return [...diagram.classes.values()].some((original) => {
+    const base = wordOf(original.id),
+      number = id.startsWith(base) ? id.slice(base.length) : "x";
+    return (
+      original !== item &&
+      !!base &&
+      (number === "" || (/^\d+$/.test(number) && Number(number) > 1)) &&
+      (item.label === id || item.label === original.label)
+    );
+  });
 }
 
 /**
@@ -1150,6 +1275,176 @@ export function removeClassParts(source: string, ids: Iterable<string>): string 
     .join("\n");
 }
 
+/**
+ * Joins two parts as `connectClasses` does and says which join it wrote: the relation, or the
+ * line of the note. No edge, with the source unchanged, when the two are not joined.
+ */
+export function joinClasses(
+  source: string,
+  from: string,
+  to: string,
+  kind?: string,
+): { source: string; edge: string } {
+  const result = connectClasses(source, from, to, kind);
+  if (result === source) return { source, edge: "" };
+  const diagram = parseClassDiagram(result),
+    note = diagram.notes.find((item) => item.id === from || item.id === to);
+  // A new relation is the last statement, and so the last relation.
+  return { source: result, edge: note ? `${note.id}:link` : (diagram.relations.at(-1)?.id ?? "") };
+}
+
+/**
+ * Why two parts are not joined, in words for the user; undefined when `connectClasses` joins
+ * them. A relation joins two classes, and a note is joined to the class it is for.
+ */
+export function whyNotClass(
+  source: string,
+  from: string,
+  to: string,
+  kind?: string,
+): string | undefined {
+  const diagram = parseClassDiagram(source),
+    ends = [from, to],
+    count = (test: (id: string) => boolean) => ends.filter(test).length,
+    notes = count((id) => diagram.notes.some((note) => note.id === id)),
+    classes = count((id) => diagram.classes.has(id));
+  if (notes === 2) return "A note is joined to a class, not to another note.";
+  if (notes === 1) {
+    if (!classes) return "A note is joined to a class: drop it on a class.";
+    const target = ends.find((id) => diagram.classes.has(id))!;
+    return /\s/.test(ref(target))
+      ? "A note cannot name a class whose id has spaces: give the class another id first."
+      : undefined;
+  }
+  if (count((id) => spaceOf(diagram, id) !== null))
+    return "A package has no relations of its own: join the classes in it.";
+  if (count((id) => diagram.lollipops.some((ball) => ball.id === id)))
+    return "A lollipop interface belongs to the class it is drawn at.";
+  if (classes < 2) return "A relation joins two classes.";
+  return kind === undefined || OPERATORS[kind] ? undefined : "There is no relation of that kind.";
+}
+
+/**
+ * Adds a lollipop interface to a class: a ball on a line from the class with the name beside it,
+ * written as the relation `Name ()-- Class` after the last statement. Returns the id of the ball,
+ * empty with the source unchanged for what is no class.
+ */
+export function addLollipop(
+  source: string,
+  classId: string,
+  name: string,
+): { source: string; id: string } {
+  const diagram = parseClassDiagram(source),
+    outline = outlineOf(source),
+    { lines } = outline,
+    label = name.replace(/\s*\n\s*/g, " ").trim() || "Interface",
+    none = { source, id: "" };
+  if (!diagram.classes.has(classId)) return none;
+  const at = rootEnd(lines);
+  lines.splice(at, 0, `${outline.indent}${ref(label)} ()-- ${ref(classId)}`);
+  const result = lines.join("\n"),
+    ball = reads(result)?.lollipops.find((item) => item.line === at + 1);
+  return ball ? { source: result, id: ball.id } : none;
+}
+
+/**
+ * Adds a piece at a part and says what it wrote: the id of the piece, and the id of the join
+ * between the two when there is one. A note at a class is the note of that class, and a lollipop
+ * the interface of that class. A class of any kind stands in the package of the class it is added
+ * at and, with a `link`, is the second end of a relation of that kind from it. At a package the
+ * piece goes into the package; at any other part, or where the piece is not one for the part, it
+ * is added as `addClassPiece` adds it in the group of the part, with no join.
+ */
+export function attachClass(
+  source: string,
+  piece: { kind: string; label?: string },
+  at: string,
+  link?: string,
+): { source: string; id: string; edge: string } {
+  const diagram = parseClassDiagram(source),
+    node = readClasses(source).nodes.find((item) => item.id === at),
+    host = diagram.classes.has(at),
+    alone = (parent: string | null | undefined) => {
+      const added = addClassPiece(source, { ...piece, parent });
+      return { source: added.id ? added.source : source, id: added.id, edge: "" };
+    };
+  if (piece.kind === "lollipop") {
+    const added = host ? addLollipop(source, at, piece.label ?? "") : { source, id: "" },
+      now = added.id ? parseClassDiagram(added.source) : undefined,
+      ball = now?.lollipops.find((item) => item.id === added.id);
+    return {
+      ...added,
+      edge: now?.relations.find((relation) => relation.line === ball?.line)?.id ?? "",
+    };
+  }
+  if (!node) return alone(null);
+  if (node.group) return alone(at);
+  if (!host || piece.kind === "package" || (piece.kind !== "note" && link === undefined))
+    return alone(node.parent);
+  const added = addClassPiece(source, { ...piece, parent: node.parent }),
+    joined =
+      piece.kind === "note"
+        ? joinClasses(added.source, added.id, at)
+        : joinClasses(added.source, at, added.id, link);
+  return { source: joined.source, id: added.id, edge: joined.edge };
+}
+
+/** A count with its word: `1 class`, `3 classes`; nothing for none. */
+const counted = (count: number, one: string, many = `${one}s`) =>
+  count > 0 ? [`${count} ${count > 1 ? many : one}`] : [];
+
+/** Words in a row: `a`, `a and b`, `a, b and c`. */
+const listed = (words: string[]) =>
+  words.length > 1 ? `${words.slice(0, -1).join(", ")} and ${words.at(-1)}` : (words[0] ?? "");
+
+/**
+ * What a removal takes with it, in words: the packages and classes it names, and how many
+ * classes, packages, relations and notes go with them, as in `Package billing with 3 classes and
+ * 2 relations`; for relations and notes alone, how many go. Empty when the removal changes
+ * nothing.
+ */
+export function classRemovalSummary(source: string, ids: Iterable<string>): string {
+  const chosen = new Set(ids),
+    before = parseClassDiagram(source),
+    after = parseClassDiagram(removeClassParts(source, chosen)),
+    plain = (label: string) => label.replace(/<br\s*\/?>/gi, " "),
+    names = [
+      ...[...before.namespaces.values()]
+        .filter((space) => chosen.has(`ns:${space.id}`))
+        .map((space) => `Package ${plain(space.label)}`),
+      ...[...before.classes.values()]
+        .filter((item) => chosen.has(item.id) && !after.classes.has(item.id))
+        .map((item) => plain(item.label)),
+    ],
+    // What goes beside the parts the summary names: those are not counted again.
+    gone = (all: { id: string }[], left: number, named: (id: string) => boolean) =>
+      all.length - left - (names.length ? all.filter(({ id }) => named(id)).length : 0),
+    rest = [
+      ...counted(
+        gone([...before.classes.values()], after.classes.size, (id) => chosen.has(id)),
+        "class",
+        "classes",
+      ),
+      ...counted(
+        gone([...before.namespaces.values()], after.namespaces.size, (id) =>
+          chosen.has(`ns:${id}`),
+        ),
+        "package",
+      ),
+      ...counted(
+        gone(before.relations, after.relations.length, (id) => chosen.has(id)),
+        "relation",
+      ),
+      ...counted(
+        gone(before.notes, after.notes.length, (id) => chosen.has(id)),
+        "note",
+      ),
+    ];
+  return names.length
+    ? `${names.join(", ")}${rest.length ? ` with ${listed(rest)}` : ""}`
+    : listed(rest);
+}
+
 /** A join of a class diagram as `read` gives it. */
 export interface ClassEdge extends StructureEdge {
   /** Whether the join carries no label to edit: the line from a note to its class. */
@@ -1189,14 +1484,14 @@ function readClasses(source: string): { nodes: StructureNode[]; edges: ClassEdge
       group: false,
       kind: "note",
     })),
-    // A lollipop is an interface, drawn as a ball.
+    // A lollipop is an interface drawn as a ball: a part of a kind of its own, with no members.
     ...diagram.lollipops.map((ball) => ({
       id: ball.id,
       label: ball.label,
       parent: null,
       line: ball.line,
       group: false,
-      kind: "interface",
+      kind: "lollipop",
     })),
   ].toSorted((a, b) => a.line - b.line);
   // Each group before what it holds, the rest in the order of the source.
@@ -1241,7 +1536,8 @@ const CLASS_KINDS = ["class", "interface", "abstract", "enumeration"];
 
 /**
  * Class diagrams as a structure a canvas edits. A class added at another stands beside it without
- * a relation; a note added at a class is the note of that class. The kinds of join are the ones a
+ * a relation; a note added at a class is the note of that class, and a lollipop exists only at a
+ * class: `add` takes that class as its parent, and `attachClass` adds either with its join. The kinds of join are the ones a
  * relation between two classes can be.
  */
 export const classStructure: Structure = {
@@ -1274,6 +1570,14 @@ export const classStructure: Structure = {
       kind: "note",
       name: "Note",
       about: "A remark, on a class or free",
+      joins: "after",
+      joinsTo: CLASS_KINDS,
+      named: true,
+    },
+    {
+      kind: "lollipop",
+      name: "Lollipop interface",
+      about: "An interface a class offers, drawn as a ball at the class",
       joins: "after",
       joinsTo: CLASS_KINDS,
       named: true,

@@ -4,7 +4,7 @@ import elkWorker from "elkjs/lib/elk-worker.min.js?url";
 import type { DiagramColors } from "../src/draw.ts";
 import { elkWorkerPool } from "../src/elk.ts";
 import { textMeasure } from "../src/text.ts";
-import type { Box } from "../src/scene.ts";
+import type { Box, Scene } from "../src/scene.ts";
 import { type Backdrop, confirmDialog, exportDialog, type ExportOptions } from "./dialogs.ts";
 import { Doc } from "./document.ts";
 import { Editor } from "./editor.ts";
@@ -14,8 +14,11 @@ import {
   extensionOf,
   fileStem,
   readRecents,
+  Replacements,
   stemOf,
   withBackground,
+  withMargin,
+  withoutHalos,
   withRecent,
 } from "./files.ts";
 import type { ThemeChoice } from "./menus.ts";
@@ -121,6 +124,46 @@ function shared(a: Box, b: Box): number {
   return all > 0 ? both / all : 1;
 }
 
+/** The box around some boxes. */
+function around(boxes: Box[]): Box {
+  const x = Math.min(...boxes.map((box) => box.x)),
+    y = Math.min(...boxes.map((box) => box.y));
+  return {
+    x,
+    y,
+    width: Math.max(...boxes.map((box) => box.x + box.width)) - x,
+    height: Math.max(...boxes.map((box) => box.y + box.height)) - y,
+  };
+}
+
+/** The box around some elements of a scene; undefined when it draws none of them. */
+function boxOf(scene: Scene, ids: string[]): Box | undefined {
+  const boxes = scene.shapes.filter((shape) => ids.includes(shape.id)).map((shape) => shape.box);
+  return boxes.length ? around(boxes) : undefined;
+}
+
+/** The document, which says when a step of its history is taken, and which way. */
+class Steps extends Doc {
+  /** Called before a step back or forth is taken. */
+  onStep: () => void = () => {};
+  /** The step of the history that is being taken, while the source changes by it. */
+  step: "undo" | "redo" | undefined;
+
+  undo() {
+    if (this.canUndo) this.onStep();
+    this.step = "undo";
+    super.undo();
+    this.step = undefined;
+  }
+
+  redo() {
+    if (this.canRedo) this.onStep();
+    this.step = "redo";
+    super.redo();
+    this.step = undefined;
+  }
+}
+
 async function start() {
   const app = document.getElementById("app")!,
     stage = document.getElementById("stage")!,
@@ -136,7 +179,7 @@ async function start() {
   const system = matchMedia("(prefers-color-scheme: dark)");
   let choice: ThemeChoice = (stored("theme") as ThemeChoice | null) ?? "system";
   const theme = () => (choice === "system" ? (system.matches ? "dark" : "light") : choice);
-  const doc = new Doc(textMeasure(FONT), await elkWorkerPool(elkWorker).catch(() => undefined));
+  const doc = new Steps(textMeasure(FONT), await elkWorkerPool(elkWorker).catch(() => undefined));
   const view = new View(canvas);
   const editor = new Editor(doc, view, THEMES[theme()].diagram);
   const applyTheme = () => {
@@ -188,17 +231,23 @@ async function start() {
       file = { name: handle.name, handle };
       panels.toast(`Saved to ${handle.name}.`);
     };
+    const asDownload = (why: string) => {
+      download(name, new Blob([text], { type: "text/plain" }));
+      panels.toast(`${why}${name} was downloaded.`);
+    };
     try {
       if (file?.handle && !another) await write(file.handle);
       else if (pickers.showSaveFilePicker)
         await write(
           await pickers.showSaveFilePicker({ suggestedName: name, types: kinds(extension) }),
         );
-      else download(name, new Blob([text], { type: "text/plain" }));
+      else asDownload("");
     } catch (reason) {
       if (gaveUp(reason)) return false;
       // The browser did not let the file be written: a download always works.
-      download(name, new Blob([text], { type: "text/plain" }));
+      asDownload(
+        `The browser did not let ${file?.handle && !another ? file.name : "the file"} be written: `,
+      );
     }
     keep(text);
     editor.refresh();
@@ -206,17 +255,31 @@ async function start() {
   };
   /** The diagrams that were on show lately. */
   let recents = readRecents(stored("recent"));
-  /**
-   * The replacements made, as the sources before and after, and whether the one before was saved: a
-   * step between the two shows a whole other diagram, which is saved as it was when it left.
-   */
-  const swaps: [before: string, after: string, saved: boolean][] = [];
+  /** The replacements made: a step across one shows a whole other diagram, with its file. */
+  const swaps = new Replacements<{ name: string; handle?: FileHandle }>();
+  /** Keeps the diagram on show in the list of recent ones, as it is when another takes its place. */
+  const remember = () => {
+    const { picture } = doc,
+      { source } = doc,
+      type = typeOf(source),
+      shown = picture?.source === source && !doc.problem;
+    // Not the sample, and not a diagram that draws nothing; one with an error is kept to be mended.
+    if (!source.trim() || source === STARTER || (shown && !picture.scene.shapes.length)) return;
+    const title = picture?.type === type ? picture.title : undefined;
+    recents = withRecent(recents, {
+      title: title || typeInfo(type).name,
+      source,
+      named: !!title,
+      at: Date.now(),
+    });
+    store("recent", JSON.stringify(recents));
+  };
   /**
    * Shows another diagram in place of the current one. The one before stays a step of the history,
-   * so Undo brings it back; with unsaved changes the user is asked first, and may save. False when
-   * the diagram on show stays.
+   * so Undo brings it back; with unsaved changes the user is asked first, and may save. `notice`
+   * says what happened where "replaced" does not. False when the diagram on show stays.
    */
-  const replace = async (source: string, sure = false): Promise<boolean> => {
+  const replace = async (source: string, sure = false, notice?: string): Promise<boolean> => {
     if (source === doc.source) return false;
     if (!sure && unsaved()) {
       const answer = await confirmDialog(
@@ -226,38 +289,30 @@ async function start() {
       );
       if (answer === "cancel" || (answer === "save" && !(await save()))) return false;
     }
-    const { picture } = doc;
-    if (picture?.scene.shapes.length && picture.source === doc.source && doc.source !== STARTER) {
-      recents = withRecent(recents, {
-        title: picture.title || typeInfo(picture.type).name,
-        source: doc.source,
-      });
-      store("recent", JSON.stringify(recents));
-    }
+    remember();
     editor.select([]);
-    swaps.push([doc.source, source, !unsaved()]);
-    if (swaps.length > 100) swaps.shift();
-    file = undefined;
-    keep(source);
+    // The file and the saved state of the diagram that goes stay with it: see `doc.onChange`.
+    swaps.add(doc.source, source, { file, saved: !unsaved() });
     await doc.apply(source);
     // A source that does not read has no picture: the one before is not shown under it.
     if (doc.problem) {
       doc.picture = undefined;
       editor.refresh();
     }
-    panels.toast("The diagram was replaced.", { name: "Undo", run: () => doc.undo() });
+    panels.toast(notice ?? "The diagram was replaced.", { name: "Undo", run: () => doc.undo() });
     return true;
   };
   /** Shows the diagram of a file, or says why the file has none; the diagram on show then stays. */
   const opened = async (name: string, content: string, handle?: FileHandle) => {
     const found = diagramIn(name, content);
     if ("refusal" in found) return panels.toast(found.refusal);
-    if (found.source !== doc.source && !(await replace(found.source))) return;
+    const notice = found.fenced ? `Opened the first diagram in ${name}.` : `Opened ${name}.`;
+    if (found.source === doc.source) panels.toast(notice);
+    else if (!(await replace(found.source, false, notice))) return;
     // A diagram that is a part of its file is saved to a file of its own.
     file = { name, handle: found.fenced ? undefined : handle };
     keep(doc.source);
     editor.refresh();
-    if (found.fenced) panels.toast(`Opened the first diagram in ${name}.`);
   };
   const picker = document.createElement("input");
   picker.type = "file";
@@ -285,9 +340,10 @@ async function start() {
   };
   /**
    * The picture as it is exported: in the light colors on white or on nothing, or in the colors of
-   * the editor's theme on its page color, with fonts named that every system has one of.
+   * the editor's theme on its page color, with room around it and with fonts named that every
+   * system has one of. On nothing, the labels on lines have no outline in a page color.
    */
-  const picture = (backdrop: Backdrop) => {
+  const picture = (backdrop: Backdrop, margin: number) => {
     const colors = {
         ...(backdrop === "theme" ? THEMES[theme()] : THEMES.light).diagram,
         font: EXPORT_FONT,
@@ -295,17 +351,21 @@ async function start() {
       svg = doc.svg(colors),
       bounds = doc.picture?.scene.bounds;
     if (!svg || !bounds) return undefined;
+    const roomy = withMargin(svg, margin);
     return {
-      svg: backdrop === "transparent" ? svg : withBackground(svg, colors.background),
-      width: bounds.width,
-      height: bounds.height,
+      svg:
+        backdrop === "transparent"
+          ? withoutHalos(roomy, colors.background)
+          : withBackground(roomy, colors.background),
+      width: bounds.width + 2 * margin,
+      height: bounds.height + 2 * margin,
     };
   };
-  const exportAs = async ({ format, scale, backdrop }: ExportOptions) => {
-    const drawn = picture(backdrop);
+  const exportAs = async ({ format, scale, backdrop, margin }: ExportOptions) => {
+    const drawn = picture(backdrop, margin);
     if (!drawn) return;
     store("export-scale", String(scale));
-    store("export-backdrop", backdrop);
+    store("export-margin", String(margin));
     if (format === "svg")
       return download(`${stem()}.svg`, new Blob([drawn.svg], { type: "image/svg+xml" }));
     const image = new Image();
@@ -325,12 +385,14 @@ async function start() {
       if (!doc.picture?.scene.shapes.length)
         return panels.toast("The diagram is empty: there is nothing to export.");
       const scale = Number(stored("export-scale")),
-        backdrop = stored("export-backdrop");
+        margin = stored("export-margin");
       exportDialog({
+        // White is what a picture is put on: the background is asked for anew every time.
         options: {
           format,
           scale: scale === 1 || scale === 3 ? scale : 2,
-          backdrop: backdrop === "transparent" || backdrop === "theme" ? backdrop : "white",
+          backdrop: "white",
+          margin: margin === "0" || margin === "32" ? Number(margin) : 16,
         },
         dark: theme() === "dark",
         name: (kind) => `${stem()}.${kind}`,
@@ -348,6 +410,9 @@ async function start() {
     get unsaved() {
       return unsaved();
     },
+    get fileName() {
+      return file?.name;
+    },
     get theme() {
       return choice;
     },
@@ -364,24 +429,60 @@ async function start() {
     document.title = `${unsaved() ? "● " : ""}${doc.picture?.title || "Untitled"} – TAM Editor`;
     panels.update();
   };
-  /** The source on show, and the bounds of its picture once it was laid out. */
+  doc.onStep = () => panels.stepped();
+  /** The source on show, and its picture once it was laid out. */
   let last = "",
-    settled: { source: string; bounds: Box } | undefined;
+    settled: { source: string; scene: Scene } | undefined;
+  /**
+   * Keeps the view on what an edit changed. A diagram that lies somewhere else altogether shows
+   * whole again. Else the view stays, but for the least move that keeps in view a selected element
+   * that was in view or is new; and a diagram that showed whole and no longer fits is fitted again
+   * when no element moved.
+   */
+  const follow = (was: Scene, now: Scene) => {
+    const { view } = editor;
+    if (
+      was.shapes.length &&
+      now.shapes.length &&
+      was.bounds.width &&
+      now.bounds.width &&
+      shared(was.bounds, now.bounds) < 0.2
+    )
+      return editor.fit();
+    const ids = editor.selectedElements,
+      box = boxOf(now, ids),
+      old = boxOf(was, ids),
+      moved =
+        !!box &&
+        (!old ||
+          old.x !== box.x ||
+          old.y !== box.y ||
+          old.width !== box.width ||
+          old.height !== box.height);
+    if (box && moved) {
+      if (!old || view.shows(old)) view.reveal(box);
+    } else if (view.isFitted && now.shapes.length && !view.shows(now.bounds)) editor.fit();
+  };
   doc.onChange = () => {
     store("source", doc.source);
     const { picture } = doc;
     if (doc.source !== last) {
       // A whole other diagram came on show, by a replacement, by Undo or Redo across one, or by
       // a first line that names another type: it shows whole, and the pointer selects again.
-      const swap = swaps.findLast(
-          ([before, after]) =>
-            (before === last && after === doc.source) || (after === last && before === doc.source),
+      const kept = swaps.cross(
+          last,
+          doc.source,
+          { file, saved: saved === null || saved === last },
+          doc.step ?? "edit",
         ),
-        other = !!swap || typeOf(last) !== typeOf(doc.source);
+        other = !!kept || typeOf(last) !== typeOf(doc.source);
       last = doc.source;
-      // Undo across a replacement brings back a diagram that was saved, or was not.
-      if (swap && (swap[1] === doc.source || swap[2])) keep(doc.source);
-      else if (swap) saved = "";
+      // The diagram that comes has its file again, and is saved or is not, as when it left.
+      if (kept) {
+        file = kept.file;
+        if (kept.saved) keep(doc.source);
+        else saved = "";
+      }
       if (other) {
         settled = undefined;
         editor.setTool("select");
@@ -394,17 +495,30 @@ async function start() {
       picture.source === doc.source &&
       settled?.source !== doc.source
     ) {
-      const { bounds } = picture.scene,
-        before = settled?.bounds;
-      // So does a diagram that lies somewhere else altogether after a step.
-      if (before?.width && bounds.width && shared(before, bounds) < 0.2) editor.fit();
-      settled = { source: doc.source, bounds };
+      const before = settled?.scene,
+        { scene } = picture;
+      settled = { source: doc.source, scene };
+      // The last source that reads: its picture shows under an error after a reload.
+      store("valid", doc.source);
+      // What the edit selects is selected once the edit is through.
+      if (before)
+        queueMicrotask(() => {
+          if (doc.picture?.scene === scene) follow(before, scene);
+        });
     }
     editor.refresh();
   };
   applyTheme();
   last = stored("source") ?? STARTER;
   await doc.open(last);
+  const valid = stored("valid");
+  if (doc.problem && valid?.trim() && valid !== last) {
+    // The source was left with an error: the last one that read shows under it, a step back.
+    const source = last;
+    last = valid;
+    await doc.open(valid);
+    if (!doc.problem) await doc.apply(source);
+  }
   if (saved === null) keep(doc.source);
   // For tests and the curious: the editor on the console.
   Object.assign(window, { tamEditor: editor });

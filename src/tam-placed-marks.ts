@@ -40,6 +40,8 @@ export interface Surroundings {
   /** Elements, interface circles and their names. */
   solids: Box[];
   containers: Box[];
+  /** The containers that hold only one end of the connection, or none: a mark stands outside them where its wire leaves it room there. */
+  foreign?: Box[];
   titles: Box[];
   /** Every piece of every wire, by the connection it belongs to; a loop's two lines lie `half` to either side. */
   wires: { owner: string; a: Point; b: Point; half?: number }[];
@@ -78,6 +80,9 @@ export const HIT = EDGE;
 const STEP = 6,
   END = CHANNEL / 2 + 4,
   HEAD = CHANNEL / 2 + 12;
+
+/** A spot inside a container that does not hold both ends counts INSIDE: less than covering anything, more than a spot on another run. */
+const INSIDE = 3;
 
 /** A label that finds no room at its wire stands off it by one of these. */
 const LIFTS = [0, 10, 20, 30];
@@ -252,9 +257,10 @@ export function placeMark(
         for (const [turn, side] of sides.entries()) {
           const [found, drawn] = rooms(spot, side, up, lift),
             hits = covered(edge, drawn, circle, around) + (crooked ? EDGE : 0),
-            cost = hits + rank * 1.5 + away * 0.02 + turn * 0.3 + lift * 0.1;
+            held = around.foreign?.some((box) => drawn.some((room) => overlaps(room, box))),
+            cost = hits + (held ? INSIDE : 0) + rank * 1.5 + away * 0.02 + turn * 0.3 + lift * 0.1;
           const mark = { spot, host, up, rooms: found, drawn, hits, cost };
-          if (!hits) return mark;
+          if (!hits && !held) return mark;
           if (!best || cost < best.cost) best = mark;
         }
       }

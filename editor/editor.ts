@@ -13,6 +13,9 @@ import {
   type TamDiagram,
 } from "../src/tam.ts";
 import {
+  idFor,
+  isGeneratedId,
+  renameId,
   addElement,
   addInterface,
   connect,
@@ -189,6 +192,9 @@ const NAMES: Record<ElementKind, string> = {
   group: "",
 };
 
+/** Whether a kind of piece is of a family, by the word in its name. */
+const kindIs = (kind: string, word: string) => kind.toLowerCase().includes(word);
+
 export class Editor {
   readonly doc: Doc;
   readonly view: View;
@@ -217,6 +223,8 @@ export class Editor {
   private picked: string | undefined;
   /** The part just added that has no name of its own yet. */
   private fresh: string | undefined;
+  /** The kind of piece being dragged from the palette. */
+  private dragged: string | undefined;
   /** The part a piece dragged from the palette would join. */
   private pieceTarget: string | undefined;
   private hover: Part | undefined;
@@ -328,6 +336,8 @@ export class Editor {
 
   select(parts: Part[]) {
     this.selection = parts;
+    // The dots of what the pointer was over before go: they come back when it moves there.
+    this.linkHost = undefined;
     this.view.invalidate();
     this.onState();
   }
@@ -363,7 +373,7 @@ export class Editor {
   // Commands. Each makes one change to the source; a change the notation forbids is said, not made.
 
   /** Applies a new source; false, with a notice, when it breaks a rule of the notation. */
-  private change(source: string | undefined): boolean {
+  private change(source: string | undefined, run?: string): boolean {
     if (source === undefined) {
       const { problem } = this.doc;
       this.notify(
@@ -377,7 +387,7 @@ export class Editor {
       );
       return false;
     }
-    const problem = this.doc.tryApply(source);
+    const problem = this.doc.tryApply(source, run);
     if (problem) this.notify(problem.message.replace(/^Line \d+: /, ""));
     return !problem;
   }
@@ -480,9 +490,22 @@ export class Editor {
   }
 
   /** A piece dragged from the palette is over a point of the canvas: the part it would join shows. */
-  showPieceTarget(at: Point | undefined) {
+  showPieceTarget(at: Point | undefined, kind?: string) {
+    this.dragged = at ? (kind ?? this.dragged) : undefined;
     const part = at && this.picture ? partAt(this.picture, at, 0) : undefined,
-      target = part?.type === "element" ? part.id : undefined;
+      found = part?.type === "element" ? part.id : undefined,
+      node = found ? this.picture?.parts?.get(found) : undefined,
+      piece = this.structure?.pieces.find((item) => item.kind === this.dragged);
+    // Only a part the piece would stand in, or be joined to, shows as its target.
+    const takes =
+      !!node &&
+      !!piece &&
+      !piece.group &&
+      (node.group ||
+        kindIs(piece.kind, "note") ||
+        this.type === "sequence" ||
+        (!!piece.joins && (!piece.joinsTo || piece.joinsTo.includes(node.kind))));
+    const target = takes ? found : undefined;
     if (target === this.pieceTarget) return;
     this.pieceTarget = target;
     this.view.invalidate();
@@ -556,7 +579,22 @@ export class Editor {
 
   /** Gives an element another name, in whichever notation the diagram is written. */
   relabel(id: string, label: string) {
-    if (!this.structural) return void this.edit((source) => setElement(source, id, { label }));
+    if (!this.structural) {
+      // A new element takes its id from its first name: `Order API` is `order_api`.
+      const named = this.fresh === id && isGeneratedId(id) && !!label.trim();
+      this.fresh = undefined;
+      let next = id;
+      const done = this.edit((source) => {
+        const labelled = setElement(source, id, { label });
+        if (!named) return labelled;
+        next = idFor(labelled, label);
+        const renamed = renameId(labelled, id, next);
+        if (renamed === labelled) next = id;
+        return renamed;
+      });
+      if (done && next !== id) this.select([{ type: "element", id: next }]);
+      return;
+    }
     const first = this.fresh === id;
     this.fresh = undefined;
     let named = id;
@@ -620,6 +658,17 @@ export class Editor {
   setLink(kind: string) {
     this.picked = kind;
     this.onState();
+  }
+
+  /** Gives an element of a block diagram another id, in every connection and interface that names it. */
+  renameElementId(id: string, next: string) {
+    const to = next.trim();
+    const done = this.edit((source) => {
+      const renamed = renameId(source, id, to);
+      if (renamed === source) throw new Error(`\`${to}\` is taken, or is no id.`);
+      return renamed;
+    });
+    if (done) this.select([{ type: "element", id: to }]);
   }
 
   /** Whether the diagram's structure has one of the edits that not every type has. */
@@ -833,11 +882,7 @@ export class Editor {
   reveal(id: string) {
     const { picture, view } = this,
       box = picture && boxOf(picture, id);
-    if (!box) return;
-    const on = view.boxOnScreen(box),
-      { width, height } = view.size;
-    if (on.x >= 0 && on.y >= 0 && on.x + on.width <= width && on.y + on.height <= height) return;
-    view.panBy(width / 2 - on.x - on.width / 2, height / 2 - on.y - on.height / 2);
+    if (box) view.reveal(box);
   }
 
   /** Whether elements snap to the grid and to each other; Alt turns it off for one gesture. */
@@ -1011,6 +1056,10 @@ export class Editor {
   copy(): string | undefined {
     const ids = this.selectedElements;
     if (!ids.length || this.doc.problem) return undefined;
+    if (this.structural) {
+      this.notify("Parts of this diagram are not copied between diagrams yet: Ctrl+D duplicates.");
+      return undefined;
+    }
     try {
       this.copied = { text: copyOf(this.doc.source, ids), times: 0 };
       return this.copied.text;
@@ -1066,7 +1115,14 @@ export class Editor {
         at = { x: at.x + 2 * GRID, y: at.y + 2 * GRID };
     }
     // Into the container the paste lands in, as a shape dropped there would go.
-    const into = aimed && picture ? dropTarget(picture, this.pointer, new Set(), false) : null;
+    // Not aimed, it goes beside what was copied, in the same container.
+    const original = [...pasted.nodes.keys()].find((id) => picture?.diagram.nodes.has(id)),
+      into =
+        aimed && picture
+          ? dropTarget(picture, this.pointer, new Set(), false)
+          : original && picture
+            ? holder(picture.diagram, original)
+            : null;
     let made: string[] = [];
     const done = this.change(
       (() => {
@@ -1309,7 +1365,9 @@ export class Editor {
     const base = this.doc.placedSource();
     if (base === undefined || !this.selectedElements.length) return;
     const moving = this.movers(parseTam(base), this.selectedElements);
-    this.change(place(base, shifted(moving.places, dx, dy)));
+    // Presses in a row are one step to undo, and what is moved stays in view.
+    if (this.change(place(base, shifted(moving.places, dx, dy)), "nudge"))
+      this.reveal(this.selectedElements[0]);
   }
 
   /** The outermost of some elements, and the placements of all that move with them. */
@@ -1350,10 +1408,14 @@ export class Editor {
     // that the element grows down and right from where it stood.
     const host = parent && picture ? picture.diagram.nodes.get(parent) : undefined,
       box = parent && picture ? boxOf(picture, parent) : undefined,
+      dropped = dropPlace(kind, at, free),
       spot =
         host && box && !host.children.length
-          ? { x: snap(box.x + 14, false), y: snap(box.y + 44, false) }
-          : dropPlace(kind, at, free);
+          ? {
+              x: Math.max(dropped.x, snap(box.x + 14, false)),
+              y: Math.max(dropped.y, snap(box.y + 44, false)),
+            }
+          : dropped;
     let made = "";
     this.ghost = undefined;
     const add = (into: string | null) => {
@@ -1372,7 +1434,10 @@ export class Editor {
       return false;
     }
     if (!keep) this.setTool("select");
+    // The first name typed for it becomes its id.
+    this.fresh = made;
     this.select([{ type: "element", id: made }]);
+    this.reveal(made);
     if (kind !== "group") this.rename(made);
     return true;
   }
@@ -1689,8 +1754,39 @@ export class Editor {
     if (box && snapped) gesture.guides = guidesAt({ ...box, x: box.x + dx, y: box.y + dy }, others);
     const moved = place(picture.source, shifted(places, dx, dy));
     // What is moved goes where its middle is: a part leaves its container when most of it has.
-    const middle = box ? { x: box.x + dx + box.width / 2, y: box.y + dy + box.height / 2 } : point;
-    const target = dropTarget(picture, middle, all, false);
+    const now = box && { ...box, x: box.x + dx, y: box.y + dy },
+      middle = now ? { x: now.x + now.width / 2, y: now.y + now.height / 2 } : point;
+    let target = dropTarget(picture, middle, all, false);
+    // An element that holds nothing yet takes what is dropped wholly inside it.
+    const leaf = now ? dropTarget(picture, middle, all, true) : null,
+      leafBox = leaf && leaf !== target ? boxOf(picture, leaf) : undefined;
+    if (
+      leaf &&
+      leafBox &&
+      now &&
+      now.x >= leafBox.x &&
+      now.y >= leafBox.y &&
+      now.x + now.width <= leafBox.x + leafBox.width &&
+      now.y + now.height <= leafBox.y + leafBox.height
+    )
+      target = leaf;
+    // A part leaves its container once it is wholly outside it: across the border the container
+    // grows with it.
+    const home = outer.length ? holder(picture.diagram, outer[0]) : null,
+      homeBox = home ? boxOf(picture, home) : undefined;
+    if (
+      home &&
+      homeBox &&
+      now &&
+      target !== home &&
+      !(target && this.movers(picture.diagram, [home]).all.has(target)) &&
+      outer.every((id) => holder(picture.diagram, id) === home) &&
+      now.x < homeBox.x + homeBox.width &&
+      homeBox.x < now.x + now.width &&
+      now.y < homeBox.y + homeBox.height &&
+      homeBox.y < now.y + now.height
+    )
+      target = home;
     gesture.target = undefined;
     let result = moved;
     if (outer.some((id) => holder(picture.diagram, id) !== target)) {
@@ -2052,8 +2148,15 @@ export class Editor {
     const target = event.target as HTMLElement | null;
     if (target && (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName)))
       return;
-    // In a dialog the keys are the dialog's.
-    if (target?.closest?.("dialog")) return;
+    // In a dialog the keys are the dialog's, wherever the focus is.
+    if (target?.closest?.("dialog") || document.querySelector("dialog[open]")) return;
+    // A focused control keeps the keys that work it: Space and Enter press it, the arrows move
+    // within its group, and no key meant for it removes or moves what is selected on the canvas.
+    const control = target?.closest?.(
+      'button, a[href], summary, [role="button"], [role="tab"], [role="menuitem"], [role="treeitem"], [role="option"], [role="radio"]',
+    );
+    // Reached by the keyboard, that is: one that was only clicked does not hold the keys back.
+    if (control?.matches(":focus-visible") && !event.ctrlKey && !event.metaKey) return;
     const command = event.ctrlKey || event.metaKey,
       key = event.key.length === 1 ? event.key.toLowerCase() : event.key;
     const done = () => event.preventDefault();

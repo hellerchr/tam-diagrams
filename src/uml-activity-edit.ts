@@ -1,6 +1,6 @@
 /**
- * Editing a flowchart or swimlane source as text: adding, naming, connecting and removing nodes,
- * the way tam-edit.ts edits block diagrams. Each function returns the source with one change made.
+ * Editing a flowchart or swimlane source as text: adding, naming, connecting, moving, grouping and
+ * removing nodes, the way tam-edit.ts edits block diagrams. Each function returns the source with one change made.
  * The source is read as statements with the places of their nodes and arrows, so an edit changes
  * the one node or arrow it is about and leaves the rest of its line, and every other line, as it
  * was. A node stays when a statement that mentions it goes: it is then written on a line of its
@@ -12,7 +12,7 @@ import { type FlowEdge, type Flowchart, parseFlowchart } from "./uml-activity.ts
 import { accessibilityLines, labelText as shownText, scan, STYLING } from "./uml.ts";
 
 /** What a canvas adds to an activity diagram. */
-export type FlowPiece = "step" | "decision" | "start" | "end" | "group";
+export type FlowPiece = "step" | "decision" | "start" | "end" | "group" | "lane";
 
 const linesOf = (source: string) => source.replace(/\r\n?/g, "\n").split("\n");
 
@@ -673,10 +673,36 @@ function insertAt(model: Model, parent: string | null): { at: number; indent: st
 }
 
 /**
- * Adds a step, decision, start, end or group and returns the id it got. It goes into the subgraph
- * or lane `parent` names. Without one it stands at the root of a flowchart; in a swimlane it
- * stands in no lane when the source already has a node outside the lanes, else in the first lane,
- * where every node of such a diagram belongs. A lane goes after the last lane.
+ * A new node as it is written: a step as a rectangle, in a swimlane as the rounded action; a
+ * decision as a diamond; a start and an end as the circles a flow makes the small symbols of. A
+ * start or an end that stands `alone`, with no flow yet, is written as the symbol itself.
+ */
+function nodeText(
+  chart: Flowchart,
+  kind: FlowPiece,
+  id: string,
+  name: string | undefined,
+  alone = false,
+): string {
+  const label = name?.trim() ? labelText(name) : "";
+  if (kind === "decision") return `${id}{${label || " "}}`;
+  if (kind === "start" || kind === "end") {
+    if (alone) {
+      const text = name?.trim() ? `, label: "${escaped(name).replace(/\}/g, "#125;")}"` : "";
+      return `${id}@{ shape: ${kind === "start" ? "start" : "stop"}${text} }`;
+    }
+    return kind === "start" ? `${id}((${label || "Start"}))` : `${id}(((${label || "End"})))`;
+  }
+  return chart.kind === "swimlane" ? `${id}(${label || "Step"})` : `${id}[${label || "Step"}]`;
+}
+
+/**
+ * Adds a step, decision, start, end, group or lane and returns the id it got. It goes into the
+ * subgraph or lane `parent` names, also one that holds nothing yet. Without one it stands at the
+ * root of a flowchart; in a swimlane it stands in no lane when the source already has a node
+ * outside the lanes, else in the first lane, where every node of such a diagram belongs. A group
+ * of a swimlane is a lane, and goes after the last lane. A start and an end are written as their
+ * symbols, `end1@{ shape: stop }`, so that they are drawn as such before a flow joins them.
  */
 export function addFlowPiece(
   source: string,
@@ -686,14 +712,15 @@ export function addFlowPiece(
   if (!model) return { source, id: "" };
   const { chart } = model,
     lines = [...model.lines],
-    lane = piece.kind === "group" && chart.kind === "swimlane",
+    group = piece.kind === "group" || piece.kind === "lane",
+    lane = group && chart.kind === "swimlane",
     given = piece.parent && chart.subgraphs.has(piece.parent) ? piece.parent : null,
     loose = [...chart.nodes.values()].some((node) => !node.parent);
   const parent = lane
     ? null
     : (given ??
       (chart.kind === "swimlane" && !loose ? ([...chart.subgraphs.keys()][0] ?? null) : null));
-  const id = freshId(chart, piece.kind === "group" ? (lane ? "lane" : "group") : piece.kind),
+  const id = freshId(chart, group ? (lane ? "lane" : "group") : piece.kind),
     label = piece.label?.trim() ? labelText(piece.label) : "",
     place = insertAt(model, parent);
   if (lane) {
@@ -703,22 +730,23 @@ export function addFlowPiece(
       .map((item) => model.statements[item.close!].line);
     if (ends.length) place.at = Math.max(...ends) + 1;
   }
-  const text =
-    piece.kind === "group"
-      ? [`subgraph ${id} [${label || "Group"}]`, "end"]
-      : piece.kind === "decision"
-        ? [`${id}{${label || " "}}`]
-        : piece.kind === "start"
-          ? [`${id}((${label || "Start"}))`]
-          : piece.kind === "end"
-            ? [`${id}(((${label || "End"})))`]
-            : [
-                chart.kind === "swimlane"
-                  ? `${id}(${label || "Step"})`
-                  : `${id}[${label || "Step"}]`,
-              ];
+  const text = group
+    ? [`subgraph ${id} [${label || (lane ? "Lane" : "Group")}]`, "end"]
+    : [nodeText(chart, piece.kind, id, piece.label, true)];
   lines.splice(place.at, 0, ...text.map((line) => place.indent + line));
   return { source: lines.join("\n"), id };
+}
+
+/** The subgraphs around a node or subgraph, the nearest first. */
+function around(chart: Flowchart, id: string): string[] {
+  const out: string[] = [];
+  for (
+    let parent = (chart.nodes.get(id) ?? chart.subgraphs.get(id))?.parent ?? null;
+    parent;
+    parent = chart.subgraphs.get(parent)?.parent ?? null
+  )
+    out.push(parent);
+  return out;
 }
 
 /** The strokes a flow is drawn with, as the kinds of join of an activity diagram. */
@@ -758,19 +786,8 @@ export function connectFlow(
     )
   )
     return source;
-  // The subgraphs around a part, the nearest first.
-  const around = (id: string) => {
-    const out: string[] = [];
-    for (
-      let parent = (chart.nodes.get(id) ?? chart.subgraphs.get(id))?.parent ?? null;
-      parent;
-      parent = chart.subgraphs.get(parent)?.parent ?? null
-    )
-      out.push(parent);
-    return out;
-  };
-  const shared = around(to),
-    { at, indent } = insertAt(model, around(from).find((id) => shared.includes(id)) ?? null);
+  const shared = around(chart, to),
+    { at, indent } = insertAt(model, around(chart, from).find((id) => shared.includes(id)) ?? null);
   // The edges after the new one count one further.
   const before = chart.edges.filter((edge) => edge.line <= at).length,
     changes = new Map<Statement, string[]>();
@@ -878,8 +895,11 @@ function idOf(name: string): string | null {
   return /^[A-Za-z]\w{0,39}$/.test(id) && !RESERVED.has(id) ? id : null;
 }
 
-/** The source with a node or subgraph under another id, at every mention. */
-function reidentify(source: string, id: string, next: string, plain: boolean): string {
+/**
+ * The source with a node or subgraph under another id, at every mention. A subgraph keeps the
+ * name it has in brackets, or opens with `heading` when that is given.
+ */
+function reidentify(source: string, id: string, next: string, heading?: string): string {
   const model = readModel(source);
   if (!model) return source;
   const changes = new Map<Statement, string[]>();
@@ -892,7 +912,7 @@ function reidentify(source: string, id: string, next: string, plain: boolean): s
       if (text !== statement.text) changes.set(statement, [text]);
     } else if (statement.kind === "subgraph" && statement.id === id) {
       const bracket = statement.text.match(/^subgraph\s+\S+?(\s*\[.*\])$/);
-      changes.set(statement, [`subgraph ${next}${plain || !bracket ? "" : bracket[1]}`]);
+      changes.set(statement, [heading ?? `subgraph ${next}${bracket ? bracket[1] : ""}`]);
     } else if (statement.kind === "styling") {
       const list = statement.text.match(/^(style|class)(\s+)(\S+)([\s\S]*)$/),
         click = statement.text.match(/^(click\s+)(\S+)([\s\S]*)$/);
@@ -914,8 +934,9 @@ function reidentify(source: string, id: string, next: string, plain: boolean): s
 }
 
 /**
- * Gives a part that was just added its first name. A part that still has the id it was added with
- * (`step1`, `lane1`) takes an id made of the name, at every mention, where the name gives one that
+ * Gives a part that was just added or copied its first name. A part that still has the id it was
+ * added or copied under (`step1`, `lane1`, `packParcel2` beside `packParcel`) takes an id made of
+ * the name, at every mention, where the name gives one that
  * is free: `packParcel[Pack parcel]`, and for a subgraph named with one word `subgraph Shop`. Any
  * other part keeps its id and takes the name as `renameFlow` gives it. Returns the id afterwards.
  */
@@ -924,19 +945,19 @@ export function retitleFlow(
   id: string,
   name: string,
 ): { source: string; id: string } {
-  const named = renameFlow(source, id, name);
-  if (!name.trim() || !GENERATED.test(id)) return { source: named, id };
-  const chart = parseFlowchart(source),
-    free = (candidate: string | null) =>
-      candidate !== null &&
-      !RESERVED.has(candidate) &&
-      !chart.nodes.has(candidate) &&
-      !chart.subgraphs.has(candidate);
+  const named = renameFlow(source, id, name),
+    chart = parseFlowchart(source);
+  if (!name.trim() || !generated(chart, id)) return { source: named, id };
+  const free = (candidate: string | null) =>
+    candidate !== null &&
+    !RESERVED.has(candidate) &&
+    !chart.nodes.has(candidate) &&
+    !chart.subgraphs.has(candidate);
   // A subgraph named with one word is that word, as id and as name.
   const word = chart.subgraphs.has(id) && /^[A-Za-z]\w*$/.test(name.trim()) ? name.trim() : null,
     next = free(word) ? word : idOf(name);
   if (!free(next)) return { source: named, id };
-  const moved = reidentify(named, id, next!, next === word);
+  const moved = reidentify(named, id, next!, next === word ? `subgraph ${next}` : undefined);
   try {
     const after = parseFlowchart(moved);
     if (after.nodes.has(next!) || after.subgraphs.has(next!)) return { source: moved, id: next! };
@@ -1037,26 +1058,834 @@ export function removeFlow(source: string, ids: Iterable<string>): string {
   return rebuildKeeping(model, changes, loose, drop);
 }
 
-/** Flowcharts and swimlanes as a structure a canvas edits. */
+/** What an edge is apart from where it stands: its ends, its label, its stroke and its end marks. */
+const signature = (edge: Omit<FlowEdge, "id" | "line">) =>
+  [edge.source, edge.target, edge.label ?? "", edge.stroke, edge.start ?? "", edge.end ?? ""].join(
+    "\u0000",
+  );
+
+/**
+ * A source whose `linkStyle` statements count the edges as they now stand. `before` says what each
+ * edge was when the statements were written, null for one that is gone: the edges of the source
+ * are matched with those, each with the next that is the same.
+ */
+function relinked(result: string, before: (string | null)[]): string {
+  const model = readModel(result);
+  if (!model?.statements.some((item) => item.kind === "styling" && /^linkStyle\s/.test(item.text)))
+    return result;
+  const places = new Map<string, number[]>();
+  model.chart.edges.forEach((edge, index) => {
+    const key = signature(edge);
+    places.set(key, [...(places.get(key) ?? []), index]);
+  });
+  const taken = new Map<string, number>(),
+    now = before.map((key) => {
+      if (key === null) return null;
+      const count = taken.get(key) ?? 0;
+      taken.set(key, count + 1);
+      return places.get(key)?.[count] ?? null;
+    }),
+    changes = new Map<Statement, string[]>();
+  for (const statement of model.statements) {
+    if (statement.kind !== "styling") continue;
+    const styled = restyle(statement.text, new Set(), (index) => now[index] ?? null);
+    if (styled !== statement.text) changes.set(statement, styled === null ? [] : [styled]);
+  }
+  return rebuild(model, changes);
+}
+
+/** Where each node and subgraph of a chart stands: the subgraph that holds it. */
+const parentsOf = (chart: Flowchart) =>
+  new Map(
+    [...chart.nodes.values(), ...chart.subgraphs.values()].map((item) => [item.id, item.parent]),
+  );
+
+/**
+ * Whether a source reads as another did but for what `differs` names: the same nodes and
+ * subgraphs with the names they had, each in the subgraph it was in, and as many edges, or
+ * `more` edges than that.
+ */
+function keeps(
+  result: string,
+  chart: Flowchart,
+  differs: Map<string, string | null>,
+  more = 0,
+): boolean {
+  let after: Flowchart;
+  try {
+    after = parseFlowchart(result);
+  } catch {
+    return false;
+  }
+  const now = parentsOf(after),
+    was = new Map([...parentsOf(chart), ...differs]);
+  return (
+    now.size === was.size &&
+    [...was].every(([id, parent]) => now.has(id) && now.get(id) === parent) &&
+    [...chart.nodes.values(), ...chart.subgraphs.values()].every(
+      (item) => (after.nodes.get(item.id) ?? after.subgraphs.get(item.id))?.label === item.label,
+    ) &&
+    after.edges.length === chart.edges.length + more
+  );
+}
+
+/** The same edges, each as often, wherever they stand. */
+const sameEdges = (a: Flowchart, b: Flowchart) =>
+  a.edges.map(signature).toSorted().join("\n") === b.edges.map(signature).toSorted().join("\n");
+
+/** An edge where it is written: its statement, its arrow and the two nodes it joins there. */
+interface Wire {
+  statement: Statement;
+  /** The arrow of the statement that makes it. */
+  arrow: number;
+  from: Ref;
+  to: Ref;
+  edge: FlowEdge;
+  /** How many edges the statement makes before it. */
+  order: number;
+}
+
+function wireOf(model: Model, edge: string): Wire | null {
+  for (const statement of model.statements) {
+    let order = 0;
+    for (const [arrow, edges] of statement.edges.entries()) {
+      let count = 0;
+      for (const from of statement.groups[arrow])
+        for (const to of statement.groups[arrow + 1]) {
+          const found = edges[count++];
+          if (found.id === edge) return { statement, arrow, from, to, edge: found, order };
+          order++;
+        }
+    }
+  }
+  return null;
+}
+
+/** How many edges a chain makes. */
+function edgeCount(text: string): number {
+  const chain = readChain(text);
+  if (!chain) return 0;
+  return chain.arrows.reduce(
+    (sum, _, index) => sum + chain.groups[index].length * chain.groups[index + 1].length,
+    0,
+  );
+}
+
+/**
+ * The source with one edge taken out of its statement and written anew as a statement of its own,
+ * in the place it had among the edges. `write` gets the two ends as they are to be written (with
+ * the shape a node is declared with, where the statement no longer holds it elsewhere) and the
+ * arrow with the blanks around it.
+ */
+function rewired(
+  model: Model,
+  wire: Wire,
+  write: (
+    from: string,
+    to: string,
+    arrow: { before: string; text: string; after: string },
+  ) => string,
+): string {
+  const { statement, arrow } = wire,
+    made = recompose(statement, new Set(), new Set([wire.edge.id]), new Map());
+  if (!made) return model.lines.join("\n");
+  const texts = [...made.texts];
+  let loose = made.loose;
+  const end = (ref: Ref) => {
+    loose = loose.filter((item) => item.id !== ref.id);
+    const alone = ref.shape || ref.braces ? texts.indexOf(ref.text) : -1;
+    if (alone < 0) return ref.id;
+    texts.splice(alone, 1);
+    return ref.text;
+  };
+  const token = statement.arrows[arrow],
+    ends = [end(wire.from), end(wire.to)];
+  // After the statements that hold the edges before it.
+  let slot = 0,
+    count = 0;
+  while (slot < texts.length && count < wire.order) count += edgeCount(texts[slot++]);
+  // A node carries its shape where it is written first: here, when the rest follows.
+  [wire.from, wire.to].forEach((ref, index) => {
+    if (ends[index] !== ref.id || ref.text === ref.id) return;
+    for (let later = slot; later < texts.length; later++) {
+      const at = texts[later].indexOf(ref.text);
+      if (at < 0 || (at > 0 && !/[\s&>|.=ox-]/.test(texts[later][at - 1]))) continue;
+      texts[later] = texts[later].slice(0, at) + ref.id + texts[later].slice(at + ref.text.length);
+      ends[index] = ref.text;
+      return;
+    }
+  });
+  const text = write(ends[0], ends[1], {
+    before: statement.text.slice(statement.groups[arrow].at(-1)!.end, token.start) || " ",
+    text: token.text,
+    after: statement.text.slice(token.end, statement.groups[arrow + 1][0].start) || " ",
+  });
+  texts.splice(slot, 0, text);
+  return rebuildKeeping(
+    model,
+    new Map([[statement, texts]]),
+    loose.length ? new Map([[statement, loose]]) : new Map(),
+  );
+}
+
+/**
+ * Turns an edge round: its ends change places, its arrow stays as it is written, with its label,
+ * its stroke and its end marks. An edge that is a statement of its own is turned in place; one in
+ * a chain or between lists (`a --> b --> c`, `a & b --> c`) leaves it and is written on a line of
+ * its own where it stood, the rest of the chain as it was. `linkStyle` statements keep counting
+ * the same edges. An edge of a node to itself stays as it is.
+ */
+export function reverseFlow(source: string, edge: string): string {
+  const model = readModel(source),
+    wire = model && wireOf(model, edge);
+  if (!model || !wire || wire.edge.source === wire.edge.target) return source;
+  const { chart } = model,
+    result = rewired(
+      model,
+      wire,
+      (from, to, arrow) => to + arrow.before + arrow.text + arrow.after + from,
+    ),
+    turned = { ...wire.edge, source: wire.edge.target, target: wire.edge.source };
+  if (!keeps(result, chart, new Map())) return source;
+  return relinked(
+    result,
+    chart.edges.map((item) => signature(item === wire.edge ? turned : item)),
+  );
+}
+
+/** An arrow as it is written, with an arrow head where it ends in a circle or a cross. */
+function headed(token: string): string {
+  const named = token.match(NAMED)?.[0] ?? "",
+    rest = token.slice(named.length),
+    length = (rest.match(INLINE) ?? rest.match(PLAIN))?.[0].length ?? 0;
+  return length && /[ox]/.test(rest[length - 1])
+    ? `${named}${rest.slice(0, length - 1)}>${rest.slice(length)}`
+    : token;
+}
+
+/**
+ * Puts a new step, decision, start or end into a flow: `a --> b` becomes `a --> new --> b`, within
+ * its chain where the arrow makes that one edge. The label of the edge stays on its first half,
+ * the second half is an arrow of the same stroke that ends as the edge ended: a circle or a cross
+ * at the end of the edge moves to it, and the first half gets an arrow head. In a swimlane whose nodes all stand in
+ * lanes, the new node stands in the lane the flow leaves. Returns the id of the new node, empty
+ * when the edge is not there or the piece is no node.
+ */
+export function insertFlowOnEdge(
+  source: string,
+  edge: string,
+  piece: { kind: FlowPiece; label?: string },
+): { source: string; id: string } {
+  const model = readModel(source),
+    wire = model && wireOf(model, edge),
+    none = { source, id: "" };
+  if (!model || !wire || piece.kind === "group" || piece.kind === "lane") return none;
+  const { chart } = model,
+    { statement } = wire,
+    id = freshId(chart, piece.kind),
+    text = nodeText(chart, piece.kind, id, piece.label),
+    mark = { arrow: ">", circle: "o", cross: "x" }[wire.edge.end ?? "arrow"],
+    second = operator("", wire.edge.stroke, wire.edge.end ? mark : ""),
+    token = statement.arrows[wire.arrow],
+    half = `${headed(token.text)} ${text} ${second}`;
+  const result =
+    statement.edges[wire.arrow].length === 1
+      ? rebuild(model, new Map([[statement, [patched(statement, token.start, token.end, half)]]]))
+      : rewired(
+          model,
+          wire,
+          (from, to, arrow) => `${from}${arrow.before}${half}${arrow.after}${to}`,
+        );
+  let after: Flowchart;
+  try {
+    after = parseFlowchart(result);
+  } catch {
+    return none;
+  }
+  const made = after.nodes.get(id);
+  if (!made || after.edges.length !== chart.edges.length + 1) return none;
+  const loose = [...chart.nodes.values()].some((node) => !node.parent),
+    lane =
+      chart.kind === "swimlane" && !made.parent && !loose
+        ? (chart.nodes.get(wire.edge.source)?.parent ?? chart.nodes.get(wire.edge.target)?.parent)
+        : null,
+    placed = lane ? moveFlowInto(result, id, lane) : result;
+  if (!keeps(placed, after, new Map([[id, lane ?? made.parent]]))) return none;
+  const first: FlowEdge = { ...wire.edge, target: id, end: wire.edge.end && "arrow" };
+  return {
+    source: relinked(
+      placed,
+      chart.edges.map((item) => signature(item === wire.edge ? first : item)),
+    ),
+    id,
+  };
+}
+
+/**
+ * Connects two nodes as `connectFlow` does and says which edge it wrote: edges are numbered in the
+ * order of the source, so the new one is not always the last. No edge is returned when nothing
+ * was written.
+ */
+export function joinFlow(
+  source: string,
+  from: string,
+  to: string,
+  kind?: string,
+  label?: string,
+): { source: string; edge: string } {
+  const result = connectFlow(source, from, to, label, kind);
+  if (result === source) return { source, edge: "" };
+  // The first edge that is not one of those the source had, in their order.
+  const before = parseFlowchart(source).edges.map(signature);
+  let at = 0;
+  for (const edge of parseFlowchart(result).edges) {
+    if (before[at] === signature(edge)) at++;
+    else return { source: result, edge: edge.id };
+  }
+  return { source: result, edge: "" };
+}
+
+/**
+ * Adds a step, decision, start or end joined to a node, in one statement: `at --> new[Label]`, or
+ * `new((Start)) --> at` for a start, which leads. The statement stands in the subgraph or lane of
+ * the node, so the new node stands there too. Returns the id of the node and of the edge; both
+ * empty, and the source unchanged, for a group or a lane, at a lane of a swimlane, and at what is
+ * not there.
+ */
+export function attachFlow(
+  source: string,
+  piece: { kind: FlowPiece; label?: string },
+  at: string,
+): { source: string; id: string; edge: string } {
+  const model = readModel(source),
+    none = { source, id: "", edge: "" };
+  if (!model || piece.kind === "group" || piece.kind === "lane") return none;
+  const { chart } = model,
+    anchor = chart.nodes.get(at) ?? (chart.kind === "flowchart" ? chart.subgraphs.get(at) : null);
+  if (!anchor) return none;
+  const id = freshId(chart, piece.kind),
+    text = nodeText(chart, piece.kind, id, piece.label),
+    place = insertAt(model, anchor.parent),
+    lines = [...model.lines];
+  lines.splice(
+    place.at,
+    0,
+    place.indent + (piece.kind === "start" ? `${text} --> ${at}` : `${at} --> ${text}`),
+  );
+  const result = lines.join("\n");
+  if (keeps(result, chart, new Map([[id, anchor.parent]]), 1)) {
+    const edge = parseFlowchart(result).edges.find(
+      (item) => item.line === place.at + 1 && (item.source === id || item.target === id),
+    );
+    if (edge) return { source: relinked(result, chart.edges.map(signature)), id, edge: edge.id };
+  }
+  // Where one statement cannot put the node beside the other: declared there, then joined.
+  const added = addFlowPiece(source, { ...piece, parent: anchor.parent });
+  if (!added.id) return none;
+  const joined =
+    piece.kind === "start"
+      ? joinFlow(added.source, added.id, at)
+      : joinFlow(added.source, at, added.id);
+  return joined.edge ? { ...joined, id: added.id } : none;
+}
+
+/**
+ * The label a new flow out of a decision takes: `yes` for the first branch, `no` for the second,
+ * as far as the branches the decision has are unlabelled or say yes and no. Undefined once both
+ * are there, when the branches are named another way, and for what is no decision.
+ */
+export function nextBranchLabel(source: string, decision: string): string | undefined {
+  let chart: Flowchart;
+  try {
+    chart = parseFlowchart(source);
+  } catch {
+    return undefined;
+  }
+  if (chart.nodes.get(decision)?.shape !== "diamond") return undefined;
+  const labels = chart.edges
+    .filter((edge) => edge.source === decision && edge.label?.trim())
+    .map((edge) => edge.label!.trim().toLowerCase());
+  if (labels.some((label) => label !== "yes" && label !== "no")) return undefined;
+  return ["yes", "no"].find((label) => !labels.includes(label));
+}
+
+/** Whether a text can be the id of a node or subgraph: one word the parser reads as an id, and no keyword. */
+const canBeId = (id: string) =>
+  new RegExp(`^(?:${ID.source})$`, "u").test(id) && !RESERVED.has(id) && !id.endsWith("@");
+
+/**
+ * Gives a node or a subgraph another id, at every mention: in its flows, where it is declared,
+ * and in the `style`, `class` and `click` statements that name it. A subgraph that was named by
+ * its id keeps that name beside the new id. The source stays as it is when the id cannot be one,
+ * when a node or subgraph has it, and for a subgraph without a name.
+ */
+export function renameFlowId(source: string, id: string, newId: string): string {
+  const model = readModel(source),
+    next = newId.trim();
+  if (!model) return source;
+  const { chart } = model,
+    group = model.statements.find((item) => item.kind === "subgraph" && item.id === id);
+  if (
+    (!chart.nodes.has(id) && !group) ||
+    !canBeId(next) ||
+    chart.nodes.has(next) ||
+    chart.subgraphs.has(next)
+  )
+    return source;
+  let heading: string | undefined;
+  if (group) {
+    const { label } = chart.subgraphs.get(id)!;
+    if (group.form === "bare") return source;
+    // A subgraph whose name is its id is written by the id alone.
+    if (label === next) heading = `subgraph ${next}`;
+    else if (group.form !== "bracket") heading = `subgraph ${next} [${labelText(label)}]`;
+  }
+  const result = reidentify(source, id, next, heading);
+  try {
+    const after = parseFlowchart(result),
+      was = chart.nodes.get(id) ?? chart.subgraphs.get(id)!,
+      now = after.nodes.get(next) ?? after.subgraphs.get(next);
+    const named = (item: string) => (item === id ? next : item);
+    return now &&
+      now.label ===
+        (chart.nodes.has(id) && was.label === id && !declared(model, id) ? next : was.label) &&
+      after.nodes.size === chart.nodes.size &&
+      after.subgraphs.size === chart.subgraphs.size &&
+      [...parentsOf(chart)].every(
+        ([item, parent]) => parentsOf(after).get(named(item)) === (parent && named(parent)),
+      ) &&
+      after.edges.map(signature).join("\n") ===
+        chart.edges
+          .map((edge) =>
+            signature({ ...edge, source: named(edge.source), target: named(edge.target) }),
+          )
+          .join("\n")
+      ? result
+      : source;
+  } catch {
+    return source;
+  }
+}
+
+/** Every place a node is mentioned at, in the order of the source. */
+const mentionsOf = (model: Model, id: string) =>
+  model.statements.flatMap((statement) =>
+    statement.groups.flat().flatMap((ref) => (ref.id === id ? [{ statement, ref }] : [])),
+  );
+
+/** Whether a node is written with a shape or a name somewhere, and not by its id alone. */
+const declared = (model: Model, id: string) =>
+  mentionsOf(model, id).some(({ ref }) => ref.shape || ref.braces);
+
+/**
+ * Whether a node or subgraph still has an id it was given without being asked: the id a piece is
+ * added under (`step1`, `lane1`), or the id of a copy that still carries the name it was copied
+ * with (`packParcel2` beside `packParcel`). The first name such a part gets is to become its id.
+ */
+function generated(chart: Flowchart, id: string): boolean {
+  if (GENERATED.test(id)) return true;
+  const node = chart.nodes.get(id),
+    numbered = id.match(/^(.*?)(\d+)$/);
+  if (!node || !numbered || Number(numbered[2]) < 2) return false;
+  return [...chart.nodes.values()].some(
+    (other) =>
+      other.id !== id &&
+      other.id.replace(/\d+$/, "") === numbered[1] &&
+      (node.label === other.label || node.label === other.id),
+  );
+}
+
+/**
+ * Whether a node or subgraph still has the id it was added or copied under, so that the first
+ * name it gets is to become its id: what `retitleFlow` asks before it changes an id. A canvas
+ * asks it of the copy `duplicateFlowNode` returns.
+ */
+export function isGeneratedFlowId(source: string, id: string): boolean {
+  try {
+    return generated(parseFlowchart(source), id);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Adds a copy of a node beside it, in the same subgraph or lane: the same shape and name under a
+ * new id, the id with the next number that is free. Its flows are not copied. Returns the id of
+ * the copy, empty for what is no node.
+ */
+export function duplicateFlowNode(source: string, id: string): { source: string; id: string } {
+  const model = readModel(source),
+    node = model?.chart.nodes.get(id),
+    none = { source, id: "" };
+  if (!model || !node) return none;
+  const { chart } = model,
+    mentions = mentionsOf(model, id),
+    { ref } = mentions.find((item) => item.ref.shape || item.ref.braces) ?? mentions[0],
+    base = id.replace(/\d+$/, "") || id;
+  let copy = "";
+  for (let count = 2; !copy; count++)
+    if (!chart.nodes.has(`${base}${count}`) && !chart.subgraphs.has(`${base}${count}`))
+      copy = `${base}${count}`;
+  if (!canBeId(copy)) return none;
+  // A node written by its id alone shows that id: the copy shows it too.
+  const text =
+      ref.shape || ref.braces
+        ? copy + ref.text.slice(id.length)
+        : `${copy}[${labelText(node.label)}]${ref.text.slice(id.length)}`,
+    place = insertAt(model, node.parent),
+    lines = [...model.lines];
+  lines.splice(place.at, 0, place.indent + text);
+  const result = lines.join("\n");
+  return keeps(result, chart, new Map([[copy, node.parent]])) ? { source: result, id: copy } : none;
+}
+
+/** One step of indentation, as the source indents. */
+const stepOf = (model: Model) =>
+  model.lines.some((line, index) => index !== model.header && line.startsWith("\t")) ? "\t" : "  ";
+
+/**
+ * Moves a node into a subgraph or lane, or with null out of every one. A node stands in the first
+ * subgraph that mentions it, so the subgraph gets a line for it: the node as it is declared, which
+ * then leaves the place it was declared at, or its id alone where its shape has to stay. Its flows
+ * stay valid, and stay where they are as far as they can: a flow written inside another subgraph
+ * before that line would hold the node there, so it is written anew right behind that subgraph,
+ * the nodes at its other end staying inside. `linkStyle` statements keep counting the same edges.
+ *
+ * The source stays as it is when the node is there already, when the part is no node (a subgraph
+ * does not move), when the subgraph is not there, and in a swimlane for null unless the source
+ * has another node outside the lanes: there every node belongs to a lane.
+ */
+export function moveFlowInto(source: string, id: string, group: string | null): string {
+  const model = readModel(source);
+  if (!model) return source;
+  const { chart, statements } = model,
+    node = chart.nodes.get(id);
+  if (!node || node.parent === group || (group !== null && !chart.subgraphs.has(group)))
+    return source;
+  if (
+    group === null &&
+    chart.kind === "swimlane" &&
+    ![...chart.nodes.values()].some((other) => !other.parent)
+  )
+    return source;
+  const opening = (scope: string) =>
+      statements.find((item) => item.kind === "subgraph" && item.id === scope),
+    target = group === null ? undefined : opening(group);
+  if (group !== null && target?.close === undefined) return source;
+  const mentions = mentionsOf(model, id),
+    shaped = mentions.filter(({ ref }) => ref.shape || ref.braces),
+    alone = (statement: Statement) => !statement.arrows.length && statement.groups[0].length === 1,
+    there = mentions.find(({ statement }) => group !== null && statement.scope === group),
+    // The line from which on the node is held by the subgraph it moves to.
+    anchor = there ? there.statement.line : target ? statements[target.close!].line : Infinity;
+  /** The subgraph around a scope behind whose `end` a statement holds the node no longer. */
+  const outer = (scope: string): string => {
+    const parent = opening(scope)?.scope ?? null;
+    return parent === null || parent === group ? scope : outer(parent);
+  };
+  const changes = new Map<Statement, string[]>(),
+    loose = new Map<Statement, Ref[]>(),
+    pulled = new Map<string, string[]>(),
+    seen = new Set<Statement>();
+  let text = id,
+    displaced = false,
+    carried = false,
+    first: string | undefined;
+  // The one declaration of the node goes with a statement that no longer holds the node.
+  const leaves = (statement: Statement) => {
+    if (shaped.length !== 1 || shaped[0].statement !== statement) return;
+    text = shaped[0].ref.text;
+    displaced = true;
+  };
+  for (const { statement } of mentions) {
+    if (seen.has(statement)) continue;
+    seen.add(statement);
+    const scope = statement.scope;
+    if (scope === group) continue;
+    if (alone(statement)) {
+      // A line of its own outside the subgraph: the node leaves it.
+      if (group === null || scope !== null || !there) {
+        changes.set(statement, []);
+        leaves(statement);
+        if (scope !== null) first ??= outer(scope);
+      }
+      continue;
+    }
+    if (scope === null || statement.line >= anchor) continue;
+    const made = recompose(statement, new Set([id]), new Set(), new Map());
+    if (!made) continue;
+    changes.set(statement, made.texts);
+    if (made.loose.length) loose.set(statement, made.loose);
+    leaves(statement);
+    // Its flows there, written anew behind the subgraph: chains as far as they went on.
+    const place = outer(scope),
+      lands = (opening(place)?.scope ?? null) === group,
+      out = pulled.get(place) ?? [];
+    first ??= place;
+    let tail: string | undefined;
+    const name = (ref: Ref) => {
+      if (ref.id !== id || !displaced || carried || !lands) return ref.id;
+      carried = true;
+      return text;
+    };
+    statement.arrows.forEach((token, index) => {
+      for (const from of statement.groups[index])
+        for (const to of statement.groups[index + 1]) {
+          if (from.id !== id && to.id !== id) continue;
+          if (tail === from.id && out.length) out[out.length - 1] += ` ${token.text} ${name(to)}`;
+          else out.push(`${name(from)} ${token.text} ${name(to)}`);
+          tail = to.id;
+        }
+    });
+    pulled.set(place, out);
+  }
+  // Its one declaration in a flow that stays: the shape moves to the line the subgraph gets.
+  const landed = [...pulled.keys()].some((place) => (opening(place)?.scope ?? null) === group),
+    rooted = mentions.some(({ statement }) => statement.scope === null),
+    lined =
+      group === null
+        ? (displaced && !carried) || (!rooted && !pulled.size)
+        : (displaced && !carried) || (!there && !landed);
+  if (
+    group !== null &&
+    lined &&
+    !displaced &&
+    shaped.length === 1 &&
+    shaped[0].statement.scope !== group
+  ) {
+    const { statement, ref } = shaped[0];
+    if (!changes.has(statement)) {
+      text = ref.text;
+      changes.set(statement, [
+        patched(statement, ref.idEnd, ref.braces?.end ?? ref.shape!.after, ""),
+      ]);
+    }
+  }
+  // Out of every subgraph, the line of the node stands behind the subgraph it leaves.
+  if (group === null && lined && first) pulled.set(first, [text, ...(pulled.get(first) ?? [])]);
+  let result = rebuildKeeping(model, changes, loose);
+  // Behind the subgraphs, the last first, so that the lines above stay where they are.
+  const after = readModel(result);
+  if (!after) return source;
+  const places = [...pulled]
+    .map(([place, texts]) => {
+      const open = after.statements.find((item) => item.kind === "subgraph" && item.id === place);
+      return { open, texts };
+    })
+    .filter((item) => item.texts.length);
+  if (places.some((item) => item.open?.close === undefined)) return source;
+  const lines = [...after.lines];
+  for (const { open, texts } of places.toSorted((a, b) => b.open!.line - a.open!.line)) {
+    const indent = indentOf(lines[open!.line]);
+    lines.splice(after.statements[open!.close!].line + 1, 0, ...texts.map((item) => indent + item));
+  }
+  result = lines.join("\n");
+  if (group !== null && lined) {
+    const now = readModel(result);
+    if (!now) return source;
+    const place = insertAt(now, group),
+      held = [...now.lines];
+    held.splice(place.at, 0, place.indent + text);
+    result = held.join("\n");
+  }
+  try {
+    if (!keeps(result, chart, new Map([[id, group]])) || !sameEdges(parseFlowchart(result), chart))
+      return source;
+  } catch {
+    return source;
+  }
+  return relinked(result, chart.edges.map(signature));
+}
+
+/**
+ * Takes a subgraph or lane away and keeps what it holds: its `subgraph` and `end` lines and its
+ * `direction` go, the lines between them stand one step less indented in the subgraph around it.
+ * The flows to the subgraph itself go with it, and so does what styles it. A swimlane keeps its
+ * last lane as long as that holds nodes, since a swimlane has lanes; any other lane leaves its
+ * nodes outside the lanes.
+ */
+export function ungroupFlow(source: string, id: string): string {
+  const first = readModel(source),
+    group = first?.chart.subgraphs.get(id),
+    open = first?.statements.find((item) => item.kind === "subgraph" && item.id === id);
+  if (!first || !group || open?.close === undefined) return source;
+  const { chart } = first,
+    held = [...chart.nodes.values()].filter((node) => node.parent === id),
+    end = first.statements[open.close];
+  if (chart.kind === "swimlane" && chart.subgraphs.size === 1 && held.length) return source;
+  if (first.byLine.get(open.line)!.length > 1 || first.byLine.get(end.line)!.length > 1)
+    return source;
+  // One step less of indentation between the two lines, then the lines themselves go.
+  const lines = [...first.lines],
+    outer = indentOf(lines[open.line]),
+    inside = lines.slice(open.line + 1, end.line).find((line) => line.trim()),
+    inner = inside ? indentOf(inside) : outer;
+  if (inner.length > outer.length && inner.startsWith(outer))
+    for (let index = open.line + 1; index < end.line; index++)
+      if (lines[index].startsWith(inner)) lines[index] = outer + lines[index].slice(inner.length);
+  const model = readModel(lines.join("\n"));
+  if (!model) return source;
+  const changes = new Map<Statement, string[]>(),
+    loose = new Map<Statement, Ref[]>(),
+    gone = new Set([id]);
+  for (const statement of model.statements) {
+    if (
+      (statement.kind === "subgraph" && statement.id === id) ||
+      statement.index === open.close ||
+      (statement.kind === "direction" && statement.scope === id)
+    )
+      changes.set(statement, []);
+    else if (statement.kind === "chain") {
+      const made = recompose(statement, gone, new Set(), new Map());
+      if (!made) continue;
+      changes.set(statement, made.texts);
+      if (made.loose.length) loose.set(statement, made.loose);
+    } else if (statement.kind === "styling") {
+      const styled = restyle(statement.text, gone, (index) => index);
+      if (styled !== statement.text) changes.set(statement, styled === null ? [] : [styled]);
+    }
+  }
+  let result = rebuildKeeping(model, changes, loose);
+  // A node another subgraph mentions further down would go there: it stays where the subgraph stood.
+  try {
+    for (const node of held)
+      if (parseFlowchart(result).nodes.get(node.id)?.parent !== group.parent)
+        result = moveFlowInto(result, node.id, group.parent);
+    const after = parseFlowchart(result),
+      was = new Map(
+        [...parentsOf(chart)]
+          .filter(([item]) => item !== id)
+          .map(([item, parent]) => [item, parent === id ? group.parent : parent]),
+      ),
+      now = parentsOf(after);
+    if (now.size !== was.size || [...was].some(([item, parent]) => now.get(item) !== parent))
+      return source;
+  } catch {
+    return source;
+  }
+  return relinked(
+    result,
+    chart.edges.map((edge) => (edge.source === id || edge.target === id ? null : signature(edge))),
+  );
+}
+
+/**
+ * Wraps nodes in a new subgraph with a name, and returns its id. Nodes that stand together, in
+ * one subgraph or in none, are wrapped where they stand: the subgraph opens before the first
+ * statement that mentions one of them, takes the statements that are about them alone, and a line
+ * for each node those do not mention. Nodes that stand apart, and the nodes of a swimlane, move
+ * into a new subgraph or lane as `moveFlowInto` moves them. The id is empty and the source
+ * unchanged when none of the ids is a node, or a node cannot move.
+ */
+export function groupFlowNodes(
+  source: string,
+  ids: Iterable<string>,
+  label: string,
+): { source: string; id: string } {
+  const model = readModel(source),
+    none = { source, id: "" };
+  if (!model) return none;
+  const { chart } = model,
+    nodes = [...new Set(ids)].filter((id) => chart.nodes.has(id)),
+    inside = new Set(nodes),
+    parents = new Set(nodes.map((id) => chart.nodes.get(id)!.parent));
+  if (!nodes.length) return none;
+  const wrapped = (): { source: string; id: string } | null => {
+    if (chart.kind !== "flowchart" || parents.size !== 1) return null;
+    const [parent] = parents,
+      about = model.statements.filter(
+        (item) =>
+          item.kind === "chain" &&
+          item.scope === parent &&
+          item.groups.flat().some((ref) => inside.has(ref.id)),
+      ),
+      whole = about.filter((item) => item.groups.flat().every((ref) => inside.has(ref.id))),
+      // Outside every subgraph a flow holds no node in place, so the subgraph opens where the
+      // first statement it takes stood; inside one it opens before the first mention.
+      first = parent === null ? (whole[0] ?? about[0]) : about[0];
+    if (!first) return null;
+    const id = freshId(chart, "group"),
+      step = stepOf(model),
+      changes = new Map<Statement, string[]>(whole.map((item) => [item, []])),
+      held = new Set(whole.flatMap((item) => item.groups.flat().map((ref) => ref.id))),
+      strips = new Map<Statement, Ref[]>(),
+      own: string[] = [];
+    for (const node of nodes) {
+      if (held.has(node)) continue;
+      // Its one declaration in a flow that stays outside: the shape moves to its line in the subgraph.
+      const shaped = mentionsOf(model, node).filter(({ ref }) => ref.shape || ref.braces),
+        found = shaped.length === 1 && shaped[0].statement.scope === parent ? shaped[0] : null;
+      own.push(found ? found.ref.text : node);
+      if (found) strips.set(found.statement, [...(strips.get(found.statement) ?? []), found.ref]);
+    }
+    // From the right, so that the places before keep their columns.
+    for (const [statement, refs] of strips)
+      changes.set(statement, [
+        refs
+          .toSorted((a, b) => b.start - a.start)
+          .reduce(
+            (text, ref) =>
+              text.slice(0, ref.idEnd) + text.slice(ref.braces?.end ?? ref.shape!.after),
+            statement.text,
+          ),
+      ]);
+    const block = [
+      `subgraph ${id} [${labelText(label) || "Group"}]`,
+      ...[...whole.map((item) => item.text), ...own].map((text) => step + text),
+      "end",
+    ];
+    changes.set(first, [...block, ...(changes.get(first) ?? [first.text])]);
+    const result = rebuild(model, changes);
+    try {
+      const after = parseFlowchart(result);
+      if (
+        !keeps(
+          result,
+          chart,
+          new Map([[id, parent], ...nodes.map((node): [string, string] => [node, id])]),
+        ) ||
+        !sameEdges(after, chart)
+      )
+        return null;
+    } catch {
+      return null;
+    }
+    return { source: relinked(result, chart.edges.map(signature)), id };
+  };
+  const made = wrapped();
+  if (made) return made;
+  const added = addFlowPiece(source, { kind: "group", label, parent: null });
+  let result = added.source;
+  for (const node of nodes) {
+    const moved = moveFlowInto(result, node, added.id);
+    if (moved === result) return none;
+    result = moved;
+  }
+  return { source: result, id: added.id };
+}
+
+/** The pieces of a flowchart and of a swimlane alike: the nodes of a flow. */
+const NODES: Structure["pieces"] = [
+  { kind: "step", name: "Step", about: "Something that is done", joins: "after", named: true },
+  {
+    kind: "decision",
+    name: "Decision",
+    about: "A question the flow branches at",
+    joins: "after",
+    named: true,
+  },
+  { kind: "start", name: "Start", about: "Where the flow begins", joins: "before" },
+  { kind: "end", name: "End", about: "Where the flow ends", joins: "after" },
+];
+
+/**
+ * Flowcharts as a structure a canvas edits. It reads swimlanes too, and says of each subgraph
+ * what it is there: a `group` in a flowchart, a `lane` in a swimlane.
+ */
 export const flowStructure: Structure = {
   pieces: [
-    { kind: "step", name: "Step", about: "Something that is done", joins: "after", named: true },
-    {
-      kind: "decision",
-      name: "Decision",
-      about: "A question the flow branches at",
-      joins: "after",
-      named: true,
-    },
-    { kind: "start", name: "Start", about: "Where the flow begins", joins: "before" },
-    { kind: "end", name: "End", about: "Where the flow ends", joins: "after" },
-    {
-      kind: "group",
-      name: "Group",
-      about: "A group of steps, or a lane",
-      group: true,
-      named: true,
-    },
+    ...NODES,
+    { kind: "group", name: "Group", about: "A group of steps", group: true, named: true },
   ],
   links: [
     { kind: "flow", name: "Flow" },
@@ -1078,7 +1907,7 @@ export const flowStructure: Structure = {
         const group = chart.subgraphs.get(id),
           node = chart.nodes.get(id);
         return group
-          ? [{ ...group, group: true, kind: "group" }]
+          ? [{ ...group, group: true, kind: chart.kind === "swimlane" ? "lane" : "group" }]
           : node
             ? [
                 {
@@ -1104,9 +1933,30 @@ export const flowStructure: Structure = {
   },
   add: (source, piece) => addFlowPiece(source, { ...piece, kind: piece.kind as FlowPiece }),
   connect: (source, from, to, kind) => connectFlow(source, from, to, undefined, kind),
+  join: (source, from, to, kind) => joinFlow(source, from, to, kind),
   rename: renameFlow,
   retitle: retitleFlow,
   label: labelFlowEdge,
   relink: restrokeFlow,
   remove: (source, ids) => removeFlow(source, ids),
+  reverse: reverseFlow,
+  copy: duplicateFlowNode,
+  moveInto: moveFlowInto,
+  ungroup: ungroupFlow,
+  reid: renameFlowId,
+};
+
+/** Swimlanes as a structure a canvas edits: the one of flowcharts, with a lane where that has a group. */
+export const swimlaneStructure: Structure = {
+  ...flowStructure,
+  pieces: [
+    ...NODES,
+    {
+      kind: "lane",
+      name: "Lane",
+      about: "A lane for who does the steps",
+      group: true,
+      named: true,
+    },
+  ],
 };
