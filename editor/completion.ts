@@ -20,10 +20,10 @@ export interface Known {
 }
 
 const ABOUT: Record<string, string> = {
-  agent: "does something: a service, a process",
-  human: "a person who uses the system",
-  storage: "keeps information",
-  component: "design level: a part with interfaces",
+  agent: "active structure element: a service, a process",
+  human: "human agent",
+  storage: "passive structure element that stores data",
+  component: "design level: a unit with provided and required interfaces",
   subsystem: "design level: a group of components",
   class: "design level: a class",
   package: "a package of a package diagram",
@@ -38,30 +38,30 @@ const design = (kind: string) => kind === "component" || kind === "subsystem" ||
 
 /** The connections of the notation: what is typed after the first element, who can start one, and what it says. */
 const CONNECTIONS: { text: string; about: string; from: (kind: string) => boolean }[] = [
-  { text: "-- calls --> ", about: "request", from: talks },
-  { text: "-- sends data --> ", about: "data flow", from: talks },
-  { text: "<-- calls --> ", about: "requests both ways", from: talks },
+  { text: "-- calls --> ", about: "request/response channel", from: talks },
+  { text: "-- sends data --> ", about: "data flow channel", from: talks },
+  { text: "<-- calls --> ", about: "bidirectional request/response channel", from: talks },
   { text: "--- ", about: "channel without direction", from: talks },
   { text: "-- reads --> ", about: "read access to a storage", from: acts },
   { text: "-- writes --> ", about: "write access to a storage", from: acts },
-  { text: "-- reads/writes --> ", about: "read and write access", from: acts },
+  { text: "-- reads/writes --> ", about: "modifying (read/write) access", from: acts },
   {
     text: "-- requires ${IName} --> ",
     about: "requires the interface of",
     from: (kind) => acts(kind) && kind !== "human",
   },
-  { text: "-- delegates --> ", about: "passes on to a part", from: acts },
+  { text: "-- delegates --> ", about: "delegation to a part", from: acts },
   {
     text: "provides ${IName}",
-    about: "offers an interface",
+    about: "provided interface",
     from: (kind) => acts(kind) && kind !== "human",
   },
   {
     text: "requires ${IName}",
-    about: "needs an interface",
+    about: "required interface",
     from: (kind) => acts(kind) && kind !== "human",
   },
-  { text: "-. pointer .-> ", about: "a storage refers to another", from: keeps },
+  { text: "-. pointer .-> ", about: "reference to another storage", from: keeps },
   { text: "-. create .-> ", about: "creates at run time", from: acts },
   { text: "-. generate .-> ", about: "generates", from: acts },
   { text: "-. use .-> ", about: "dependency", from: (kind) => design(kind) || kind === "package" },

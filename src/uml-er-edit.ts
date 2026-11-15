@@ -953,7 +953,7 @@ export const erStructure: Structure = {
     {
       kind: "entity",
       name: "Entity",
-      about: "A kind of thing the data is about, with its attributes",
+      about: "Entity type with its attributes and keys",
       named: true,
     },
   ],

@@ -111,25 +111,24 @@ const TAM_CONTEXT = "agent a[A]\nagent b[B]\nagent c[C]\nstorage s[S]\nstorage t
 const TAM: Guide = {
   type: "tam",
   name: "TAM block diagram",
-  about:
-    "Agents, storages, channels and accesses: the parts of a system and how they work together",
+  about: "Compositional structure of a system: agents, storages, channels and accesses",
   header: "",
   sections: [
     {
       id: "about",
       title: "What it shows",
       prose:
-        "A block diagram shows the structure of a system: the agents that do something, the storages that keep information, the channels agents talk through and the accesses by which they use storages. Use it to say which parts a system has and which part works with which. With `package` elements the same syntax draws a package diagram.",
+        "A block diagram shows the compositional structure of a system: agents as active structure elements, storages and channels as passive ones, the channels over which agents communicate and the read and write accesses of agents to storages. Use it for the system's components and their communication paths. With `package` elements the same syntax draws a package diagram.",
     },
     {
       id: "rules",
       title: "Rules of the notation",
       prose: "The parser enforces the SAP TAM standard and names the line that breaks a rule.",
       rules: [
-        "Agents are active: they do something. A human agent is an agent that is a person. Storages and channels are passive: a storage keeps information, a channel passes it on.",
-        "Active and passive elements alternate. Agents talk through channels and use storages through accesses; a storage is never joined to a storage by a flow, only by a `pointer`.",
+        "Agents are active structure elements: they process information. A human agent is an agent that is a person. Storages and channels are passive structure elements: a storage stores information, a channel transmits it.",
+        "Active and passive elements alternate. Agents communicate over channels and access storages by read and write accesses; a storage is never joined to a storage by a flow, only by a `pointer`.",
         "A channel joins agents only: agents, human agents, and groups of them. Components, subsystems and classes connect through interfaces.",
-        "Requests go one way or both ways. Data flows one way on a channel; data both ways takes two channels.",
+        "A request/response channel is unidirectional or bidirectional. A data flow channel is unidirectional; data in both directions takes two channels.",
         "An access joins one active element and one storage, and is written from the active element. `writes` points to the storage, `reads` points from it, `reads/writes` is a modifying access. An access has no protocol.",
         "An agent holds agents, storages, subsystems, components and classes. A human agent holds nothing. A storage holds only storages.",
         "A component or a class holds components, classes and storages. A subsystem holds these and subsystems, never agents. A package holds packages, classes, components and subsystems, and stands at the top, in a package or in a group.",
@@ -166,9 +165,12 @@ const TAM: Guide = {
         row("agent api", "Without a name the id is shown."),
         row("agent api[]", "Empty brackets: no text."),
         row("agent api[Order<br>API]", "`<br>` breaks the name."),
-        row("human customer[Customer]", "A human agent: a person, drawn with a figure."),
-        row("storage db[Orders]", "A storage: rounded, keeps information."),
-        row("component billing[Billing]", "Design level: a component, a part with interfaces."),
+        row("human customer[Customer]", "A human agent, drawn with a figure."),
+        row("storage db[Orders]", "A storage: a passive structure element, drawn rounded."),
+        row(
+          "component billing[Billing]",
+          "Design level: a component, with provided and required interfaces.",
+        ),
         row("subsystem erp[ERP]", "Design level: a subsystem, marked «subsystem»."),
         row("class Order[Order]", "Design level: a class."),
         row("package ui[UI]", "A package of a package diagram."),
@@ -237,9 +239,9 @@ const TAM: Guide = {
       title: "Channels: agent to agent",
       context: TAM_CONTEXT,
       rows: [
-        row("a -- calls --> b", "A request channel: `a` asks, `b` answers."),
-        row("a <-- calls --> b", "Requests both ways."),
-        row("a -- sends data --> b", "A data flow from `a` to `b`."),
+        row("a -- calls --> b", "A request/response channel: `a` is the client, `b` the server."),
+        row("a <-- calls --> b", "A bidirectional request/response channel."),
+        row("a -- sends data --> b", "A unidirectional data flow channel from `a` to `b`."),
         row("a --- b", "A channel without a direction."),
         row("a -- calls: place order --> b", "A label follows the word after a colon."),
         row(
@@ -262,7 +264,7 @@ const TAM: Guide = {
       rows: [
         row("a -- reads --> s", "A read access: `a` reads `s`. The arrow points from the storage."),
         row("a -- writes --> s", "A write access. The arrow points to the storage."),
-        row("a -- reads/writes --> s", "A modifying access: `a` reads and writes `s`."),
+        row("a -- reads/writes --> s", "A modifying (read/write) access of `a` to `s`."),
         row("a -- writes: new orders --> s", "A label follows the word after a colon."),
       ],
     },
@@ -281,7 +283,7 @@ const TAM: Guide = {
         row("c requires ILog", "An interface `c` requires, without a partner."),
         row(
           "outer -- delegates --> inner",
-          "A container passes on to one of its own parts. The only connection between the two.",
+          "Delegation from a container to one of its own parts. The only connection between the two.",
           { context: "component outer[Outer] {\n  component inner[Inner]\n}" },
         ),
       ],
@@ -294,11 +296,11 @@ const TAM: Guide = {
       context:
         "package p[P]\npackage q[Q]\ncomponent c[C]\ncomponent d[D]\nstorage s[S]\nstorage t[T]",
       rows: [
-        row("p -. use .-> q", "`p` uses `q`: a plain UML dependency."),
-        row("p -. import .-> q", "`p` imports `q`: for packages."),
+        row("p -. use .-> q", "A «use» dependency of `p` on `q`."),
+        row("p -. import .-> q", "A package import of `q` into `p`."),
         row("c -. create .-> d", "`c` creates `d` at run time. Between active elements."),
         row("c -. generate .-> d", "`c` generates `d`. Between active elements."),
-        row("s -. pointer .-> t", "`s` refers to `t`. Between two storages."),
+        row("s -. pointer .-> t", "`s` holds a reference to `t`. Between two storages."),
       ],
     },
     {
@@ -354,13 +356,13 @@ api <-- calls --> payment`,
         no("a -- uses --> b", "`uses` is no connection word. Write `a -- calls: uses --> b`."),
         no(
           "s -- reads --> a",
-          "A storage does not act. Write the access from the agent: `a -- reads --> s`.",
+          "A storage is passive. Write the access from the agent: `a -- reads --> s`.",
         ),
         no("a -- calls --> s", "A storage is read or written, not called: `a -- reads --> s`."),
         no("s -- sends data --> t", "Storages are joined only by `s -. pointer .-> t`."),
         no(
           "a <-- sends data --> b",
-          "Data flows one way. Write two channels, or `a <-- calls --> b`.",
+          "A data flow channel is unidirectional. Write two channels, or `a <-- calls --> b`.",
         ),
         no("a -- reads @SQL --> s", "An access has no protocol."),
         no("a -. use: orders .-> b", "A dependency carries only its keyword."),
@@ -400,9 +402,9 @@ const CLASS: Guide = {
       rules: [
         "A class is a box with its name, its attributes and its operations. A member with `(` is an operation, any other an attribute.",
         "Generalization: a solid line with a hollow triangle at the general class. Realization: the same dashed, the triangle at the interface.",
-        "Composition: a filled diamond at the whole, whose parts live and die with it. Aggregation: a hollow diamond at the whole.",
-        "Association: a solid line. An open arrow points to the class the other one knows; multiplicities stand beside the ends.",
-        "Dependency: a dashed line with an open arrow to the class that is used.",
+        "Composition: a filled diamond at the composite, which owns the lifecycle of its parts. Shared aggregation: a hollow diamond at the aggregate.",
+        "Association: a solid line. An open arrowhead marks the navigable end; multiplicities stand beside the ends.",
+        "Dependency: a dashed line with an open arrowhead at the supplier.",
         "A class exists as soon as a statement names it. A relation needs no declaration of its ends.",
         "A namespace is drawn as a package. It only declares classes: a class belongs to the namespace its `class` statement stands in, and relations stand outside all namespaces.",
         "`%% level conceptual` is TAM's conceptual level: no visibility, interfaces, templates, realization or dependencies.",
@@ -477,37 +479,43 @@ const CLASS: Guide = {
       rows: [
         row(
           "Animal <|-- Dog",
-          "Generalization: `Dog` is a kind of `Animal`. The triangle is at `Animal`.",
+          "Generalization: `Dog` specializes `Animal`. The triangle is at `Animal`.",
         ),
-        row("Dog --|> Animal", "The same, written from the special class."),
+        row("Dog --|> Animal", "The same, written from the specific class."),
         row(
           "Order *-- OrderItem",
-          "Composition: an `Order` is made of `OrderItem`s. Also `OrderItem --* Order`.",
+          "Composition: `OrderItem` is a part of the composite `Order`. Also `OrderItem --* Order`.",
         ),
-        row("Team o-- Player", "Aggregation: a `Team` has `Player`s. Also `Player --o Team`."),
+        row(
+          "Team o-- Player",
+          "Shared aggregation: `Team` aggregates `Player`. Also `Player --o Team`.",
+        ),
         row(
           "Customer --> Order",
-          "Association: `Customer` knows `Order`. Also `Order <-- Customer`.",
+          "Association, navigable from `Customer` to `Order`. Also `Order <-- Customer`.",
         ),
-        row("Customer -- Order", "Association, known both ways."),
-        row("Customer <--> Order", "Association with an arrow at both ends."),
-        row("Order ..> Mailer", "Dependency: `Order` uses `Mailer`. Also `Mailer <.. Order`."),
+        row("Customer -- Order", "Association, navigability unspecified."),
+        row("Customer <--> Order", "Association, navigable in both directions."),
+        row(
+          "Order ..> Mailer",
+          "Dependency: `Order` is the client, `Mailer` the supplier. Also `Mailer <.. Order`.",
+        ),
         row(
           "Order ..|> Payable",
           "Realization: `Order` implements `Payable`. Also `Payable <|.. Order`.",
         ),
         row("Order .. Draft", "A dashed line without ends."),
         row('Customer "1" --> "0..*" Order', "Multiplicities in quotes, beside the ends."),
-        row("Customer --> Order : places", "A name for the relation, after a colon."),
+        row("Customer --> Order : places", "The association's name, after a colon."),
         row('Customer "1" --> "0..*" Order : places', "Both."),
         row(
           "IPayable ()-- Order",
-          "An interface as a ball on a line from `Order`, named `IPayable`.",
+          "`IPayable` as a provided interface of `Order`, in ball notation.",
         ),
         row("Order --() IPayable", "The same, the ball written at the right."),
         part(
           "<|   |>   *   o   <   >   ()",
-          "The signs of an end: triangle, filled diamond, hollow diamond, open arrow, ball.",
+          "The end adornments: triangle, filled diamond, hollow diamond, open arrowhead, ball.",
         ),
       ],
     },
@@ -597,23 +605,23 @@ const CLASS: Guide = {
 const USECASE: Guide = {
   type: "usecase",
   name: "Use case diagram",
-  about: "What a system does, and for whom: actors, use cases and the system's boundary",
+  about: "The functional scope of a subject: actors, use cases and the system boundary",
   header: "usecase-beta",
   sections: [
     {
       id: "about",
       title: "What it shows",
       prose:
-        "A use case diagram shows what a system does and for whom: the actors outside the system, the use cases inside its boundary, and who takes part in what. Use it to agree on the scope of a system. It is written in Mermaid's `usecase-beta` syntax.",
+        "A use case diagram shows the functional requirements of a subject: the actors external to it, the use cases inside its system boundary, and the associations between them. Use it to fix the scope of a system. It is written in Mermaid's `usecase-beta` syntax.",
     },
     {
       id: "rules",
       title: "Rules of the notation",
       rules: [
-        "An actor is a role outside the system. A person is drawn as a stick figure; an actor with a stereotype other than `<<human>>`, such as `<<system>>`, as a box that shows the stereotype.",
-        "A use case is something the system does for an actor: an ellipse inside the system boundary. Actors stand outside it.",
-        "An association joins an actor and a use case: the actor takes part in it.",
-        "«include» goes from a use case to one it always performs as a part. «extend» goes from a use case to the one it adds to, at times. Both join two use cases.",
+        "An actor is a role external to the subject. A human actor is drawn as a stick figure; an actor with a stereotype other than `<<human>>`, such as `<<system>>`, as a box that shows the stereotype.",
+        "A use case is a behavior of the subject that yields an observable result for an actor: an ellipse inside the system boundary. Actors stand outside it.",
+        "An association joins an actor and a use case: the actor participates in it.",
+        "«include» goes from the including use case to the included one, whose behavior it always incorporates. «extend» goes from the extending use case to the extended one, whose behavior it conditionally augments. Both join two use cases.",
         "A generalization joins two actors or two use cases; the hollow triangle is at the general one.",
         "The parser reads a relation between any two elements. The editor's canvas offers only the pairings above.",
         "Declare an actor before a relation names it: a name a relation mentions first is a use case.",
@@ -681,17 +689,17 @@ const USECASE: Guide = {
       rows: [
         row(
           "Customer --> order",
-          "An association with an arrow: `Customer` takes part in `order`. More dashes are read the same.",
+          "A directed association: `Customer` participates in `order`. More dashes are read the same.",
         ),
-        row("Customer -- order", "An association without an arrow."),
+        row("Customer -- order", "An undirected association."),
         row("order <-- Customer", "The arrow written from its head."),
-        row("Customer -- pays with --> pay", "An association with a name, between two dashes."),
+        row("Customer -- pays with --> pay", "A named association, the name between two dashes."),
         row("Customer -- pays with -- pay", "The same without an arrow."),
-        row("order ..> : include pay", "«include»: `order` always does `pay` too."),
-        row("rush ..> : extend order", "«extend»: `rush` adds to `order`, at times."),
+        row("order ..> : include pay", "«include»: `order` always incorporates `pay`."),
+        row("rush ..> : extend order", "«extend»: `rush` conditionally extends `order`."),
         row(
           "Clerk --|> Customer",
-          "Generalization: a `Clerk` is a kind of `Customer`. Between two actors or two use cases.",
+          "Generalization: `Clerk` specializes `Customer`. Between two actors or two use cases.",
         ),
         row("Customer --o order", "A circle at the end; `o--` at the start."),
         row("Customer --x order", "A cross at the end; `x--` at the start."),
@@ -786,7 +794,7 @@ const USECASE: Guide = {
 const FLOW_NODES: GuideRow[] = [
   row("pack(Pack goods)", "An action: an id, and its text in round brackets. A rounded box."),
   row("pack[Pack goods]", "Square brackets are an action too, drawn the same."),
-  row("ok{In stock?}", "A decision or a merge: a diamond. Its question stands beside it."),
+  row("ok{In stock?}", "A decision or merge node: a diamond. Its text stands beside it."),
   row(
     "start((Start))",
     "A circle. With flows that only leave it, it is the initial node: a filled dot.",
@@ -799,11 +807,11 @@ const FLOW_NODES: GuideRow[] = [
   row('pack("Pack (all) goods")', "Quotes keep brackets and signs inside a text."),
   row('pack("`Pack **all** goods`")', "A Markdown text: shown without its emphasis signs."),
   row("pack(Pack<br>goods)", TEXT),
-  row("db[(Orders)]", "A cylinder: an object, a database."),
+  row("db[(Orders)]", "A cylinder: an object node, a data store."),
   row("pill([Wait])", "Mermaid's stadium: drawn as an action."),
   row("sub[[Check credit]]", "A subroutine: a rectangle with double sides."),
   row("prep{{Prepare}}", "A hexagon."),
-  row("in[/Read order/]", "Leaning right: input or output."),
+  row("in[/Read order/]", "A parallelogram leaning right: input or output."),
   row(String.raw`out[\Print slip\]`, "Leaning left."),
   row(String.raw`manual[/Check by hand\]`, "A trapezoid, wide at the bottom."),
   row(String.raw`prio[\Sort/]`, "A trapezoid, wide at the top."),
@@ -811,7 +819,10 @@ const FLOW_NODES: GuideRow[] = [
   row("split@{ shape: fork }", "A fork or join bar. `join` is the same shape."),
   row("first@{ shape: start }", "The initial node, whatever flows it has."),
   row("last@{ shape: stop }", "The final node."),
-  row("abort@{ shape: cross-circ }", "A flow final node: a crossed circle. Only this flow ends."),
+  row(
+    "abort@{ shape: cross-circ }",
+    "A flow final node: a crossed circle. It ends its flow, not the activity.",
+  ),
   row(
     'ok@{ shape: diamond, label: "In stock?" }',
     "Any shape by its Mermaid name, with its text: `rect`, `rounded`, `stadium`, `subroutine`, `cyl`, `circle`, `dbl-circ`, `diamond`, `hex`, `lean-r`, `lean-l`, `trap-b`, `trap-t`, `odd`, and Mermaid's longer names for them.",
@@ -820,8 +831,11 @@ const FLOW_NODES: GuideRow[] = [
 
 /** The flows between nodes, for both kinds of activity diagram. */
 const FLOW_EDGES: GuideRow[] = [
-  row("a --> b", "A flow from `a` to `b`."),
-  row("a -->|yes| b", "A flow with a text between bars: the guard after a decision."),
+  row("a --> b", "A control flow from `a` to `b`."),
+  row(
+    "a -->|yes| b",
+    "A flow with a text between bars: the guard of a flow leaving a decision node.",
+  ),
   row("a -- yes --> b", "The same, the text inside the arrow."),
   row("a --- b", "A line without an arrow. With a text: `a ---|text| b` or `a -- text --- b`."),
   row("a -.-> b", "A dotted flow. With a text: `a -. text .-> b`. Without an arrow: `a -.- b`."),
@@ -851,11 +865,11 @@ const FLOW_IGNORED: GuideRow[] = [
 ];
 
 const ACTIVITY_RULES = [
-  "An action is a step of the flow. A flow is an arrow from one node to the next.",
-  "A decision is a diamond with one flow in and several out. The text of a flow that leaves it is its guard, shown in square brackets. A merge is a diamond that brings flows together again; a diamond that does both is drawn as a merge followed by a decision.",
+  "An action is an executable node of the activity. A control flow is an arrow from one node to the next.",
+  "A decision node is a diamond with one incoming flow and several outgoing ones. The text of an outgoing flow is its guard, shown in square brackets. A merge node is a diamond that joins alternative flows; a diamond that does both is drawn as a merge node followed by a decision node.",
   "The initial node is a filled dot: a circle `((…))` that flows only leave. The final node is a ringed dot: a double circle `(((…)))` that flows only enter. A circle that flows enter stays a circle; a double circle that flows leave stays one.",
-  "A fork bar splits one flow into parallel ones, a join bar brings them together: `@{ shape: fork }`.",
-  "A flow final node, a crossed circle, ends one flow while the others go on.",
+  "A fork node splits one flow into concurrent flows, a join node synchronizes them: `@{ shape: fork }`.",
+  "A flow final node, a crossed circle, ends one flow while the others continue.",
   "Decisions, merges, initial and final nodes have no flow to themselves.",
   "A node exists as soon as a statement names it. Its shape and text may be given at any mention; the last one given counts.",
 ];
@@ -863,14 +877,14 @@ const ACTIVITY_RULES = [
 const FLOWCHART: Guide = {
   type: "flowchart",
   name: "Activity diagram",
-  about: "A flow of actions: its steps, decisions, parallel paths, start and end",
+  about: "Actions and control flow: decision, merge, fork, join, initial and final nodes",
   header: "flowchart TB",
   sections: [
     {
       id: "about",
       title: "What it shows",
       prose:
-        "An activity diagram shows a flow of actions: what is done in which order, where the flow branches and merges, where it runs in parallel, and where it starts and ends. Use it for a process or an algorithm. It is written in Mermaid's `flowchart` syntax and drawn as a UML activity diagram.",
+        "An activity diagram shows the control flow between actions: their order, decision and merge nodes, concurrency through fork and join nodes, and initial and final nodes. Use it for a business process or an algorithm. It is written in Mermaid's `flowchart` syntax and drawn as a UML activity diagram.",
     },
     {
       id: "rules",
@@ -916,7 +930,7 @@ const FLOWCHART: Guide = {
       rows: [
         row(
           "subgraph packing [Packing]\n  box(Box it) --> label(Label it)\nend",
-          "A frame around nodes: an id, and its title in square brackets.",
+          "A group of activity nodes in a frame: an id, and its title in square brackets.",
         ),
         row("subgraph Packing\n  box(Box it)\nend", "An id alone is the title."),
         row('subgraph "Packing station"\n  box(Box it)\nend', "A title in quotes, without an id."),
@@ -970,20 +984,20 @@ const FLOWCHART: Guide = {
 const SWIMLANE: Guide = {
   type: "swimlane",
   name: "Activity diagram with lanes",
-  about: "A flow of actions in lanes: who does which step",
+  about: "Actions in activity partitions: the agent responsible for each",
   header: "swimlane-beta TB",
   sections: [
     {
       id: "about",
       title: "What it shows",
       prose:
-        "An activity diagram with lanes shows a flow of actions and who does each: every lane holds the steps of one agent. Use it when a process crosses people, departments or systems. It is written in Mermaid's `swimlane-beta` syntax: a flowchart whose subgraphs are the lanes.",
+        "An activity diagram with lanes shows the control flow between actions, partitioned by responsibility: every lane is an activity partition that holds the actions of one agent. Use it when a process spans human agents, organizational units or systems. It is written in Mermaid's `swimlane-beta` syntax: a flowchart whose subgraphs are the lanes.",
     },
     {
       id: "rules",
       title: "Rules of the notation",
       rules: [
-        "Every `subgraph` is a lane, named after the agent that does its steps. Lanes stand side by side in the order of the source.",
+        "Every `subgraph` is a lane, an activity partition named after the agent responsible for its actions. Lanes stand side by side in the order of the source.",
         "A node stands in the lane where it is named first inside one. Nodes named in no lane share a lane without a name.",
         "Flows run from node to node, also across lanes. A flow does not end at a lane, and lanes do not nest.",
         ...ACTIVITY_RULES,
@@ -1088,25 +1102,25 @@ const SWIMLANE: Guide = {
 const STATE: Guide = {
   type: "state",
   name: "State machine diagram",
-  about: "The states of one thing and the transitions between them",
+  about: "The states of one object and the transitions between them",
   header: "stateDiagram-v2",
   sections: [
     {
       id: "about",
       title: "What it shows",
       prose:
-        "A state machine diagram shows the states one thing can be in and the transitions between them: which event leads from which state to which. Use it for the life of an object, a document, a connection. It is written in Mermaid's `stateDiagram-v2` syntax.",
+        "A state machine diagram shows the states of one object and the transitions between them, each triggered by an event and guarded by a condition. Use it for the lifecycle of an object, a document or a connection. It is written in Mermaid's `stateDiagram-v2` syntax.",
     },
     {
       id: "rules",
       title: "Rules of the notation",
       rules: [
-        "A state is a rounded box. A transition is an arrow, labelled `event [guard] / action`: what happens, the condition under which it leads on, and what is done on the way. Every part is optional.",
-        "`[*]` before an arrow is the initial state of its scope, a filled dot: every such line starts at the same dot. `[*]` after an arrow is a final state, a ringed dot: every such line draws one of its own.",
-        "A composite state contains states and has its own initial and final states. It shows a name only, no description.",
-        "Inside a composite state `--` separates regions that are active at the same time.",
-        "A choice is a diamond: the guards of the transitions that leave it decide. It has no transition to itself.",
-        "A fork bar splits one transition into several, a join bar brings several together.",
+        "A state is a rounded box. A transition is an arrow, labelled `event [guard] / effect`: the trigger, the guard condition, and the effect behavior. Every part is optional.",
+        "`[*]` before an arrow is the initial pseudostate of its region, a filled dot: every such line starts at the same dot. `[*]` after an arrow is a final state, a ringed dot: every such line draws one of its own.",
+        "A composite state contains substates and has its own initial pseudostate and final states. It shows a name only, no description.",
+        "Inside a composite state `--` separates orthogonal regions, active concurrently.",
+        "A choice pseudostate is a diamond: the guards of its outgoing transitions select one. It has no transition to itself.",
+        "A fork pseudostate splits one transition into concurrent ones, a join pseudostate synchronizes them.",
         'A state exists as soon as a statement names it, and stands in the composite state where it is named first. Its id has no spaces and none of `:`, `-`, `{`, `}`, `"`.',
         "TAM puts state machines at the conceptual level: `%% level design` is refused, and `%% level conceptual` refuses fork and join bars.",
         "A diagram has at most 300 states and 20,000 characters.",
@@ -1138,7 +1152,10 @@ const STATE: Guide = {
           'state "Waiting for input" as Waiting',
           "A state with a name of several words, and its id.",
         ),
-        row("Idle : entry / reset", "A description below the name. Each such line adds one."),
+        row(
+          "Idle : entry / reset",
+          "A description below the name, such as internal behavior. Each such line adds one.",
+        ),
       ],
     },
     {
@@ -1146,11 +1163,11 @@ const STATE: Guide = {
       title: "Transitions",
       rows: [
         row("Idle --> Busy", "A transition from `Idle` to `Busy`."),
-        row("Idle --> Busy : start", "The event that causes it, after a colon."),
-        row("Idle --> Busy : start [ready] / beep", "Event, guard and action. " + TEXT),
-        row("[*] --> Idle", "From the initial state: where the machine starts."),
-        row("Busy --> [*]", "To a final state: where it ends."),
-        row("Busy --> Busy : retry", "A transition from a state to itself."),
+        row("Idle --> Busy : start", "The trigger event, after a colon."),
+        row("Idle --> Busy : start [ready] / beep", "Trigger, guard and effect. " + TEXT),
+        row("[*] --> Idle", "From the initial pseudostate to the default state."),
+        row("Busy --> [*]", "To a final state: the region completes."),
+        row("Busy --> Busy : retry", "A self-transition."),
       ],
     },
     {
@@ -1159,15 +1176,15 @@ const STATE: Guide = {
       rows: [
         row(
           "state check <<choice>>\nIdle --> check\ncheck --> Busy : [ready]\ncheck --> Failed : [else]",
-          "A choice: a diamond whose outgoing guards decide.",
+          "A choice pseudostate: a diamond whose outgoing guards select the transition.",
         ),
         row(
           "state split <<fork>>\nIdle --> split\nsplit --> Printing\nsplit --> Mailing",
-          "A fork bar: one transition becomes several.",
+          "A fork pseudostate: one transition splits into concurrent ones.",
         ),
         row(
           "state merge <<join>>\nPrinting --> merge\nMailing --> merge\nmerge --> Done",
-          "A join bar: several transitions become one.",
+          "A join pseudostate: concurrent transitions synchronize into one.",
         ),
         row("state check [[choice]]", "Double square brackets are read like `<< >>`."),
       ],
@@ -1178,7 +1195,7 @@ const STATE: Guide = {
       rows: [
         row(
           "state Active {\n  [*] --> Reading\n  Reading --> Writing : edit\n  Writing --> [*]\n}",
-          "A composite state: its states and transitions stand between `{` and `}`. The `}` is a line of its own.",
+          "A composite state: its substates and transitions stand between `{` and `}`. The `}` is a line of its own.",
         ),
         row(
           'state "In work" as Active {\n  Reading --> Writing\n}',
@@ -1186,11 +1203,11 @@ const STATE: Guide = {
         ),
         row(
           "state Active {\n  Reading --> Writing\n  --\n  Online --> Offline\n}",
-          "`--` on a line of its own starts another region, active at the same time.",
+          "`--` on a line of its own starts another orthogonal region.",
         ),
         row(
           "state Active {\n  state Editing {\n    Typing --> Saving\n  }\n}\nActive --> Closed : close\nSaving --> Closed : quit",
-          "Composite states nest, and transitions go to and from a composite state or the states inside it.",
+          "Composite states nest, and transitions go to and from a composite state or its substates.",
         ),
       ],
     },
@@ -1275,26 +1292,26 @@ const SEQUENCE_CONTEXT = "participant A\nparticipant B";
 const SEQUENCE: Guide = {
   type: "sequence",
   name: "Sequence diagram",
-  about: "The messages agents exchange, in the order of time",
+  about: "Messages between the lifelines of agents, ordered in time",
   header: "sequenceDiagram",
   sections: [
     {
       id: "about",
       title: "What it shows",
       prose:
-        "A sequence diagram shows the messages that agents exchange, in the order of time: every participant has a lifeline that runs down, every message is an arrow between two lifelines. Use it for one scenario of an interaction. It is written in Mermaid's `sequenceDiagram` syntax.",
+        "A sequence diagram shows an interaction: the messages exchanged between agents, ordered in time. Every participant is a lifeline that runs down, every message an arrow between two lifelines. Use it for one scenario of an interaction. It is written in Mermaid's `sequenceDiagram` syntax.",
     },
     {
       id: "rules",
       title: "Rules of the notation",
       rules: [
         "A participant is a box above its lifeline, an actor a stick figure. Participants stand from left to right in the order the source names them; declare them first to choose the order.",
-        "A solid arrow with a filled head is a call that waits for its answer. A dashed arrow with an open head is the reply. A solid arrow with an open head is an asynchronous message: the sender does not wait.",
-        "An activation bar on a lifeline says that the participant is working. A bar is white while its participant waits for an answer.",
+        "A solid arrow with a filled head is a synchronous message: the sender blocks until the reply. A dashed arrow with an open head is the reply message. A solid arrow with an open head is an asynchronous message: the sender does not block.",
+        "An activation bar on a lifeline is an execution specification: the participant is executing a behavior. A bar is white while its participant awaits a reply.",
         "`+` on an arrow activates the receiver, `-` ends the activation of the sender. A participant that is not active cannot be deactivated.",
-        "A fragment frames messages: `loop`, `alt`, `opt`, `par`, `critical`, `break`. `else` belongs inside `alt`, `and` inside `par`, `option` inside `critical`. Fragments nest, and each ends with `end`.",
+        "A combined fragment frames messages under an interaction operator: `loop`, `alt`, `opt`, `par`, `critical`, `break`. `else` separates the operands of `alt`, `and` those of `par`, `option` those of `critical`. Fragments nest, and each ends with `end`.",
         "A note stands left of, right of or over one participant, or over two.",
-        "A box frames participants that belong together. Boxes do not nest.",
+        "A box frames a group of participants. Boxes do not nest.",
         "Creating and destroying participants belongs to TAM's design level: `%% level conceptual` refuses it.",
         "A diagram has at most 40 participants and 20,000 characters.",
       ],
@@ -1319,9 +1336,12 @@ const SEQUENCE: Guide = {
       id: "participants",
       title: "Participants",
       rows: [
-        row("participant Shop", "A participant: a box above a lifeline. Its id is its name."),
+        row(
+          "participant Shop",
+          "A participant: a head box above its lifeline. Its id is its name.",
+        ),
         row("participant S as Shop server", "An id, and the name to show."),
-        row("actor Customer", "An actor: a stick figure."),
+        row("actor Customer", "An actor, a human agent: a stick figure."),
         row("actor C as Retail customer", "An actor with an id and a name."),
         row("participant Web Shop", "An id may have spaces."),
         row(
@@ -1337,14 +1357,14 @@ const SEQUENCE: Guide = {
         "A message is two participants with an arrow between, then a colon and the text. Spaces around the arrow are optional, and so is the text. A participant a message names needs no declaration.",
       context: SEQUENCE_CONTEXT,
       rows: [
-        row("A->>B: place order", "A call: solid, filled head."),
-        row("B-->>A: confirmation", "A reply: dashed, open head."),
+        row("A->>B: place order", "A synchronous message: solid, filled head."),
+        row("B-->>A: confirmation", "A reply message: dashed, open head."),
         row("A-)B: notify", "An asynchronous message: solid, open head."),
         row("B--)A: notify back", "Dashed, open head."),
-        row("A-xB: lost", "A message that gets lost: a cross at its end. Dashed: `--x`."),
+        row("A-xB: lost", "A lost message: a cross at its end. Dashed: `--x`."),
         row("A->B: hint", "A solid line without a head. Dashed: `-->`."),
         row("A<<->>B: sync", "Heads at both ends. Dashed: `<<-->>`."),
-        row("A->>A: think", "A message to itself."),
+        row("A->>A: think", "A self message."),
         row("A->>B: first line<br>second line", TEXT),
       ],
     },
@@ -1355,7 +1375,7 @@ const SEQUENCE: Guide = {
       rows: [
         row(
           "A->>+B: place order\nB-->>-A: confirmation",
-          "`+` after the arrow activates the receiver; `-` ends the sender's activation.",
+          "`+` after the arrow starts an execution specification on the receiver; `-` ends the sender's.",
         ),
         row(
           "A->>B: place order\nactivate B\nB-->>A: confirmation\ndeactivate B",
@@ -1363,7 +1383,7 @@ const SEQUENCE: Guide = {
         ),
         row(
           "A->>+B: first\nA->>+B: second\nB-->>-A: second done\nB-->>-A: first done",
-          "Activations stack: each `+` opens a bar on the one before.",
+          "Activations nest: each `+` opens a bar on the one before.",
         ),
       ],
     },
@@ -1372,21 +1392,30 @@ const SEQUENCE: Guide = {
       title: "Fragments",
       context: SEQUENCE_CONTEXT,
       rows: [
-        row("loop every hour\n  A->>B: poll\nend", "A loop, with its condition."),
+        row(
+          "loop every hour\n  A->>B: poll\nend",
+          "`loop`: the operand repeats while its guard holds.",
+        ),
         row(
           "alt in stock\n  B-->>A: confirmed\nelse sold out\n  B-->>A: refused\nend",
-          "Alternatives: one branch or the other. More `else` lines add branches.",
+          "`alt`: the operand whose guard holds is executed. More `else` lines add operands.",
         ),
-        row("opt has a voucher\n  A->>B: redeem\nend", "An option: only when the condition holds."),
+        row(
+          "opt has a voucher\n  A->>B: redeem\nend",
+          "`opt`: the single operand is executed only if its guard holds.",
+        ),
         row(
           "par notify\n  B-)A: mail\nand book\n  B->>B: write ledger\nend",
-          "Parallel: the branches happen at the same time.",
+          "`par`: the operands execute concurrently.",
         ),
         row(
           "critical reserve stock\n  A->>B: reserve\noption timeout\n  A->>B: cancel\nend",
-          "A critical region, with what happens when it fails.",
+          "`critical`: an atomic region; `option` adds the operand for its failure.",
         ),
-        row("break out of stock\n  B-->>A: refused\nend", "A break: the sequence stops here."),
+        row(
+          "break out of stock\n  B-->>A: refused\nend",
+          "`break`: the operand is executed instead of the rest of the enclosing interaction.",
+        ),
         row(
           "rect rgb(240, 240, 240)\n  A->>B: place order\nend",
           "A frame without a keyword around messages. The color is ignored.",
@@ -1410,12 +1439,12 @@ const SEQUENCE: Guide = {
       rows: [
         row(
           "create participant C\nB->>C: new",
-          "`C` appears with the next message to it, not at the top.",
+          "The lifeline of `C` starts with the next message to it, its creation message, not at the top.",
         ),
         row("create actor C\nB->>C: welcome", "The same for an actor."),
         row(
           "destroy B\nA-xB: close",
-          "The lifeline of `B` ends with the next message to or from it.",
+          "The lifeline of `B` ends with a destruction occurrence at the next message to or from it.",
         ),
       ],
     },
@@ -1483,25 +1512,26 @@ const SEQUENCE: Guide = {
 const ER: Guide = {
   type: "er",
   name: "Entity relationship diagram",
-  about: "Entities with their attributes, and how many of each belong together",
+  about:
+    "Entity types with their attributes and keys, and the cardinalities of their relationships",
   header: "erDiagram",
   sections: [
     {
       id: "about",
       title: "What it shows",
       prose:
-        "An entity relationship diagram shows the things a system keeps data about, their attributes, and how many of each belong together. Use it for a data model: the tables of a database with their keys. It is written in Mermaid's `erDiagram` syntax and drawn in crow's foot notation.",
+        "An entity relationship diagram shows the entity types of a data model, their attributes and keys, and the relationships between them with their cardinalities. Use it for a conceptual or logical data model, or the tables of a database schema. It is written in Mermaid's `erDiagram` syntax and drawn in crow's foot notation.",
     },
     {
       id: "rules",
       title: "Rules of the notation",
       rules: [
-        "An entity is a box with its name above one row for each attribute: type, name, keys and comment.",
-        "A relationship is a line between two entities. The sign at each end says how many of that entity belong to one of the other: a bar is one, a ring is zero, a crow's foot is many.",
-        "`CUSTOMER ||--o{ ORDER` reads from both ends: an order belongs to exactly one customer, a customer has zero or more orders.",
-        "A solid line is an identifying relationship: the second entity cannot exist without the first. A dashed line is a non-identifying one: each exists on its own.",
-        "An entity exists as soon as a statement names it. Several blocks of one entity add up their attributes. A relationship may join an entity to itself.",
-        "An attribute is part of the keys named behind it: `PK` primary, `FK` foreign, `UK` unique. The name of a primary key is underlined.",
+        "An entity type is a box with its name above one row for each attribute: type, name, keys and comment.",
+        "A relationship is a line between two entity types. The symbol at each end is the cardinality of that end per instance of the other: a bar is one, a ring is zero, a crow's foot is many.",
+        "`CUSTOMER ||--o{ ORDER` reads from both ends: an order relates to exactly one customer, a customer to zero or more orders.",
+        "A solid line is an identifying relationship: the second entity type is existence-dependent on the first and identified through it. A dashed line is a non-identifying one.",
+        "An entity type exists as soon as a statement names it. Several blocks of one entity type add up their attributes. A relationship may be recursive.",
+        "An attribute belongs to the keys named after it: `PK` primary, `FK` foreign, `UK` unique. A primary key attribute is underlined.",
         "A name starts with a letter or `_` and goes on with letters, digits, `_` and `-`; any other name stands in quotes.",
         "A diagram has at most 200 entities, 60 attributes in an entity, and 20,000 characters.",
       ],
@@ -1527,16 +1557,16 @@ const ER: Guide = {
       id: "entities",
       title: "Entities",
       rows: [
-        row("CUSTOMER", "An entity without attributes."),
+        row("CUSTOMER", "An entity type without attributes."),
         row(
           'CUSTOMER["Retail customer"]',
-          "An entity with another name to show. The quotes are optional.",
+          "An entity type with a display name. The quotes are optional.",
         ),
         row("ORDER-ITEM", "A name may have hyphens."),
         row('"Order item"', "Quotes allow any name."),
         row(
           "CUSTOMER {\n  int id PK\n  string name\n}",
-          "An entity with its attributes, one on each line between `{` and `}`.",
+          "An entity type with its attributes, one on each line between `{` and `}`.",
         ),
         row("CUSTOMER { int id PK }", "A block on one line."),
       ],
@@ -1551,7 +1581,7 @@ const ER: Guide = {
           "ORDER {\n  date placed\n}",
           "A type and a name. The type is any word: `int`, `string`, `varchar(20)`, `date[]`.",
         ),
-        row("ORDER {\n  int id PK\n}", "A key: `PK`, `FK` or `UK`."),
+        row("ORDER {\n  int id PK\n}", "A key: `PK` primary, `FK` foreign or `UK` unique."),
         row("ORDER-ITEM {\n  int orderId PK, FK\n}", "Several keys, with commas between."),
         row('ORDER {\n  string status "open, paid or sent"\n}', "A comment in quotes, at the end."),
         row('ORDER {\n  int customerId FK "who placed it"\n}', "Keys and a comment."),
@@ -1562,19 +1592,19 @@ const ER: Guide = {
       id: "relationships",
       title: "Relationships",
       prose:
-        "Two entities with a line between, a cardinality at each end of the line, then a colon and a label. Spaces around the signs are optional, and so are the colon and the label.",
+        "Two entity types with a line between, a cardinality at each end of the line, then a colon and a label. Spaces around the symbols are optional, and so are the colon and the label.",
       rows: [
         row("CUSTOMER ||--o{ ORDER : places", "One customer, zero or more orders."),
         row("ORDER ||--|{ ORDER-ITEM : contains", "One order, one or more items."),
         row("PERSON ||--o| PASSPORT : holds", "One person, zero or one passport."),
-        row("PERSON ||--|| BIRTH : has", "One to one."),
+        row("PERSON ||--|| BIRTH : has", "One to exactly one."),
         row("STUDENT }o--o{ COURSE : attends", "Zero or more on both sides."),
-        row("ORDER }o--|| CUSTOMER : belongs to", "Written from the many side."),
+        row("ORDER }o--|| CUSTOMER : belongs to", "Written from the many end."),
         row(
           "CUSTOMER ||..o{ ADDRESS : uses",
-          "A dashed line: non-identifying. `.-` and `-.` are read the same.",
+          "A dashed line: a non-identifying relationship. `.-` and `-.` are read the same.",
         ),
-        row("EMPLOYEE |o--o{ EMPLOYEE : manages", "A relationship of an entity to itself."),
+        row("EMPLOYEE |o--o{ EMPLOYEE : manages", "A recursive relationship."),
         row('CUSTOMER ||--o{ ORDER : "places: online"', "The label may stand in quotes."),
         row("CUSTOMER ||--o{ ORDER", "Without a label."),
         row(
@@ -1588,7 +1618,7 @@ const ER: Guide = {
         ),
         part("}|   |{", "One or more: a bar and a crow's foot."),
         part("}o   o{", "Zero or more: a ring and a crow's foot."),
-        part("--   ..", "The line: identifying, and non-identifying."),
+        part("--   ..", "The line: identifying and non-identifying relationship."),
       ],
     },
     {

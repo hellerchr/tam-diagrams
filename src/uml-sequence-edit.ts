@@ -1788,13 +1788,13 @@ export function removalSummary(source: string, ids: Iterable<string>): string {
  */
 export const sequenceStructure: Structure = {
   pieces: [
-    { kind: "participant", name: "Participant", about: "An agent with a lifeline", named: true },
-    { kind: "actor", name: "Actor", about: "A human agent with a lifeline", named: true },
-    { kind: "box", name: "Box", about: "A group of participants", group: true, named: true },
+    { kind: "participant", name: "Participant", about: "Lifeline of an agent", named: true },
+    { kind: "actor", name: "Actor", about: "Lifeline of a human agent", named: true },
+    { kind: "box", name: "Box", about: "Frame grouping lifelines", group: true, named: true },
     {
       kind: "note",
       name: "Note",
-      about: "A remark over a participant, or after a message",
+      about: "Comment over a lifeline, or after a message",
       joins: "after",
       joinsTo: ["participant", "actor"],
       named: true,
@@ -1802,21 +1802,21 @@ export const sequenceStructure: Structure = {
     {
       kind: "alt",
       name: "Alternative",
-      about: "Messages that are sent under a condition, and others when it does not hold",
+      about: "Combined fragment alt: alternative operands, chosen by their guards",
       group: true,
       named: true,
     },
     {
       kind: "opt",
       name: "Option",
-      about: "Messages that are sent only under a condition",
+      about: "Combined fragment opt: one operand, executed only if its guard holds",
       group: true,
       named: true,
     },
     {
       kind: "loop",
       name: "Loop",
-      about: "Messages that are sent again and again",
+      about: "Combined fragment loop: an operand, repeated while its guard holds",
       group: true,
       named: true,
     },

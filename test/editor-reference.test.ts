@@ -243,7 +243,9 @@ describe("the guides as pages", () => {
   it("writes a page with a table for the rows and a fence for the example", () => {
     const text = guideMarkdown("tam");
     expect(text).toMatch(/^# TAM block diagram guide\n/);
-    expect(text).toContain("| `a -- calls --> b` | A request channel: `a` asks, `b` answers. |");
+    expect(text).toContain(
+      "| `a -- calls --> b` | A request/response channel: `a` is the client, `b` the server. |",
+    );
     expect(text).toContain("```tam\ntitle Order system\n");
     expect(guideMarkdown("flowchart")).toContain("| `a -->\\|yes\\| b` |");
     expect(guideMarkdown("class")).toContain("| `` class `Order Item` `` |");
@@ -352,7 +354,7 @@ describe("the guide sheet", () => {
     expect(shown(sheet, "section").length).toBeGreaterThan(2);
     expect(sheet.element.querySelector(".guide-count")!.textContent).toBe(`${left.length} rows`);
     // Every word is asked for; a section's title brings the whole section.
-    type(sheet, "calls both");
+    type(sheet, "calls bidirectional");
     expect(shown(sheet, ".guide-row").map((item) => item.dataset.text!.split("\n")[0])).toEqual([
       "a <-- calls --> b",
     ]);

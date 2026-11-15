@@ -12,9 +12,9 @@ A class diagram shows classes with their attributes and operations and how they 
 
 - A class is a box with its name, its attributes and its operations. A member with `(` is an operation, any other an attribute.
 - Generalization: a solid line with a hollow triangle at the general class. Realization: the same dashed, the triangle at the interface.
-- Composition: a filled diamond at the whole, whose parts live and die with it. Aggregation: a hollow diamond at the whole.
-- Association: a solid line. An open arrow points to the class the other one knows; multiplicities stand beside the ends.
-- Dependency: a dashed line with an open arrow to the class that is used.
+- Composition: a filled diamond at the composite, which owns the lifecycle of its parts. Shared aggregation: a hollow diamond at the aggregate.
+- Association: a solid line. An open arrowhead marks the navigable end; multiplicities stand beside the ends.
+- Dependency: a dashed line with an open arrowhead at the supplier.
 - A class exists as soon as a statement names it. A relation needs no declaration of its ends.
 - A namespace is drawn as a package. It only declares classes: a class belongs to the namespace its `class` statement stands in, and relations stand outside all namespaces.
 - `%% level conceptual` is TAM's conceptual level: no visibility, interfaces, templates, realization or dependencies.
@@ -63,22 +63,22 @@ One relation on a line, between two class names. Every sign may stand at either 
 
 | You write | It means |
 | --- | --- |
-| `Animal <\|-- Dog` | Generalization: `Dog` is a kind of `Animal`. The triangle is at `Animal`. |
-| `Dog --\|> Animal` | The same, written from the special class. |
-| `Order *-- OrderItem` | Composition: an `Order` is made of `OrderItem`s. Also `OrderItem --* Order`. |
-| `Team o-- Player` | Aggregation: a `Team` has `Player`s. Also `Player --o Team`. |
-| `Customer --> Order` | Association: `Customer` knows `Order`. Also `Order <-- Customer`. |
-| `Customer -- Order` | Association, known both ways. |
-| `Customer <--> Order` | Association with an arrow at both ends. |
-| `Order ..> Mailer` | Dependency: `Order` uses `Mailer`. Also `Mailer <.. Order`. |
+| `Animal <\|-- Dog` | Generalization: `Dog` specializes `Animal`. The triangle is at `Animal`. |
+| `Dog --\|> Animal` | The same, written from the specific class. |
+| `Order *-- OrderItem` | Composition: `OrderItem` is a part of the composite `Order`. Also `OrderItem --* Order`. |
+| `Team o-- Player` | Shared aggregation: `Team` aggregates `Player`. Also `Player --o Team`. |
+| `Customer --> Order` | Association, navigable from `Customer` to `Order`. Also `Order <-- Customer`. |
+| `Customer -- Order` | Association, navigability unspecified. |
+| `Customer <--> Order` | Association, navigable in both directions. |
+| `Order ..> Mailer` | Dependency: `Order` is the client, `Mailer` the supplier. Also `Mailer <.. Order`. |
 | `Order ..\|> Payable` | Realization: `Order` implements `Payable`. Also `Payable <\|.. Order`. |
 | `Order .. Draft` | A dashed line without ends. |
 | `Customer "1" --> "0..*" Order` | Multiplicities in quotes, beside the ends. |
-| `Customer --> Order : places` | A name for the relation, after a colon. |
+| `Customer --> Order : places` | The association's name, after a colon. |
 | `Customer "1" --> "0..*" Order : places` | Both. |
-| `IPayable ()-- Order` | An interface as a ball on a line from `Order`, named `IPayable`. |
+| `IPayable ()-- Order` | `IPayable` as a provided interface of `Order`, in ball notation. |
 | `Order --() IPayable` | The same, the ball written at the right. |
-| `<\|   \|>   *   o   <   >   ()` | The signs of an end: triangle, filled diamond, hollow diamond, open arrow, ball. |
+| `<\|   \|>   *   o   <   >   ()` | The end adornments: triangle, filled diamond, hollow diamond, open arrowhead, ball. |
 
 ## Namespaces
 

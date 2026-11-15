@@ -281,7 +281,7 @@ export class Inspector {
         {
           class: "row check",
           ...tipped({
-            tip: "A solid line: the entity at the target cannot exist without the other",
+            tip: "Identifying relationship, a solid line: the target entity type is existence-dependent on the source",
           }),
         },
         h("span", {}, "Identifying"),
@@ -544,7 +544,7 @@ export class Inspector {
         h(
           "p",
           { class: "note" },
-          "An interface an element provides or requires. Its name is set in the source.",
+          "A provided or required interface of an element. Its name is set in the source.",
         ),
         h("div", { class: "actions end" }, this.remove()),
       ];
@@ -877,11 +877,11 @@ export class Inspector {
           "Level",
           this.segments<"" | "conceptual" | "design">(
             [
-              { value: "", name: "Any", tip: "Agents and components side by side" },
+              { value: "", name: "Any", tip: "Conceptual and design level elements together" },
               {
                 value: "conceptual",
                 name: "Conceptual",
-                tip: "Agents, storages and channels only",
+                tip: "Agents, storages, channels and accesses only",
               },
               { value: "design", name: "Design", tip: "Components, interfaces and connectors" },
             ],

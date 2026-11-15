@@ -2,20 +2,20 @@
 
 <!-- Written by guideMarkdown in editor/reference.ts: change the guide there, not here. -->
 
-Agents, storages, channels and accesses: the parts of a system and how they work together.
+Compositional structure of a system: agents, storages, channels and accesses.
 
 ## What it shows
 
-A block diagram shows the structure of a system: the agents that do something, the storages that keep information, the channels agents talk through and the accesses by which they use storages. Use it to say which parts a system has and which part works with which. With `package` elements the same syntax draws a package diagram.
+A block diagram shows the compositional structure of a system: agents as active structure elements, storages and channels as passive ones, the channels over which agents communicate and the read and write accesses of agents to storages. Use it for the system's components and their communication paths. With `package` elements the same syntax draws a package diagram.
 
 ## Rules of the notation
 
 The parser enforces the SAP TAM standard and names the line that breaks a rule.
 
-- Agents are active: they do something. A human agent is an agent that is a person. Storages and channels are passive: a storage keeps information, a channel passes it on.
-- Active and passive elements alternate. Agents talk through channels and use storages through accesses; a storage is never joined to a storage by a flow, only by a `pointer`.
+- Agents are active structure elements: they process information. A human agent is an agent that is a person. Storages and channels are passive structure elements: a storage stores information, a channel transmits it.
+- Active and passive elements alternate. Agents communicate over channels and access storages by read and write accesses; a storage is never joined to a storage by a flow, only by a `pointer`.
 - A channel joins agents only: agents, human agents, and groups of them. Components, subsystems and classes connect through interfaces.
-- Requests go one way or both ways. Data flows one way on a channel; data both ways takes two channels.
+- A request/response channel is unidirectional or bidirectional. A data flow channel is unidirectional; data in both directions takes two channels.
 - An access joins one active element and one storage, and is written from the active element. `writes` points to the storage, `reads` points from it, `reads/writes` is a modifying access. An access has no protocol.
 - An agent holds agents, storages, subsystems, components and classes. A human agent holds nothing. A storage holds only storages.
 - A component or a class holds components, classes and storages. A subsystem holds these and subsystems, never agents. A package holds packages, classes, components and subsystems, and stands at the top, in a package or in a group.
@@ -46,9 +46,9 @@ The parser enforces the SAP TAM standard and names the line that breaks a rule.
 | `agent api` | Without a name the id is shown. |
 | `agent api[]` | Empty brackets: no text. |
 | `agent api[Order<br>API]` | `<br>` breaks the name. |
-| `human customer[Customer]` | A human agent: a person, drawn with a figure. |
-| `storage db[Orders]` | A storage: rounded, keeps information. |
-| `component billing[Billing]` | Design level: a component, a part with interfaces. |
+| `human customer[Customer]` | A human agent, drawn with a figure. |
+| `storage db[Orders]` | A storage: a passive structure element, drawn rounded. |
+| `component billing[Billing]` | Design level: a component, with provided and required interfaces. |
 | `subsystem erp[ERP]` | Design level: a subsystem, marked «subsystem». |
 | `class Order[Order]` | Design level: a class. |
 | `package ui[UI]` | A package of a package diagram. |
@@ -85,9 +85,9 @@ Color, `stack`, `...` and positions follow the name in any order; an opening `{`
 
 | You write | It means |
 | --- | --- |
-| `a -- calls --> b` | A request channel: `a` asks, `b` answers. |
-| `a <-- calls --> b` | Requests both ways. |
-| `a -- sends data --> b` | A data flow from `a` to `b`. |
+| `a -- calls --> b` | A request/response channel: `a` is the client, `b` the server. |
+| `a <-- calls --> b` | A bidirectional request/response channel. |
+| `a -- sends data --> b` | A unidirectional data flow channel from `a` to `b`. |
 | `a --- b` | A channel without a direction. |
 | `a -- calls: place order --> b` | A label follows the word after a colon. |
 | `a -- calls @HTTPS --> b` | A protocol follows `@`. Channels of one protocol in a row share a dashed protocol boundary. |
@@ -102,7 +102,7 @@ Color, `stack`, `...` and positions follow the name in any order; an opening `{`
 | --- | --- |
 | `a -- reads --> s` | A read access: `a` reads `s`. The arrow points from the storage. |
 | `a -- writes --> s` | A write access. The arrow points to the storage. |
-| `a -- reads/writes --> s` | A modifying access: `a` reads and writes `s`. |
+| `a -- reads/writes --> s` | A modifying (read/write) access of `a` to `s`. |
 | `a -- writes: new orders --> s` | A label follows the word after a colon. |
 
 ## Interfaces and delegation: design level
@@ -114,7 +114,7 @@ Color, `stack`, `...` and positions follow the name in any order; an opening `{`
 | `c -- requires IOrders @REST --> d` | A protocol follows `@`. |
 | `c provides IRefund` | An interface `c` provides, without a partner. |
 | `c requires ILog` | An interface `c` requires, without a partner. |
-| `outer -- delegates --> inner` | A container passes on to one of its own parts. The only connection between the two. |
+| `outer -- delegates --> inner` | Delegation from a container to one of its own parts. The only connection between the two. |
 
 ## Dependencies
 
@@ -122,11 +122,11 @@ A dashed arrow with its keyword in «». It carries the keyword only: no label, 
 
 | You write | It means |
 | --- | --- |
-| `p -. use .-> q` | `p` uses `q`: a plain UML dependency. |
-| `p -. import .-> q` | `p` imports `q`: for packages. |
+| `p -. use .-> q` | A «use» dependency of `p` on `q`. |
+| `p -. import .-> q` | A package import of `q` into `p`. |
 | `c -. create .-> d` | `c` creates `d` at run time. Between active elements. |
 | `c -. generate .-> d` | `c` generates `d`. Between active elements. |
-| `s -. pointer .-> t` | `s` refers to `t`. Between two storages. |
+| `s -. pointer .-> t` | `s` holds a reference to `t`. Between two storages. |
 
 ## Several ends, chains and words
 
@@ -165,10 +165,10 @@ The syntax borrows Mermaid's arrows, not Mermaid's flowchart: shapes in brackets
 | `a --> b` | An arrow says what happens: `a -- calls --> b`. |
 | `a -->\|orders\| b` | The text stands inside the arrow, after a word: `a -- calls: orders --> b`. |
 | `a -- uses --> b` | `uses` is no connection word. Write `a -- calls: uses --> b`. |
-| `s -- reads --> a` | A storage does not act. Write the access from the agent: `a -- reads --> s`. |
+| `s -- reads --> a` | A storage is passive. Write the access from the agent: `a -- reads --> s`. |
 | `a -- calls --> s` | A storage is read or written, not called: `a -- reads --> s`. |
 | `s -- sends data --> t` | Storages are joined only by `s -. pointer .-> t`. |
-| `a <-- sends data --> b` | Data flows one way. Write two channels, or `a <-- calls --> b`. |
+| `a <-- sends data --> b` | A data flow channel is unidirectional. Write two channels, or `a <-- calls --> b`. |
 | `a -- reads @SQL --> s` | An access has no protocol. |
 | `a -. use: orders .-> b` | A dependency carries only its keyword. |
 | `c -- calls --> d` | Components connect through interfaces: `c -- requires IName --> d`. |

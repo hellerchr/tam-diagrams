@@ -2,22 +2,22 @@
 
 <!-- Written by guideMarkdown in editor/reference.ts: change the guide there, not here. -->
 
-A flow of actions in lanes: who does which step.
+Actions in activity partitions: the agent responsible for each.
 
 ## What it shows
 
-An activity diagram with lanes shows a flow of actions and who does each: every lane holds the steps of one agent. Use it when a process crosses people, departments or systems. It is written in Mermaid's `swimlane-beta` syntax: a flowchart whose subgraphs are the lanes.
+An activity diagram with lanes shows the control flow between actions, partitioned by responsibility: every lane is an activity partition that holds the actions of one agent. Use it when a process spans human agents, organizational units or systems. It is written in Mermaid's `swimlane-beta` syntax: a flowchart whose subgraphs are the lanes.
 
 ## Rules of the notation
 
-- Every `subgraph` is a lane, named after the agent that does its steps. Lanes stand side by side in the order of the source.
+- Every `subgraph` is a lane, an activity partition named after the agent responsible for its actions. Lanes stand side by side in the order of the source.
 - A node stands in the lane where it is named first inside one. Nodes named in no lane share a lane without a name.
 - Flows run from node to node, also across lanes. A flow does not end at a lane, and lanes do not nest.
-- An action is a step of the flow. A flow is an arrow from one node to the next.
-- A decision is a diamond with one flow in and several out. The text of a flow that leaves it is its guard, shown in square brackets. A merge is a diamond that brings flows together again; a diamond that does both is drawn as a merge followed by a decision.
+- An action is an executable node of the activity. A control flow is an arrow from one node to the next.
+- A decision node is a diamond with one incoming flow and several outgoing ones. The text of an outgoing flow is its guard, shown in square brackets. A merge node is a diamond that joins alternative flows; a diamond that does both is drawn as a merge node followed by a decision node.
 - The initial node is a filled dot: a circle `((…))` that flows only leave. The final node is a ringed dot: a double circle `(((…)))` that flows only enter. A circle that flows enter stays a circle; a double circle that flows leave stays one.
-- A fork bar splits one flow into parallel ones, a join bar brings them together: `@{ shape: fork }`.
-- A flow final node, a crossed circle, ends one flow while the others go on.
+- A fork node splits one flow into concurrent flows, a join node synchronizes them: `@{ shape: fork }`.
+- A flow final node, a crossed circle, ends one flow while the others continue.
 - Decisions, merges, initial and final nodes have no flow to themselves.
 - A node exists as soon as a statement names it. Its shape and text may be given at any mention; the last one given counts.
 - `end`, `subgraph`, `graph`, `flowchart`, `direction`, `style`, `linkStyle`, `classDef`, `class` and `click` are keywords, not ids.
@@ -47,18 +47,18 @@ An activity diagram with lanes shows a flow of actions and who does each: every 
 | --- | --- |
 | `pack(Pack goods)` | An action: an id, and its text in round brackets. A rounded box. |
 | `pack[Pack goods]` | Square brackets are an action too, drawn the same. |
-| `ok{In stock?}` | A decision or a merge: a diamond. Its question stands beside it. |
+| `ok{In stock?}` | A decision or merge node: a diamond. Its text stands beside it. |
 | `start((Start))` | A circle. With flows that only leave it, it is the initial node: a filled dot. |
 | `done(((End)))` | A double circle. With flows that only enter it, it is the final node. |
 | `pack` | An id alone: an action that shows its id. Flows may name nodes that are declared nowhere. |
 | `pack("Pack (all) goods")` | Quotes keep brackets and signs inside a text. |
 | ``pack("`Pack **all** goods`")`` | A Markdown text: shown without its emphasis signs. |
 | `pack(Pack<br>goods)` | `<br>` breaks a line. `#quot;` writes a quote, `#35;` the character with that number. |
-| `db[(Orders)]` | A cylinder: an object, a database. |
+| `db[(Orders)]` | A cylinder: an object node, a data store. |
 | `pill([Wait])` | Mermaid's stadium: drawn as an action. |
 | `sub[[Check credit]]` | A subroutine: a rectangle with double sides. |
 | `prep{{Prepare}}` | A hexagon. |
-| `in[/Read order/]` | Leaning right: input or output. |
+| `in[/Read order/]` | A parallelogram leaning right: input or output. |
 | `out[\Print slip\]` | Leaning left. |
 | `manual[/Check by hand\]` | A trapezoid, wide at the bottom. |
 | `prio[\Sort/]` | A trapezoid, wide at the top. |
@@ -66,7 +66,7 @@ An activity diagram with lanes shows a flow of actions and who does each: every 
 | `split@{ shape: fork }` | A fork or join bar. `join` is the same shape. |
 | `first@{ shape: start }` | The initial node, whatever flows it has. |
 | `last@{ shape: stop }` | The final node. |
-| `abort@{ shape: cross-circ }` | A flow final node: a crossed circle. Only this flow ends. |
+| `abort@{ shape: cross-circ }` | A flow final node: a crossed circle. It ends its flow, not the activity. |
 | `ok@{ shape: diamond, label: "In stock?" }` | Any shape by its Mermaid name, with its text: `rect`, `rounded`, `stadium`, `subroutine`, `cyl`, `circle`, `dbl-circ`, `diamond`, `hex`, `lean-r`, `lean-l`, `trap-b`, `trap-t`, `odd`, and Mermaid's longer names for them. |
 
 ## Flows
@@ -75,8 +75,8 @@ A flow may be written with or without spaces around its arrow.
 
 | You write | It means |
 | --- | --- |
-| `a --> b` | A flow from `a` to `b`. |
-| `a -->\|yes\| b` | A flow with a text between bars: the guard after a decision. |
+| `a --> b` | A control flow from `a` to `b`. |
+| `a -->\|yes\| b` | A flow with a text between bars: the guard of a flow leaving a decision node. |
 | `a -- yes --> b` | The same, the text inside the arrow. |
 | `a --- b` | A line without an arrow. With a text: `a ---\|text\| b` or `a -- text --- b`. |
 | `a -.-> b` | A dotted flow. With a text: `a -. text .-> b`. Without an arrow: `a -.- b`. |

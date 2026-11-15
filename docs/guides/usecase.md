@@ -2,18 +2,18 @@
 
 <!-- Written by guideMarkdown in editor/reference.ts: change the guide there, not here. -->
 
-What a system does, and for whom: actors, use cases and the system's boundary.
+The functional scope of a subject: actors, use cases and the system boundary.
 
 ## What it shows
 
-A use case diagram shows what a system does and for whom: the actors outside the system, the use cases inside its boundary, and who takes part in what. Use it to agree on the scope of a system. It is written in Mermaid's `usecase-beta` syntax.
+A use case diagram shows the functional requirements of a subject: the actors external to it, the use cases inside its system boundary, and the associations between them. Use it to fix the scope of a system. It is written in Mermaid's `usecase-beta` syntax.
 
 ## Rules of the notation
 
-- An actor is a role outside the system. A person is drawn as a stick figure; an actor with a stereotype other than `<<human>>`, such as `<<system>>`, as a box that shows the stereotype.
-- A use case is something the system does for an actor: an ellipse inside the system boundary. Actors stand outside it.
-- An association joins an actor and a use case: the actor takes part in it.
-- «include» goes from a use case to one it always performs as a part. «extend» goes from a use case to the one it adds to, at times. Both join two use cases.
+- An actor is a role external to the subject. A human actor is drawn as a stick figure; an actor with a stereotype other than `<<human>>`, such as `<<system>>`, as a box that shows the stereotype.
+- A use case is a behavior of the subject that yields an observable result for an actor: an ellipse inside the system boundary. Actors stand outside it.
+- An association joins an actor and a use case: the actor participates in it.
+- «include» goes from the including use case to the included one, whose behavior it always incorporates. «extend» goes from the extending use case to the extended one, whose behavior it conditionally augments. Both join two use cases.
 - A generalization joins two actors or two use cases; the hollow triangle is at the general one.
 - The parser reads a relation between any two elements. The editor's canvas offers only the pairings above.
 - Declare an actor before a relation names it: a name a relation mentions first is a use case.
@@ -64,14 +64,14 @@ A use case diagram shows what a system does and for whom: the actors outside the
 
 | You write | It means |
 | --- | --- |
-| `Customer --> order` | An association with an arrow: `Customer` takes part in `order`. More dashes are read the same. |
-| `Customer -- order` | An association without an arrow. |
+| `Customer --> order` | A directed association: `Customer` participates in `order`. More dashes are read the same. |
+| `Customer -- order` | An undirected association. |
 | `order <-- Customer` | The arrow written from its head. |
-| `Customer -- pays with --> pay` | An association with a name, between two dashes. |
+| `Customer -- pays with --> pay` | A named association, the name between two dashes. |
 | `Customer -- pays with -- pay` | The same without an arrow. |
-| `order ..> : include pay` | «include»: `order` always does `pay` too. |
-| `rush ..> : extend order` | «extend»: `rush` adds to `order`, at times. |
-| `Clerk --\|> Customer` | Generalization: a `Clerk` is a kind of `Customer`. Between two actors or two use cases. |
+| `order ..> : include pay` | «include»: `order` always incorporates `pay`. |
+| `rush ..> : extend order` | «extend»: `rush` conditionally extends `order`. |
+| `Clerk --\|> Customer` | Generalization: `Clerk` specializes `Customer`. Between two actors or two use cases. |
 | `Customer --o order` | A circle at the end; `o--` at the start. |
 | `Customer --x order` | A cross at the end; `x--` at the start. |
 | `Customer e1@--> order` | An id for the relation before its arrow is read and ignored. |

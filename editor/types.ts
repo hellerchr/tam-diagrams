@@ -92,28 +92,28 @@ export const TYPES: TypeInfo[] = [
             icon: "agent",
             name: "Agent",
             key: "A",
-            hint: "Does something: a service, a process",
+            hint: "Active structure element: a service, a process",
           },
           {
             kind: "human",
             icon: "human",
             name: "Human",
             key: "U",
-            hint: "A person who uses the system",
+            hint: "Human agent: an agent that is a person",
           },
           {
             kind: "storage",
             icon: "storage",
             name: "Storage",
             key: "S",
-            hint: "Keeps information: a database, a file",
+            hint: "Passive structure element that stores data: a database, a file",
           },
           {
             kind: "group",
             icon: "group",
             name: "Group",
             key: "G",
-            hint: "A frame around elements",
+            hint: "Frame around elements that share channels and accesses",
           },
         ],
       },
@@ -124,16 +124,21 @@ export const TYPES: TypeInfo[] = [
             kind: "component",
             icon: "component",
             name: "Component",
-            hint: "A replaceable part with interfaces",
+            hint: "Replaceable unit with provided and required interfaces",
           },
           {
             kind: "subsystem",
             icon: "subsystem",
             name: "Subsystem",
-            hint: "A part of the system made of components",
+            hint: "Unit of the system composed of components",
           },
-          { kind: "class", icon: "class", name: "Class", hint: "A class of the implementation" },
-          { kind: "package", icon: "package", name: "Package", hint: "A unit of the source code" },
+          { kind: "class", icon: "class", name: "Class", hint: "Implementation class" },
+          {
+            kind: "package",
+            icon: "package",
+            name: "Package",
+            hint: "Namespace of the source code",
+          },
         ],
       },
     ],
@@ -145,7 +150,7 @@ export const TYPES: TypeInfo[] = [
       "package dependencies": "Package dependencies",
       "reference: SAP blog online shop": "Online shop",
     }),
-    about: "Agents, storages and the channels between them (SAP TAM, FMC)",
+    about: "Compositional structure: agents, storages, channels and accesses (SAP TAM, FMC)",
     starter: "",
     snippets: [],
   },
@@ -159,7 +164,7 @@ export const TYPES: TypeInfo[] = [
     examples: examples(CLASS_EXAMPLES, {
       "class: harness session (mermaid-demo)": "Session, kernel and agent",
     }),
-    about: "Classes with members, inheritance and associations",
+    about: "Classifiers with attributes and operations, generalizations and associations",
     starter: `classDiagram
   class Order {
     +id: string
@@ -182,7 +187,7 @@ export const TYPES: TypeInfo[] = [
         icon: "uml-interface",
         text: "  class NewInterface {\n    <<interface>>\n    +method()\n  }",
       },
-      { name: "Inheritance", icon: "uml-inherit", text: "  Base <|-- Derived" },
+      { name: "Generalization", icon: "uml-inherit", text: "  Base <|-- Derived" },
       { name: "Association", icon: "uml-arrow", text: '  A "1" --> "*" B : has' },
       { name: "Composition", icon: "uml-compose", text: "  Whole *-- Part" },
       { name: "Dependency", icon: "uml-dashed", text: "  A ..> B : uses" },
@@ -203,7 +208,7 @@ export const TYPES: TypeInfo[] = [
       "usecase: two systems": "Two systems",
       "usecase: bank (large)": "Bank",
     }),
-    about: "Actors and what they do with a system",
+    about: "Actors, use cases and the subject's system boundary",
     starter: `usecase-beta
   direction LR
   actor User
@@ -242,7 +247,7 @@ export const TYPES: TypeInfo[] = [
       "flowchart: nested subgraphs LR": "Nested groups",
       "flowchart: CI pipeline (large)": "CI pipeline",
     }),
-    about: "Steps and decisions of a flow",
+    about: "Actions and control flow: decision, merge, fork and join nodes",
     starter: `flowchart TB
   start((Start)) --> check{In stock?}
   check -->|yes| ship[Ship order]
@@ -251,7 +256,7 @@ export const TYPES: TypeInfo[] = [
   ship --> done(((End)))`,
     snippets: [
       {
-        name: "Step",
+        name: "Action",
         icon: "uml-step",
 
         text: "  a[Do something] --> b[Do the next thing]",
@@ -263,12 +268,12 @@ export const TYPES: TypeInfo[] = [
         text: "  ask{Decide?} -->|yes| one[One way]\n  ask -->|no| other[Other way]",
       },
       {
-        name: "Start",
+        name: "Initial node",
         icon: "uml-start",
 
         text: "  start((Start)) --> first[First step]",
       },
-      { name: "End", icon: "uml-end", text: "  last[Last step] --> stop(((End)))" },
+      { name: "Final node", icon: "uml-end", text: "  last[Last step] --> stop(((End)))" },
       {
         name: "Group",
         icon: "group",
@@ -290,7 +295,7 @@ export const TYPES: TypeInfo[] = [
       "swimlane: order fulfilment LR": "Order fulfilment",
       "swimlane: incident handling (large)": "Incident handling",
     }),
-    about: "A flow across the agents that carry it out",
+    about: "Activity partitioned by the agents responsible for its actions",
     starter: `swimlane-beta TB
   subgraph Customer
     start((Start)) --> order(Place Order)
@@ -309,7 +314,7 @@ export const TYPES: TypeInfo[] = [
         text: "  subgraph NewLane\n    step(New Step)\n  end",
       },
       {
-        name: "Step",
+        name: "Action",
         icon: "uml-step",
 
         text: "  a(Do something) --> b(Do the next thing)",
@@ -337,7 +342,7 @@ export const TYPES: TypeInfo[] = [
       "state: notes and descriptions LR": "Notes and descriptions",
       "state: order lifecycle (large)": "Order lifecycle",
     }),
-    about: "The states of a thing and what moves it between them",
+    about: "States of one object and the transitions between them",
     starter: `stateDiagram-v2
   [*] --> Draft
   Draft --> Submitted : submit
@@ -347,8 +352,8 @@ export const TYPES: TypeInfo[] = [
     snippets: [
       { name: "State", icon: "uml-step", text: '  state "New State" as NewState' },
       { name: "Transition", icon: "uml-arrow", text: "  A --> B : event" },
-      { name: "Start", icon: "uml-start", text: "  [*] --> First" },
-      { name: "End", icon: "uml-end", text: "  Last --> [*]" },
+      { name: "Initial", icon: "uml-start", text: "  [*] --> First" },
+      { name: "Final state", icon: "uml-end", text: "  Last --> [*]" },
       {
         name: "Composite",
         icon: "uml-composite",
@@ -372,7 +377,7 @@ export const TYPES: TypeInfo[] = [
       "sequence: groups with boxes": "Groups with boxes",
       "sequence: checkout (large)": "Checkout",
     }),
-    about: "Messages between participants over time",
+    about: "Messages between lifelines, ordered in time",
     starter: `sequenceDiagram
   participant U as User
   participant S as Shop
@@ -410,8 +415,7 @@ export const TYPES: TypeInfo[] = [
       "er: library BT with non-identifying relationships": "Library",
       "er: order management (large)": "Order management",
     }),
-    about:
-      "Entity relationships: entities with their attributes, and how many of each belong together",
+    about: "Entity types with attributes and keys, and relationships with their cardinalities",
     starter: `erDiagram
   CUSTOMER ||--o{ ORDER : places
   ORDER ||--|{ ORDER-ITEM : contains

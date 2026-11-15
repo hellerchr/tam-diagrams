@@ -1866,16 +1866,27 @@ export function groupFlowNodes(
 
 /** The pieces of a flowchart and of a swimlane alike: the nodes of a flow. */
 const NODES: Structure["pieces"] = [
-  { kind: "step", name: "Step", about: "Something that is done", joins: "after", named: true },
   {
-    kind: "decision",
-    name: "Decision",
-    about: "A question the flow branches at",
+    kind: "step",
+    name: "Action",
+    about: "Executable node of the activity",
     joins: "after",
     named: true,
   },
-  { kind: "start", name: "Start", about: "Where the flow begins", joins: "before" },
-  { kind: "end", name: "End", about: "Where the flow ends", joins: "after" },
+  {
+    kind: "decision",
+    name: "Decision",
+    about: "Decision node: outgoing flows are selected by their guards",
+    joins: "after",
+    named: true,
+  },
+  {
+    kind: "start",
+    name: "Initial node",
+    about: "Starts the control flow of the activity",
+    joins: "before",
+  },
+  { kind: "end", name: "Final node", about: "Activity final: ends all flows", joins: "after" },
 ];
 
 /**
@@ -1885,7 +1896,13 @@ const NODES: Structure["pieces"] = [
 export const flowStructure: Structure = {
   pieces: [
     ...NODES,
-    { kind: "group", name: "Group", about: "A group of steps", group: true, named: true },
+    {
+      kind: "group",
+      name: "Group",
+      about: "Frame grouping activity nodes",
+      group: true,
+      named: true,
+    },
   ],
   links: [
     { kind: "flow", name: "Flow" },
@@ -1954,7 +1971,7 @@ export const swimlaneStructure: Structure = {
     {
       kind: "lane",
       name: "Lane",
-      about: "A lane for who does the steps",
+      about: "Activity partition: the agent responsible for its actions",
       group: true,
       named: true,
     },

@@ -2,20 +2,20 @@
 
 <!-- Written by guideMarkdown in editor/reference.ts: change the guide there, not here. -->
 
-Entities with their attributes, and how many of each belong together.
+Entity types with their attributes and keys, and the cardinalities of their relationships.
 
 ## What it shows
 
-An entity relationship diagram shows the things a system keeps data about, their attributes, and how many of each belong together. Use it for a data model: the tables of a database with their keys. It is written in Mermaid's `erDiagram` syntax and drawn in crow's foot notation.
+An entity relationship diagram shows the entity types of a data model, their attributes and keys, and the relationships between them with their cardinalities. Use it for a conceptual or logical data model, or the tables of a database schema. It is written in Mermaid's `erDiagram` syntax and drawn in crow's foot notation.
 
 ## Rules of the notation
 
-- An entity is a box with its name above one row for each attribute: type, name, keys and comment.
-- A relationship is a line between two entities. The sign at each end says how many of that entity belong to one of the other: a bar is one, a ring is zero, a crow's foot is many.
-- `CUSTOMER ||--o{ ORDER` reads from both ends: an order belongs to exactly one customer, a customer has zero or more orders.
-- A solid line is an identifying relationship: the second entity cannot exist without the first. A dashed line is a non-identifying one: each exists on its own.
-- An entity exists as soon as a statement names it. Several blocks of one entity add up their attributes. A relationship may join an entity to itself.
-- An attribute is part of the keys named behind it: `PK` primary, `FK` foreign, `UK` unique. The name of a primary key is underlined.
+- An entity type is a box with its name above one row for each attribute: type, name, keys and comment.
+- A relationship is a line between two entity types. The symbol at each end is the cardinality of that end per instance of the other: a bar is one, a ring is zero, a crow's foot is many.
+- `CUSTOMER ||--o{ ORDER` reads from both ends: an order relates to exactly one customer, a customer to zero or more orders.
+- A solid line is an identifying relationship: the second entity type is existence-dependent on the first and identified through it. A dashed line is a non-identifying one.
+- An entity type exists as soon as a statement names it. Several blocks of one entity type add up their attributes. A relationship may be recursive.
+- An attribute belongs to the keys named after it: `PK` primary, `FK` foreign, `UK` unique. A primary key attribute is underlined.
 - A name starts with a letter or `_` and goes on with letters, digits, `_` and `-`; any other name stands in quotes.
 - A diagram has at most 200 entities, 60 attributes in an entity, and 20,000 characters.
 
@@ -33,11 +33,11 @@ An entity relationship diagram shows the things a system keeps data about, their
 
 | You write | It means |
 | --- | --- |
-| `CUSTOMER` | An entity without attributes. |
-| `CUSTOMER["Retail customer"]` | An entity with another name to show. The quotes are optional. |
+| `CUSTOMER` | An entity type without attributes. |
+| `CUSTOMER["Retail customer"]` | An entity type with a display name. The quotes are optional. |
 | `ORDER-ITEM` | A name may have hyphens. |
 | `"Order item"` | Quotes allow any name. |
-| `CUSTOMER {`<br>&nbsp;&nbsp;`int id PK`<br>&nbsp;&nbsp;`string name`<br>`}` | An entity with its attributes, one on each line between `{` and `}`. |
+| `CUSTOMER {`<br>&nbsp;&nbsp;`int id PK`<br>&nbsp;&nbsp;`string name`<br>`}` | An entity type with its attributes, one on each line between `{` and `}`. |
 | `CUSTOMER { int id PK }` | A block on one line. |
 
 ## Attributes
@@ -47,7 +47,7 @@ An attribute is a type and a name, then its keys, then a comment. Both type and 
 | You write | It means |
 | --- | --- |
 | `ORDER {`<br>&nbsp;&nbsp;`date placed`<br>`}` | A type and a name. The type is any word: `int`, `string`, `varchar(20)`, `date[]`. |
-| `ORDER {`<br>&nbsp;&nbsp;`int id PK`<br>`}` | A key: `PK`, `FK` or `UK`. |
+| `ORDER {`<br>&nbsp;&nbsp;`int id PK`<br>`}` | A key: `PK` primary, `FK` foreign or `UK` unique. |
 | `ORDER-ITEM {`<br>&nbsp;&nbsp;`int orderId PK, FK`<br>`}` | Several keys, with commas between. |
 | `ORDER {`<br>&nbsp;&nbsp;`string status "open, paid or sent"`<br>`}` | A comment in quotes, at the end. |
 | `ORDER {`<br>&nbsp;&nbsp;`int customerId FK "who placed it"`<br>`}` | Keys and a comment. |
@@ -55,18 +55,18 @@ An attribute is a type and a name, then its keys, then a comment. Both type and 
 
 ## Relationships
 
-Two entities with a line between, a cardinality at each end of the line, then a colon and a label. Spaces around the signs are optional, and so are the colon and the label.
+Two entity types with a line between, a cardinality at each end of the line, then a colon and a label. Spaces around the symbols are optional, and so are the colon and the label.
 
 | You write | It means |
 | --- | --- |
 | `CUSTOMER \|\|--o{ ORDER : places` | One customer, zero or more orders. |
 | `ORDER \|\|--\|{ ORDER-ITEM : contains` | One order, one or more items. |
 | `PERSON \|\|--o\| PASSPORT : holds` | One person, zero or one passport. |
-| `PERSON \|\|--\|\| BIRTH : has` | One to one. |
+| `PERSON \|\|--\|\| BIRTH : has` | One to exactly one. |
 | `STUDENT }o--o{ COURSE : attends` | Zero or more on both sides. |
-| `ORDER }o--\|\| CUSTOMER : belongs to` | Written from the many side. |
-| `CUSTOMER \|\|..o{ ADDRESS : uses` | A dashed line: non-identifying. `.-` and `-.` are read the same. |
-| `EMPLOYEE \|o--o{ EMPLOYEE : manages` | A relationship of an entity to itself. |
+| `ORDER }o--\|\| CUSTOMER : belongs to` | Written from the many end. |
+| `CUSTOMER \|\|..o{ ADDRESS : uses` | A dashed line: a non-identifying relationship. `.-` and `-.` are read the same. |
+| `EMPLOYEE \|o--o{ EMPLOYEE : manages` | A recursive relationship. |
 | `CUSTOMER \|\|--o{ ORDER : "places: online"` | The label may stand in quotes. |
 | `CUSTOMER \|\|--o{ ORDER` | Without a label. |
 | `CUSTOMER \|\|--o{ ORDER : ""` | Empty quotes say the same where Mermaid asks for a label. |
@@ -74,7 +74,7 @@ Two entities with a line between, a cardinality at each end of the line, then a 
 | `\|o   o\|` | Zero or one: a ring and a bar. `\|o` stands left of the line, `o\|` right of it. |
 | `}\|   \|{` | One or more: a bar and a crow's foot. |
 | `}o   o{` | Zero or more: a ring and a crow's foot. |
-| `--   ..` | The line: identifying, and non-identifying. |
+| `--   ..` | The line: identifying and non-identifying relationship. |
 
 ## Relationships in words
 

@@ -2,21 +2,21 @@
 
 <!-- Written by guideMarkdown in editor/reference.ts: change the guide there, not here. -->
 
-The messages agents exchange, in the order of time.
+Messages between the lifelines of agents, ordered in time.
 
 ## What it shows
 
-A sequence diagram shows the messages that agents exchange, in the order of time: every participant has a lifeline that runs down, every message is an arrow between two lifelines. Use it for one scenario of an interaction. It is written in Mermaid's `sequenceDiagram` syntax.
+A sequence diagram shows an interaction: the messages exchanged between agents, ordered in time. Every participant is a lifeline that runs down, every message an arrow between two lifelines. Use it for one scenario of an interaction. It is written in Mermaid's `sequenceDiagram` syntax.
 
 ## Rules of the notation
 
 - A participant is a box above its lifeline, an actor a stick figure. Participants stand from left to right in the order the source names them; declare them first to choose the order.
-- A solid arrow with a filled head is a call that waits for its answer. A dashed arrow with an open head is the reply. A solid arrow with an open head is an asynchronous message: the sender does not wait.
-- An activation bar on a lifeline says that the participant is working. A bar is white while its participant waits for an answer.
+- A solid arrow with a filled head is a synchronous message: the sender blocks until the reply. A dashed arrow with an open head is the reply message. A solid arrow with an open head is an asynchronous message: the sender does not block.
+- An activation bar on a lifeline is an execution specification: the participant is executing a behavior. A bar is white while its participant awaits a reply.
 - `+` on an arrow activates the receiver, `-` ends the activation of the sender. A participant that is not active cannot be deactivated.
-- A fragment frames messages: `loop`, `alt`, `opt`, `par`, `critical`, `break`. `else` belongs inside `alt`, `and` inside `par`, `option` inside `critical`. Fragments nest, and each ends with `end`.
+- A combined fragment frames messages under an interaction operator: `loop`, `alt`, `opt`, `par`, `critical`, `break`. `else` separates the operands of `alt`, `and` those of `par`, `option` those of `critical`. Fragments nest, and each ends with `end`.
 - A note stands left of, right of or over one participant, or over two.
-- A box frames participants that belong together. Boxes do not nest.
+- A box frames a group of participants. Boxes do not nest.
 - Creating and destroying participants belongs to TAM's design level: `%% level conceptual` refuses it.
 - A diagram has at most 40 participants and 20,000 characters.
 
@@ -36,9 +36,9 @@ A sequence diagram shows the messages that agents exchange, in the order of time
 
 | You write | It means |
 | --- | --- |
-| `participant Shop` | A participant: a box above a lifeline. Its id is its name. |
+| `participant Shop` | A participant: a head box above its lifeline. Its id is its name. |
 | `participant S as Shop server` | An id, and the name to show. |
-| `actor Customer` | An actor: a stick figure. |
+| `actor Customer` | An actor, a human agent: a stick figure. |
 | `actor C as Retail customer` | An actor with an id and a name. |
 | `participant Web Shop` | An id may have spaces. |
 | `box Backend`<br>&nbsp;&nbsp;`participant Shop`<br>&nbsp;&nbsp;`participant Bank`<br>`end` | A box around participants, with its title. A color before the title, as in `box blue Backend`, is ignored. |
@@ -49,34 +49,34 @@ A message is two participants with an arrow between, then a colon and the text. 
 
 | You write | It means |
 | --- | --- |
-| `A->>B: place order` | A call: solid, filled head. |
-| `B-->>A: confirmation` | A reply: dashed, open head. |
+| `A->>B: place order` | A synchronous message: solid, filled head. |
+| `B-->>A: confirmation` | A reply message: dashed, open head. |
 | `A-)B: notify` | An asynchronous message: solid, open head. |
 | `B--)A: notify back` | Dashed, open head. |
-| `A-xB: lost` | A message that gets lost: a cross at its end. Dashed: `--x`. |
+| `A-xB: lost` | A lost message: a cross at its end. Dashed: `--x`. |
 | `A->B: hint` | A solid line without a head. Dashed: `-->`. |
 | `A<<->>B: sync` | Heads at both ends. Dashed: `<<-->>`. |
-| `A->>A: think` | A message to itself. |
+| `A->>A: think` | A self message. |
 | `A->>B: first line<br>second line` | `<br>` breaks a line. `#quot;` writes a quote, `#35;` the character with that number. |
 
 ## Activation
 
 | You write | It means |
 | --- | --- |
-| `A->>+B: place order`<br>`B-->>-A: confirmation` | `+` after the arrow activates the receiver; `-` ends the sender's activation. |
+| `A->>+B: place order`<br>`B-->>-A: confirmation` | `+` after the arrow starts an execution specification on the receiver; `-` ends the sender's. |
 | `A->>B: place order`<br>`activate B`<br>`B-->>A: confirmation`<br>`deactivate B` | The same as statements of their own. |
-| `A->>+B: first`<br>`A->>+B: second`<br>`B-->>-A: second done`<br>`B-->>-A: first done` | Activations stack: each `+` opens a bar on the one before. |
+| `A->>+B: first`<br>`A->>+B: second`<br>`B-->>-A: second done`<br>`B-->>-A: first done` | Activations nest: each `+` opens a bar on the one before. |
 
 ## Fragments
 
 | You write | It means |
 | --- | --- |
-| `loop every hour`<br>&nbsp;&nbsp;`A->>B: poll`<br>`end` | A loop, with its condition. |
-| `alt in stock`<br>&nbsp;&nbsp;`B-->>A: confirmed`<br>`else sold out`<br>&nbsp;&nbsp;`B-->>A: refused`<br>`end` | Alternatives: one branch or the other. More `else` lines add branches. |
-| `opt has a voucher`<br>&nbsp;&nbsp;`A->>B: redeem`<br>`end` | An option: only when the condition holds. |
-| `par notify`<br>&nbsp;&nbsp;`B-)A: mail`<br>`and book`<br>&nbsp;&nbsp;`B->>B: write ledger`<br>`end` | Parallel: the branches happen at the same time. |
-| `critical reserve stock`<br>&nbsp;&nbsp;`A->>B: reserve`<br>`option timeout`<br>&nbsp;&nbsp;`A->>B: cancel`<br>`end` | A critical region, with what happens when it fails. |
-| `break out of stock`<br>&nbsp;&nbsp;`B-->>A: refused`<br>`end` | A break: the sequence stops here. |
+| `loop every hour`<br>&nbsp;&nbsp;`A->>B: poll`<br>`end` | `loop`: the operand repeats while its guard holds. |
+| `alt in stock`<br>&nbsp;&nbsp;`B-->>A: confirmed`<br>`else sold out`<br>&nbsp;&nbsp;`B-->>A: refused`<br>`end` | `alt`: the operand whose guard holds is executed. More `else` lines add operands. |
+| `opt has a voucher`<br>&nbsp;&nbsp;`A->>B: redeem`<br>`end` | `opt`: the single operand is executed only if its guard holds. |
+| `par notify`<br>&nbsp;&nbsp;`B-)A: mail`<br>`and book`<br>&nbsp;&nbsp;`B->>B: write ledger`<br>`end` | `par`: the operands execute concurrently. |
+| `critical reserve stock`<br>&nbsp;&nbsp;`A->>B: reserve`<br>`option timeout`<br>&nbsp;&nbsp;`A->>B: cancel`<br>`end` | `critical`: an atomic region; `option` adds the operand for its failure. |
+| `break out of stock`<br>&nbsp;&nbsp;`B-->>A: refused`<br>`end` | `break`: the operand is executed instead of the rest of the enclosing interaction. |
 | `rect rgb(240, 240, 240)`<br>&nbsp;&nbsp;`A->>B: place order`<br>`end` | A frame without a keyword around messages. The color is ignored. |
 
 ## Notes
@@ -91,9 +91,9 @@ A message is two participants with an arrow between, then a colon and the text. 
 
 | You write | It means |
 | --- | --- |
-| `create participant C`<br>`B->>C: new` | `C` appears with the next message to it, not at the top. |
+| `create participant C`<br>`B->>C: new` | The lifeline of `C` starts with the next message to it, its creation message, not at the top. |
 | `create actor C`<br>`B->>C: welcome` | The same for an actor. |
-| `destroy B`<br>`A-xB: close` | The lifeline of `B` ends with the next message to or from it. |
+| `destroy B`<br>`A-xB: close` | The lifeline of `B` ends with a destruction occurrence at the next message to or from it. |
 
 ## Read and not drawn
 

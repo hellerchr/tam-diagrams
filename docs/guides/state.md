@@ -2,20 +2,20 @@
 
 <!-- Written by guideMarkdown in editor/reference.ts: change the guide there, not here. -->
 
-The states of one thing and the transitions between them.
+The states of one object and the transitions between them.
 
 ## What it shows
 
-A state machine diagram shows the states one thing can be in and the transitions between them: which event leads from which state to which. Use it for the life of an object, a document, a connection. It is written in Mermaid's `stateDiagram-v2` syntax.
+A state machine diagram shows the states of one object and the transitions between them, each triggered by an event and guarded by a condition. Use it for the lifecycle of an object, a document or a connection. It is written in Mermaid's `stateDiagram-v2` syntax.
 
 ## Rules of the notation
 
-- A state is a rounded box. A transition is an arrow, labelled `event [guard] / action`: what happens, the condition under which it leads on, and what is done on the way. Every part is optional.
-- `[*]` before an arrow is the initial state of its scope, a filled dot: every such line starts at the same dot. `[*]` after an arrow is a final state, a ringed dot: every such line draws one of its own.
-- A composite state contains states and has its own initial and final states. It shows a name only, no description.
-- Inside a composite state `--` separates regions that are active at the same time.
-- A choice is a diamond: the guards of the transitions that leave it decide. It has no transition to itself.
-- A fork bar splits one transition into several, a join bar brings several together.
+- A state is a rounded box. A transition is an arrow, labelled `event [guard] / effect`: the trigger, the guard condition, and the effect behavior. Every part is optional.
+- `[*]` before an arrow is the initial pseudostate of its region, a filled dot: every such line starts at the same dot. `[*]` after an arrow is a final state, a ringed dot: every such line draws one of its own.
+- A composite state contains substates and has its own initial pseudostate and final states. It shows a name only, no description.
+- Inside a composite state `--` separates orthogonal regions, active concurrently.
+- A choice pseudostate is a diamond: the guards of its outgoing transitions select one. It has no transition to itself.
+- A fork pseudostate splits one transition into concurrent ones, a join pseudostate synchronizes them.
 - A state exists as soon as a statement names it, and stands in the composite state where it is named first. Its id has no spaces and none of `:`, `-`, `{`, `}`, `"`.
 - TAM puts state machines at the conceptual level: `%% level design` is refused, and `%% level conceptual` refuses fork and join bars.
 - A diagram has at most 300 states and 20,000 characters.
@@ -36,36 +36,36 @@ A state machine diagram shows the states one thing can be in and the transitions
 | `Idle` | A state: its id is its name. |
 | `state Idle` | The same with the keyword. |
 | `state "Waiting for input" as Waiting` | A state with a name of several words, and its id. |
-| `Idle : entry / reset` | A description below the name. Each such line adds one. |
+| `Idle : entry / reset` | A description below the name, such as internal behavior. Each such line adds one. |
 
 ## Transitions
 
 | You write | It means |
 | --- | --- |
 | `Idle --> Busy` | A transition from `Idle` to `Busy`. |
-| `Idle --> Busy : start` | The event that causes it, after a colon. |
-| `Idle --> Busy : start [ready] / beep` | Event, guard and action. `<br>` breaks a line. `#quot;` writes a quote, `#35;` the character with that number. |
-| `[*] --> Idle` | From the initial state: where the machine starts. |
-| `Busy --> [*]` | To a final state: where it ends. |
-| `Busy --> Busy : retry` | A transition from a state to itself. |
+| `Idle --> Busy : start` | The trigger event, after a colon. |
+| `Idle --> Busy : start [ready] / beep` | Trigger, guard and effect. `<br>` breaks a line. `#quot;` writes a quote, `#35;` the character with that number. |
+| `[*] --> Idle` | From the initial pseudostate to the default state. |
+| `Busy --> [*]` | To a final state: the region completes. |
+| `Busy --> Busy : retry` | A self-transition. |
 
 ## Choice, fork and join
 
 | You write | It means |
 | --- | --- |
-| `state check <<choice>>`<br>`Idle --> check`<br>`check --> Busy : [ready]`<br>`check --> Failed : [else]` | A choice: a diamond whose outgoing guards decide. |
-| `state split <<fork>>`<br>`Idle --> split`<br>`split --> Printing`<br>`split --> Mailing` | A fork bar: one transition becomes several. |
-| `state merge <<join>>`<br>`Printing --> merge`<br>`Mailing --> merge`<br>`merge --> Done` | A join bar: several transitions become one. |
+| `state check <<choice>>`<br>`Idle --> check`<br>`check --> Busy : [ready]`<br>`check --> Failed : [else]` | A choice pseudostate: a diamond whose outgoing guards select the transition. |
+| `state split <<fork>>`<br>`Idle --> split`<br>`split --> Printing`<br>`split --> Mailing` | A fork pseudostate: one transition splits into concurrent ones. |
+| `state merge <<join>>`<br>`Printing --> merge`<br>`Mailing --> merge`<br>`merge --> Done` | A join pseudostate: concurrent transitions synchronize into one. |
 | `state check [[choice]]` | Double square brackets are read like `<< >>`. |
 
 ## Composite states and regions
 
 | You write | It means |
 | --- | --- |
-| `state Active {`<br>&nbsp;&nbsp;`[*] --> Reading`<br>&nbsp;&nbsp;`Reading --> Writing : edit`<br>&nbsp;&nbsp;`Writing --> [*]`<br>`}` | A composite state: its states and transitions stand between `{` and `}`. The `}` is a line of its own. |
+| `state Active {`<br>&nbsp;&nbsp;`[*] --> Reading`<br>&nbsp;&nbsp;`Reading --> Writing : edit`<br>&nbsp;&nbsp;`Writing --> [*]`<br>`}` | A composite state: its substates and transitions stand between `{` and `}`. The `}` is a line of its own. |
 | `state "In work" as Active {`<br>&nbsp;&nbsp;`Reading --> Writing`<br>`}` | A composite state with a name of several words. |
-| `state Active {`<br>&nbsp;&nbsp;`Reading --> Writing`<br>&nbsp;&nbsp;`--`<br>&nbsp;&nbsp;`Online --> Offline`<br>`}` | `--` on a line of its own starts another region, active at the same time. |
-| `state Active {`<br>&nbsp;&nbsp;`state Editing {`<br>&nbsp;&nbsp;&nbsp;&nbsp;`Typing --> Saving`<br>&nbsp;&nbsp;`}`<br>`}`<br>`Active --> Closed : close`<br>`Saving --> Closed : quit` | Composite states nest, and transitions go to and from a composite state or the states inside it. |
+| `state Active {`<br>&nbsp;&nbsp;`Reading --> Writing`<br>&nbsp;&nbsp;`--`<br>&nbsp;&nbsp;`Online --> Offline`<br>`}` | `--` on a line of its own starts another orthogonal region. |
+| `state Active {`<br>&nbsp;&nbsp;`state Editing {`<br>&nbsp;&nbsp;&nbsp;&nbsp;`Typing --> Saving`<br>&nbsp;&nbsp;`}`<br>`}`<br>`Active --> Closed : close`<br>`Saving --> Closed : quit` | Composite states nest, and transitions go to and from a composite state or its substates. |
 
 ## Notes
 

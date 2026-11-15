@@ -135,7 +135,7 @@ describe("completing a class diagram", () => {
     ]);
     expect(options(`${source}  Order `)[0]).toMatchObject({
       type: "connection",
-      detail: "inheritance: the left is the base class",
+      detail: "generalization: the left is the general class",
     });
     expect(offered(`${source}  Order -`)).toContain("-->");
     expect(offered(`${source}  Order "1" .`)).toContain("..>");
@@ -303,7 +303,7 @@ describe.each(["flowchart", "swimlane-beta"])("completing a %s", (header) => {
     expect(fresh).toEqual(expect.arrayContaining(["([ ])", "[( )]", "{{ }}", "-->"]));
     expect(options(`${source}  pack `).find((item) => item.label === "{ }")).toMatchObject({
       type: "uml-decision",
-      detail: "diamond: a decision or a merge",
+      detail: "diamond: a decision or merge node",
     });
     // A new node at the end of an edge has its shapes too.
     expect(offered(`${source}  ship --> pack `)).toContain("(( ))");

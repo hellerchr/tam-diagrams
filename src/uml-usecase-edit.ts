@@ -1054,7 +1054,7 @@ export const usecaseStructure: Structure = {
     {
       kind: "usecase",
       name: "Use case",
-      about: "Something the system does for an actor",
+      about: "Behavior of the subject that yields an observable result for an actor",
       joins: "after",
       joinsTo: ["actor"],
       named: true,
@@ -1062,7 +1062,7 @@ export const usecaseStructure: Structure = {
     {
       kind: "actor",
       name: "Actor",
-      about: "Someone or something that uses the system",
+      about: "Role of a human or a system external to the subject",
       joins: "before",
       joinsTo: ["usecase"],
       named: true,
@@ -1070,14 +1070,14 @@ export const usecaseStructure: Structure = {
     {
       kind: "boundary",
       name: "System boundary",
-      about: "The system that holds the use cases",
+      about: "Subject: the system that owns the use cases",
       group: true,
       named: true,
     },
     {
       kind: "note",
       name: "Note",
-      about: "A remark on an actor or a use case",
+      about: "Comment attached to an actor or a use case",
       joins: "before",
       joinsTo: ["usecase", "actor"],
       named: true,

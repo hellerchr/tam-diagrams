@@ -259,17 +259,17 @@ const CLASS_KEYWORDS =
   /^(class|namespace|note|direction|classDef|style|cssClass|click|callback|link|links)$/;
 
 const CLASS_RELATIONS = arrows([
-  ["<|--", "inheritance: the left is the base class"],
-  ["--|>", "inheritance: the right is the base class"],
-  ["*--", "composition: the left is made of the right"],
-  ["o--", "aggregation: the left has the right"],
-  ["-->", "association: the left knows the right"],
-  ["--", "association, known both ways"],
-  ["..>", "dependency: the left uses the right"],
+  ["<|--", "generalization: the left is the general class"],
+  ["--|>", "generalization: the right is the general class"],
+  ["*--", "composition: the left is the composite"],
+  ["o--", "shared aggregation: the left is the aggregate"],
+  ["-->", "association, navigable to the right"],
+  ["--", "association, navigability unspecified"],
+  ["..>", "dependency: the right is the supplier"],
   ["..|>", "realization: the right is the interface"],
   ["<|..", "realization: the left is the interface"],
   ['"1" --> "*"', "association with multiplicities", '"${1:1}" --> "${2:*}" '],
-  ["()--", "interface as a ball, named at the left"],
+  ["()--", "provided interface in ball notation, named at the left"],
   [":", "a member of the class", ": ${member}"],
 ]);
 
@@ -287,11 +287,21 @@ function completeClass(cursor: Cursor): CompletionResult | null {
     return result(cursor.at(match[2].length), [
       ...ranked(
         statements([
-          ["attribute", `${sign}\${name}: \${Type}`, "uml-attribute", "a value of the class"],
+          ["attribute", `${sign}\${name}: \${Type}`, "uml-attribute", "an attribute of the class"],
           ["method", `${sign}\${name}(\${})`, "uml-method", "an operation of the class"],
           ["method with result", `${sign}\${name}(\${}) \${Type}`, "uml-method", "returns a value"],
-          ["static method", `${sign}\${name}(\${})$`, "uml-method", "underlined: of the class"],
-          ["abstract method", `${sign}\${name}(\${})*`, "uml-method", "italic: for subclasses"],
+          [
+            "static method",
+            `${sign}\${name}(\${})$`,
+            "uml-method",
+            "underlined: a static operation",
+          ],
+          [
+            "abstract method",
+            `${sign}\${name}(\${})*`,
+            "uml-method",
+            "italic: an abstract operation",
+          ],
         ]),
         30,
       ),
@@ -427,9 +437,14 @@ function completeEr(cursor: Cursor): CompletionResult | null {
           ...ER_TYPES,
           ...ranked(
             statements([
-              ["attribute", "${type} ${name}", "uml-attribute", "a value of the entity"],
-              ["primary key", "${type} ${name} PK", "uml-attribute", "identifies the entity"],
-              ["foreign key", "${type} ${name} FK", "uml-attribute", "refers to another entity"],
+              ["attribute", "${type} ${name}", "uml-attribute", "an attribute of the entity type"],
+              ["primary key", "${type} ${name} PK", "uml-attribute", "a primary key attribute"],
+              [
+                "foreign key",
+                "${type} ${name} FK",
+                "uml-attribute",
+                "references another entity type's key",
+              ],
             ]),
             5,
           ),
@@ -467,7 +482,7 @@ function completeEr(cursor: Cursor): CompletionResult | null {
                 "relationship",
                 "${A} ||--o{ ${B} : ${label}",
                 "connection",
-                "one of the first has many of the second",
+                "one-to-many: one of the first, zero or more of the second",
               ],
             ]),
             DIRECTION_LINE,
@@ -494,11 +509,11 @@ function completeEr(cursor: Cursor): CompletionResult | null {
 }
 
 const USECASE_RELATIONS = arrows([
-  ["-->", "association: who takes part in what"],
-  ["--", "association without an arrow"],
-  ["..> : include", "always does the other use case too"],
-  ["..> : extend", "adds to the other use case, at times"],
-  ["--|>", "generalization: is a kind of"],
+  ["-->", "association: the actor participates in the use case"],
+  ["--", "undirected association"],
+  ["..> : include", "always incorporates the included use case"],
+  ["..> : extend", "conditionally extends the extended use case"],
+  ["--|>", "generalization: specializes the right"],
   ["-- text -->", "association with a name", "-- ${text} --> "],
 ]);
 
@@ -522,14 +537,19 @@ function completeUsecase(cursor: Cursor): CompletionResult | null {
         "use case",
         "${id}(${Name})",
         "declare-uml-usecase",
-        "something the system does for an actor",
+        "behavior of the subject with a result for an actor",
       ],
     ]);
     // Inside a system boundary: its use cases; relations go outside.
     if (start.blocks.length) return lineStart(cursor, word, [...usecase, END], []);
     return lineStart(cursor, word, [
       ...statements([
-        ["actor", "actor ${Name}", "declare-uml-actor", "a person or a system that takes part"],
+        [
+          "actor",
+          "actor ${Name}",
+          "declare-uml-actor",
+          "a human or system role external to the subject",
+        ],
       ]),
       ...usecase,
       ...statements([
@@ -537,7 +557,7 @@ function completeUsecase(cursor: Cursor): CompletionResult | null {
           "systemBoundary",
           "systemBoundary ${id}[${Name}]\n\t${}\nend",
           "declare-group",
-          "the system its use cases belong to",
+          "the subject that owns its use cases",
         ],
         ["note for", "note for ${id} ${text}", "declare-uml-note", "a note at an element"],
       ]),
@@ -547,8 +567,8 @@ function completeUsecase(cursor: Cursor): CompletionResult | null {
   if (/^(actor|systemBoundary|direction|note|class|classDef|style)\s/.test(before)) return null;
   if ((match = before.match(/\.\.>\s*:\s*(\w*)$/)))
     return result(cursor.at(match[1].length), [
-      option("include", "keyword", "always does the other use case too", "include "),
-      option("extend", "keyword", "adds to the other use case, at times", "extend "),
+      option("include", "keyword", "always incorporates the included use case", "include "),
+      option("extend", "keyword", "conditionally extends the extended use case", "extend "),
     ]);
   // After a relation: the elements; a use case includes and extends use cases only.
   if ((match = before.match(/\.\.>\s*:\s*(?:include|extend)\s+(\w*)$/)))
@@ -568,8 +588,8 @@ function completeUsecase(cursor: Cursor): CompletionResult | null {
 }
 
 const FLOW_EDGES = arrows([
-  ["-->", "flow to the next node"],
-  ["-->|text|", "flow with a text, as after a decision", "-->|${text}| "],
+  ["-->", "control flow to the next node"],
+  ["-->|text|", "flow with a text, a guard after a decision node", "-->|${text}| "],
   ["---", "line without an arrow"],
   ["-.->", "dotted flow"],
   ["==>", "thick flow"],
@@ -585,11 +605,11 @@ const FLOW_EDGES = arrows([
 const FLOW_SHAPES: [open: string, close: string, type: string, detail: string][] = [
   ["[", "]", "uml-rect", "rectangle: an action"],
   ["(", ")", "uml-step", "rounded: an action"],
-  ["{", "}", "uml-decision", "diamond: a decision or a merge"],
+  ["{", "}", "uml-decision", "diamond: a decision or merge node"],
   ["((", "))", "uml-circle", "circle: the initial node where flows only leave"],
-  ["(((", ")))", "uml-final", "double circle: the final node"],
+  ["(((", ")))", "uml-final", "double circle: the activity final node"],
   ["([", "])", "uml-stadium", "stadium"],
-  ["[(", ")]", "uml-cylinder", "cylinder: an object, a database"],
+  ["[(", ")]", "uml-cylinder", "cylinder: an object node, a data store"],
   ["[[", "]]", "uml-rect", "subroutine"],
   ["{{", "}}", "uml-hexagon", "hexagon"],
   ["[/", "/]", "uml-rect", "leaning right: input or output"],
@@ -635,18 +655,18 @@ function completeFlow(cursor: Cursor): CompletionResult | null {
               "subgraph",
               "subgraph ${Lane}\n\t${}\nend",
               "declare-group",
-              "a lane: who does its steps",
+              "a lane: an activity partition of one agent",
             ]
           : [
               "subgraph",
               "subgraph ${id} [${Title}]\n\t${}\nend",
               "declare-group",
-              "a frame around nodes",
+              "a group of activity nodes",
             ],
-        ["action", `\${id}${open}\${Text}${close}`, "declare-uml-step", "a step of the flow"],
-        ["decision", "${id}{${Question}}", "declare-uml-decision", "a branch of the flow"],
+        ["action", `\${id}${open}\${Text}${close}`, "declare-uml-step", "an action node"],
+        ["decision", "${id}{${Question}}", "declare-uml-decision", "a decision node"],
         ["initial", "${start}((${Start}))", "declare-uml-circle", "the initial node"],
-        ["final", "${stop}(((${End})))", "declare-uml-final", "the final node"],
+        ["final", "${stop}(((${End})))", "declare-uml-final", "the activity final node"],
       ]),
       DIRECTION_LINE,
       ...(start.blocks.length ? [END] : []),
@@ -712,9 +732,9 @@ function completeState(cursor: Cursor): CompletionResult | null {
     );
   if ((match = before.match(/^state\s+\S+\s+<<(\w*)$/)))
     return result(cursor.at(match[1].length), [
-      option("choice", "constant", "a diamond: the guards decide", "choice>>"),
-      option("fork", "constant", "a bar: one transition becomes several", "fork>>"),
-      option("join", "constant", "a bar: several transitions become one", "join>>"),
+      option("choice", "constant", "choice pseudostate: guards select the transition", "choice>>"),
+      option("fork", "constant", "fork pseudostate: splits into concurrent transitions", "fork>>"),
+      option("join", "constant", "join pseudostate: synchronizes concurrent transitions", "join>>"),
     ]);
   // The start of a line: a declaration, or the state a transition leaves.
   if ((match = before.match(/^([\w[*]*)$/))) {
@@ -730,25 +750,25 @@ function completeState(cursor: Cursor): CompletionResult | null {
                 "composite",
                 "state ${id} {\n\t${}\n}",
                 "declare-uml-state",
-                "a state with states inside",
+                "a composite state with substates",
               ],
               [
                 "choice",
                 "state ${id} <<choice>>",
                 "declare-uml-decision",
-                "a diamond: the guards decide",
+                "choice pseudostate: guards select the transition",
               ],
               [
                 "fork",
                 "state ${id} <<fork>>",
                 "declare-uml-bar",
-                "a bar: one transition becomes several",
+                "fork pseudostate: splits into concurrent transitions",
               ],
               [
                 "join",
                 "state ${id} <<join>>",
                 "declare-uml-bar",
-                "a bar: several transitions become one",
+                "join pseudostate: synchronizes concurrent transitions",
               ],
               [
                 "note",
@@ -757,10 +777,10 @@ function completeState(cursor: Cursor): CompletionResult | null {
                 "a note beside a state",
               ],
             ]),
-            over("[*]", "uml-circle", "the initial state: where it starts", "[*] --> ", "]"),
+            over("[*]", "uml-circle", "the initial pseudostate", "[*] --> ", "]"),
             DIRECTION_LINE,
             ...(start.blocks.length
-              ? [option("--", "keyword", "a region of its own below, at the same time")]
+              ? [option("--", "keyword", "another orthogonal region, below")]
               : []),
           ],
           30,
@@ -776,7 +796,7 @@ function completeState(cursor: Cursor): CompletionResult | null {
   if ((match = before.match(/-->\s*(?:\[\*\]|[^:\s\-{}"]+)\s+(:?)$/)))
     return result(
       cursor.at(match[1].length),
-      arrows([[":", "event [guard] / action", ": ${event}"]]),
+      arrows([[":", "trigger [guard] / effect", ": ${event}"]]),
       /^:?$/,
     );
   // After the arrow: the states it can reach.
@@ -785,7 +805,7 @@ function completeState(cursor: Cursor): CompletionResult | null {
       cursor.at(match[1].length),
       [
         ...elements(cursor.ids()),
-        { ...over("[*]", "uml-final", "the final state: where it ends", "[*]", "]"), boost: -61 },
+        { ...over("[*]", "uml-final", "a final state", "[*]", "]"), boost: -61 },
       ],
       /^[^:\s\-{}"]*$/,
     );
@@ -797,7 +817,7 @@ function completeState(cursor: Cursor): CompletionResult | null {
         ["-->", "transition to another state"],
         ...(match[1] === "[*]"
           ? []
-          : ([[":", "what the state does: entry / action", ": ${description}"]] as [
+          : ([[":", "internal behavior: entry / action", ": ${description}"]] as [
               string,
               string,
               string,
@@ -812,14 +832,14 @@ const SEQUENCE_KEYWORDS =
   /^(loop|alt|opt|par|critical|break|rect|else|and|option|box|title|note|autonumber|links?|properties|details|participant|actor|create)\s/i;
 
 const SEQUENCE_ARROWS = arrows([
-  ["->>", "call: a message that waits for its answer", "->>"],
-  ["-->>", "reply, dashed", "-->>"],
-  ["-)", "asynchronous message: does not wait", "-)"],
+  ["->>", "synchronous message: the sender blocks for the reply", "->>"],
+  ["-->>", "reply message, dashed", "-->>"],
+  ["-)", "asynchronous message: the sender does not block", "-)"],
   ["--)", "asynchronous reply, dashed", "--)"],
-  ["->>+", "call that activates the receiver", "->>+"],
+  ["->>+", "synchronous message that activates the receiver", "->>+"],
   ["-->>-", "reply that ends the sender's activation", "-->>-"],
-  ["-x", "message that gets lost", "-x"],
-  ["--x", "dashed message that gets lost", "--x"],
+  ["-x", "lost message", "-x"],
+  ["--x", "dashed lost message", "--x"],
   ["->", "line without an arrowhead", "->"],
   ["-->", "dashed line without an arrowhead", "-->"],
   ["<<->>", "messages both ways", "<<->>"],
@@ -828,9 +848,9 @@ const SEQUENCE_ARROWS = arrows([
 
 /** The fragments that frame messages, by the keyword of the block the cursor is in. */
 const BRANCHES: Record<string, Completion> = {
-  alt: option("else", "keyword", "the other case of the alternative", "else "),
-  par: option("and", "keyword", "what happens at the same time", "and "),
-  critical: option("option", "keyword", "what happens when it fails", "option "),
+  alt: option("else", "keyword", "the next operand of alt", "else "),
+  par: option("and", "keyword", "the next concurrent operand", "and "),
+  critical: option("option", "keyword", "the operand for a failure", "option "),
 };
 
 /** The completions of a sequence diagram. */
@@ -881,25 +901,30 @@ function completeSequence(cursor: Cursor): CompletionResult | null {
           "participant",
           "participant ${id} as ${Name}",
           "declare-uml-participant",
-          "a lifeline under a box",
+          "a lifeline under a head box",
         ],
-        ["actor", "actor ${id} as ${Name}", "declare-uml-actor", "a lifeline under a person"],
+        ["actor", "actor ${id} as ${Name}", "declare-uml-actor", "a lifeline of a human agent"],
         ["note", "note over ${id}: ${text}", "declare-uml-note", "a note at a lifeline"],
-        frame("alt", "condition", "one case or the other", "else\n\t${}\n"),
-        frame("opt", "condition", "only when the condition holds"),
-        frame("loop", "condition", "again and again"),
-        frame("par", "action", "at the same time", "and ${action}\n\t${}\n"),
-        frame("critical", "action", "must not be interrupted", "option ${failure}\n\t${}\n"),
-        frame("break", "condition", "leaves the sequence"),
+        frame("alt", "condition", "alternative operands, chosen by guard", "else\n\t${}\n"),
+        frame("opt", "condition", "one operand, executed if its guard holds"),
+        frame("loop", "condition", "operand repeated while its guard holds"),
+        frame("par", "action", "concurrent operands", "and ${action}\n\t${}\n"),
+        frame("critical", "action", "atomic region", "option ${failure}\n\t${}\n"),
+        frame("break", "condition", "replaces the rest of the enclosing interaction"),
         frame("rect", "rgb(240, 240, 240)", "a colored background"),
-        ["box", "box ${Title}\n\t${}\nend", "declare-group", "participants that belong together"],
+        ["box", "box ${Title}\n\t${}\nend", "declare-group", "a frame grouping participants"],
       ]),
       ...(branch ? [branch] : []),
       ...(start.blocks.length ? [END] : []),
-      option("activate", "keyword", "the participant starts working", "activate "),
-      option("deactivate", "keyword", "the participant is done", "deactivate "),
+      option("activate", "keyword", "starts an execution specification", "activate "),
+      option("deactivate", "keyword", "ends the execution specification", "deactivate "),
       option("autonumber", "keyword", "numbers the messages"),
-      option("create", "keyword", "a participant that appears later", "create participant "),
+      option(
+        "create",
+        "keyword",
+        "a participant created by a later message",
+        "create participant ",
+      ),
       option("destroy", "keyword", "the participant's lifeline ends", "destroy "),
       option("title", "keyword", "the diagram's title", "title "),
     ]);
