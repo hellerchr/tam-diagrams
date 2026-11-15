@@ -64,9 +64,6 @@ export interface Bench {
   toggle(panel: PanelName): void;
   toggleSnap(): void;
   toggleGrid(): void;
-  /** Whether long lines of the source wrap. */
-  readonly wrap: boolean;
-  toggleWrap(): void;
 }
 
 /** The kinds of connection the editor offers: a word, and for dependencies their keyword. */
@@ -235,8 +232,7 @@ export class Menus {
 
   /**
    * Every command in one list: those of the bar's menus, each with the menus that lead to it, and
-   * what has no menu: the pointer tools, the shapes of the diagram type, the zooms, and how the
-   * source wraps.
+   * what has no menu: the pointer tools, the shapes of the diagram type and the zooms.
    */
   commands(): Command[] {
     const { editor, bench } = this,
@@ -273,14 +269,7 @@ export class Menus {
       path: "View",
       run: () => editor.view.zoomTo(percent / 100),
     }));
-    const source: Command[] = [
-      {
-        name: bench.wrap ? "Do not wrap long lines" : "Wrap long lines",
-        path: "Source",
-        run: () => bench.toggleWrap(),
-      },
-    ];
-    return [...this.menuCommands(), ...tools, ...shapes, ...zooms, ...source];
+    return [...this.menuCommands(), ...tools, ...shapes, ...zooms];
   }
 
   /** Every command of the bar's menus, each with the menus that lead to it. */

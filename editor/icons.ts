@@ -166,7 +166,6 @@ export const ICONS = {
   panel: svg(
     '<rect x="2.500" y="3.500" width="15" height="13" rx="1.500"/><path d="M12.500 3.500v13"/>',
   ),
-  wrap: svg('<path d="M3 5h14M3 10h11a2.500 2.500 0 0 1 0 5h-3M3 15h4M12.500 13l-2 2 2 2"/>'),
   warning: svg('<path d="M10 3l7.500 13.500h-15z"/><path d="M10 8.500v3.500M10 14.300v.100"/>'),
   "arrow-down": svg('<path d="M10 3.500v13M5 11.500l5 5 5-5"/>'),
   "arrow-right": svg('<path d="M3.500 10h13M11.500 5l5 5-5 5"/>'),

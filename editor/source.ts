@@ -553,8 +553,6 @@ export interface SourceHost {
 export class SourcePane {
   private readonly view: EditorView;
   private readonly host: SourceHost;
-  /** Long lines wrap or scroll: set by `setWrap`. */
-  private readonly wrapping = new Compartment();
   /** The syntax of the diagram type: set by `setType`. */
   private readonly syntax = new Compartment();
   /** The diagram type whose syntax the pane has. */
@@ -642,7 +640,9 @@ export class SourcePane {
           }),
           selectedLines,
           foundPlaces,
-          this.wrapping.of([]),
+          // A line cut at the pane's edge hides what it says: long lines wrap.
+          EditorView.lineWrapping,
+          hangingIndent,
           look,
           EditorView.contentAttributes.of({ "aria-label": "Diagram source", spellcheck: "false" }),
           EditorView.updateListener.of((update) => {
@@ -900,14 +900,6 @@ export class SourcePane {
           ? [EditorView.scrollIntoView(this.view.state.doc.line(lines[0]).from, { y: "nearest" })]
           : []),
       ],
-      annotations: fromDocument.of(true),
-    });
-  }
-
-  /** Wraps long lines at the edge of the pane, or lets them run on and scroll. */
-  setWrap(on: boolean) {
-    this.view.dispatch({
-      effects: this.wrapping.reconfigure(on ? [EditorView.lineWrapping, hangingIndent] : []),
       annotations: fromDocument.of(true),
     });
   }

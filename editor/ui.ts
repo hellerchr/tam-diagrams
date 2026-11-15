@@ -116,7 +116,6 @@ export class Panels {
   private readonly leftPanel: HTMLElement;
   private readonly sidePanel: HTMLElement;
   private readonly sections = new Map<"properties" | "source", HTMLElement>();
-  private readonly wrap: HTMLButtonElement;
   private readonly expand: HTMLButtonElement;
   private readonly problem = h("button", { class: "problem", type: "button" });
   private readonly warning = h("button", { class: "problem warning", type: "button" });
@@ -188,10 +187,6 @@ export class Panels {
       toggle: (panel) => this.toggle(panel),
       toggleSnap: () => this.toggleSnap(),
       toggleGrid: () => this.toggleGrid(),
-      get wrap() {
-        return shell.recall("wrap") !== "off";
-      },
-      toggleWrap: () => this.setWrap(shell.recall("wrap") === "off"),
       get minimap() {
         return minimap.enabled;
       },
@@ -445,12 +440,6 @@ export class Panels {
         }
       },
     });
-    this.wrap = iconButton(
-      "wrap",
-      { tip: "Wrap long lines" },
-      () => this.setWrap(this.wrap.getAttribute("aria-pressed") !== "true"),
-      "button small",
-    );
     this.expand = iconButton(
       "expand",
       { tip: "Give the source most of the panel" },
@@ -538,7 +527,7 @@ export class Panels {
       section(
         "source",
         "Source",
-        [this.problems, this.wrap, this.expand],
+        [this.problems, this.expand],
         sourceBox,
         // Over the foot of the source, so the text stays where it is when a problem comes and goes.
         h("div", { class: "strips" }, this.problem, this.warning),
@@ -583,8 +572,6 @@ export class Panels {
     this.wide = shell.recall("source-wide") === "on";
     editor.snapping = shell.recall("snap") !== "off";
     editor.view.grid = shell.recall("grid") !== "off";
-    // Wrapped unless switched off: a line cut at the pane's edge hides what it says.
-    this.setWrap(shell.recall("wrap") !== "off");
     const sized = () => {
       const narrow = window.innerWidth < NARROW,
         tiny = window.innerWidth < TINY,
@@ -987,12 +974,6 @@ export class Panels {
     view.grid = !view.grid;
     this.shell.remember("grid", view.grid ? "on" : "off");
     view.invalidate();
-  }
-
-  private setWrap(on: boolean) {
-    this.source.setWrap(on);
-    this.wrap.setAttribute("aria-pressed", String(on));
-    this.shell.remember("wrap", on ? "on" : "off");
   }
 
   /** The title field is as wide as its text: the box around it takes the text's width. A title too long for it is said whole by a tooltip. */
