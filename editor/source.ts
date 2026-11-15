@@ -5,9 +5,12 @@
  */
 
 import {
+  acceptCompletion,
   autocompletion,
+  closeBrackets,
+  closeBracketsKeymap,
+  completeAnyWord,
   type CompletionContext,
-  type CompletionResult,
 } from "@codemirror/autocomplete";
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
 import {
@@ -33,9 +36,11 @@ import {
   highlightActiveLine,
   keymap,
   lineNumbers,
+  tooltips,
 } from "@codemirror/view";
 import { tags } from "@lezer/highlight";
-import { COLORS, ELEMENT_KINDS } from "../src/tam.ts";
+import { ELEMENT_KINDS } from "../src/tam.ts";
+import { completeTam, type Known } from "./completion.ts";
 
 const KINDS = new Set<string>(ELEMENT_KINDS);
 
@@ -137,10 +142,104 @@ const look = EditorView.theme({
     borderRadius: "4px",
     boxShadow: "var(--shadow)",
   },
-  ".cm-tooltip-autocomplete ul li[aria-selected]": {
+  // The completion list: a drawing of the kind, the name with what was typed marked, and what it is at the right.
+  ".cm-tooltip.cm-tooltip-autocomplete": {
+    borderRadius: "8px",
+    overflow: "hidden",
+    padding: "4px",
+  },
+  ".cm-tooltip.cm-tooltip-autocomplete > ul": {
+    fontFamily: 'ui-monospace, "SF Mono", Menlo, Consolas, monospace',
+    fontSize: "12px",
+    maxHeight: "18em",
+    minWidth: "min(24em, 90vw)",
+    maxWidth: "min(40em, 90vw)",
+  },
+  ".cm-tooltip-autocomplete > ul > li": {
+    display: "flex",
+    alignItems: "center",
+    gap: "8px",
+    padding: "0 8px",
+    height: "24px",
+    borderRadius: "4px",
+    lineHeight: "24px",
+  },
+  ".cm-tooltip-autocomplete > ul > li[aria-selected]": {
     backgroundColor: "var(--accent-soft)",
     color: "var(--text)",
   },
+  ".cm-completionLabel": { flex: "none" },
+  ".cm-completionMatchedText": {
+    textDecoration: "none",
+    color: "var(--accent)",
+    fontWeight: "600",
+  },
+  ".cm-completionDetail": {
+    flex: "1",
+    minWidth: "0",
+    marginLeft: "16px",
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap",
+    textAlign: "right",
+    fontFamily: "system-ui, sans-serif",
+    fontStyle: "normal",
+    color: "var(--text-2)",
+  },
+  // The kinds as small drawings: the shapes of the notation, a line for a connection, a dot of a color.
+  ".cm-completionIcon": {
+    flex: "none",
+    boxSizing: "border-box",
+    width: "16px",
+    height: "10px",
+    padding: "0",
+    margin: "0",
+    opacity: "1",
+    border: "1.5px solid var(--text-2)",
+    "&:after": { content: '""' },
+  },
+  ".cm-completionIcon-storage, .cm-completionIcon-declare-storage": { borderRadius: "5px" },
+  ".cm-completionIcon-human, .cm-completionIcon-declare-human": {
+    width: "10px",
+    margin: "0 3px",
+    borderRadius: "50% 50% 2px 2px",
+  },
+  ".cm-completionIcon-group, .cm-completionIcon-declare-group": { borderStyle: "dashed" },
+  ".cm-completionIcon-package, .cm-completionIcon-declare-package": {
+    borderTopWidth: "3px",
+  },
+  ".cm-completionIcon-component, .cm-completionIcon-subsystem, .cm-completionIcon-class, .cm-completionIcon-declare-component, .cm-completionIcon-declare-subsystem, .cm-completionIcon-declare-class":
+    { borderLeftWidth: "4px" },
+  '[class*="cm-completionIcon-declare-"]': { borderColor: "var(--syntax-keyword)" },
+  ".cm-completionIcon-connection": {
+    height: "0",
+    border: "none",
+    borderTop: "1.5px solid var(--syntax-word)",
+  },
+  ".cm-completionIcon-keyword, .cm-completionIcon-constant": {
+    width: "6px",
+    height: "6px",
+    margin: "0 5px",
+    border: "none",
+    borderRadius: "50%",
+    backgroundColor: "var(--syntax-keyword)",
+  },
+  ".cm-completionIcon-constant": { backgroundColor: "var(--syntax-number)" },
+  '[class*="cm-completionIcon-color-"]': {
+    width: "10px",
+    height: "10px",
+    margin: "0 3px",
+    border: "none",
+    borderRadius: "50%",
+  },
+  ".cm-completionIcon-color-blue": { backgroundColor: "#2a78d6" },
+  ".cm-completionIcon-color-orange": { backgroundColor: "#eb6834" },
+  ".cm-completionIcon-color-green": { backgroundColor: "#1baf7a" },
+  ".cm-completionIcon-color-yellow": { backgroundColor: "#eda100" },
+  ".cm-completionIcon-color-pink": { backgroundColor: "#e87ba4" },
+  ".cm-completionIcon-color-purple": { backgroundColor: "#6250d6" },
+  ".cm-completionIcon-color-red": { backgroundColor: "#e34948" },
+  ".cm-completionIcon-color-gray": { backgroundColor: "#9a9da3" },
 });
 
 /** A change that comes from the document, not from typing. */
@@ -171,8 +270,10 @@ const selectedLines = StateField.define<DecorationSet>({
 export interface SourceHost {
   /** The text changed by typing. */
   changed(text: string): void;
-  /** The ids of the elements, to offer where an id is typed. */
-  ids(): string[];
+  /** The elements of the diagram, to offer where one is named. */
+  elements(): Known[];
+  /** Whether the source is a block diagram, completed from its notation. */
+  completes(): boolean;
   /** The cursor came to a line by a click or a key. */
   cursorAt(line: number): void;
 }
@@ -183,29 +284,9 @@ export class SourcePane {
   private readonly wrapping = new Compartment();
 
   constructor(parent: HTMLElement, host: SourceHost) {
-    const complete = (context: CompletionContext): CompletionResult | null => {
-      const line = context.state.doc.lineAt(context.pos),
-        before = line.text.slice(0, context.pos - line.from),
-        word = context.matchBefore(/[\w/]*/);
-      if (!word || (word.from === word.to && !context.explicit)) return null;
-      const options = (labels: string[], type: string) => labels.map((label) => ({ label, type }));
-      // At the start of a line a declaration or a connection begins.
-      if (/^\s*[\w/]*$/.test(before))
-        return {
-          from: word.from,
-          options: [
-            ...options([...ELEMENT_KINDS, ...HEADERS], "keyword"),
-            ...options(host.ids(), "variable"),
-          ],
-        };
-      if (/:::\w*$/.test(before))
-        return { from: word.from, options: options([...COLORS], "constant") };
-      if (/(--|<--)\s*[\w/ ]*$/.test(before) && !/-->|---/.test(before))
-        return { from: word.from, options: options(WORDS, "type") };
-      if (/-\.\s*\w*$/.test(before))
-        return { from: word.from, options: options(DEPENDENCIES, "type") };
-      return { from: word.from, options: options(host.ids(), "variable") };
-    };
+    // A block diagram is completed from its notation; the other types from the words of the source.
+    const complete = (context: CompletionContext) =>
+      host.completes() ? completeTam(context, host.elements()) : completeAnyWord(context);
     this.view = new EditorView({
       parent,
       state: EditorState.create({
@@ -218,8 +299,18 @@ export class SourcePane {
           EditorState.tabSize.of(2),
           tam,
           syntaxHighlighting(colors),
-          autocompletion({ override: [complete], icons: false }),
-          keymap.of([...defaultKeymap, ...historyKeymap, indentWithTab]),
+          closeBrackets(),
+          // The list reaches past the pane, which would cut it off.
+          tooltips({ parent: document.body }),
+          autocompletion({ override: [complete], icons: true, closeOnBlur: true }),
+          keymap.of([
+            // Tab takes the completion on offer, as Enter does; else it indents.
+            { key: "Tab", run: acceptCompletion },
+            ...closeBracketsKeymap,
+            ...defaultKeymap,
+            ...historyKeymap,
+            indentWithTab,
+          ]),
           selectedLines,
           this.wrapping.of([]),
           look,

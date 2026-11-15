@@ -4,6 +4,49 @@ const svg = (body: string) =>
   `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">${body}</svg>`;
 
 export const ICONS = {
+  // The shapes of the UML diagrams, for the tiles that add their statements.
+  "uml-interface": svg(
+    '<rect x="3" y="3.500" width="14" height="13"/><path d="M3 8.500h14"/><circle cx="10" cy="6" r="1.300"/>',
+  ),
+  "uml-inherit": svg(
+    '<path d="M3 16L11.500 7.500"/><path d="M11 4l5 0 0 5z" fill="var(--panel, #fff)"/>',
+  ),
+  "uml-arrow": svg('<path d="M3 16L16 4"/><path d="M10.500 4H16v5.500"/>'),
+  "uml-compose": svg(
+    '<path d="M9.500 10.500L17 3"/><path d="M3 17l2-5.500 4.500 1L7.500 17z" fill="currentColor"/>',
+  ),
+  "uml-dashed": svg(
+    '<path d="M3 16L16 4" stroke-dasharray="3 2.500"/><path d="M10.500 4H16v5.500"/>',
+  ),
+  "uml-actor": svg(
+    '<circle cx="10" cy="4.500" r="2.300"/><path d="M10 6.800v6M5.500 9.500h9M6.500 17.500l3.500-4.700 3.500 4.700"/>',
+  ),
+  "uml-usecase": svg('<ellipse cx="10" cy="10" rx="7.500" ry="4.500"/>'),
+  "uml-system": svg(
+    '<rect x="2.500" y="3" width="15" height="14"/><ellipse cx="10" cy="11" rx="4.500" ry="2.800"/>',
+  ),
+  "uml-step": svg('<rect x="2.500" y="5.500" width="15" height="9" rx="3"/>'),
+  "uml-decision": svg('<path d="M10 3l7 7-7 7-7-7z"/>'),
+  "uml-start": svg('<circle cx="10" cy="10" r="5" fill="currentColor"/>'),
+  "uml-end": svg(
+    '<circle cx="10" cy="10" r="6.500"/><circle cx="10" cy="10" r="3.500" fill="currentColor"/>',
+  ),
+  "uml-lane": svg('<rect x="2.500" y="3" width="15" height="14"/><path d="M2.500 7h15M10 3v14"/>'),
+  "uml-composite": svg(
+    '<rect x="2.500" y="3.500" width="15" height="13" rx="3"/><path d="M2.500 7.500h15"/><rect x="6" y="10" width="8" height="4" rx="1.500"/>',
+  ),
+  "uml-note": svg('<path d="M4 3h8.500L16 6.500V17H4z"/><path d="M12.500 3v3.500H16"/>'),
+  "uml-participant": svg(
+    '<rect x="4.500" y="2.500" width="11" height="5.500"/><path d="M10 8v9.500" stroke-dasharray="2.500 2"/>',
+  ),
+  "uml-message": svg('<path d="M3 10h13"/><path d="M12 6l4.500 4-4.500 4" fill="currentColor"/>'),
+  "uml-reply": svg('<path d="M17 10H4" stroke-dasharray="3 2.500"/><path d="M8 6l-4.500 4L8 14"/>'),
+  "uml-frame": svg(
+    '<rect x="2.500" y="3.500" width="15" height="13"/><path d="M2.500 8h5l1.500-1.500V3.500M2.500 12h15" /><path d="M2.500 12h15" stroke-dasharray="2.500 2"/>',
+  ),
+  "uml-loop": svg(
+    '<rect x="2.500" y="3.500" width="15" height="13"/><path d="M2.500 8h5l1.500-1.500V3.500"/><path d="M13.500 10.500a2.500 2.500 0 1 1-1-2"/><path d="M12.800 7v1.800h-1.800"/>',
+  ),
   logo: svg(
     '<rect x="2" y="3" width="7" height="5"/><rect x="11" y="12" width="7" height="5" rx="2.5"/><path d="M5.500 8v6.500h5.500"/>',
   ),

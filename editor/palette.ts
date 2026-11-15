@@ -60,9 +60,8 @@ export class Palette {
     this.type = type;
     this.tiles.clear();
     this.search.value = "";
-    const what = info.mode === "canvas" ? "shape" : "snippet";
-    this.search.placeholder = `Find a ${what}…`;
-    this.search.setAttribute("aria-label", `Find a ${what}`);
+    this.search.placeholder = "Find a shape…";
+    this.search.setAttribute("aria-label", "Find a shape");
     this.groups = info.palette.map((group) => {
       const tiles = h("div", { class: "tiles" }, ...group.items.map((item) => this.tile(item)));
       return { box: this.group(group.title, tiles), items: group.items };
@@ -74,7 +73,7 @@ export class Palette {
         ? [
             this.group(
               info.name,
-              h("div", { class: "snippets" }, ...this.snippets.map((item) => item.row)),
+              h("div", { class: "tiles" }, ...this.snippets.map((item) => item.row)),
             ),
           ]
         : []),
@@ -82,19 +81,21 @@ export class Palette {
     );
   }
 
-  /** A statement of a text diagram: its name over its first line; a click adds it to the source. */
+  /** A statement of a text diagram, shown as the shape it adds: a click adds it to the source. */
   private snippet(snippet: Snippet): HTMLElement {
-    const [first, ...more] = snippet.text.trim().split("\n");
     return h(
       "button",
       {
-        class: "snippet",
+        class: "tile snippet",
         type: "button",
-        ...tipped({ tip: `Add to the source: ${snippet.name.toLowerCase()}`, side: "right" }),
+        ...tipped({
+          tip: `Add ${snippet.name.toLowerCase()}: ${snippet.text.trim()}`,
+          side: "right",
+        }),
         onClick: () => this.insert(snippet.text),
       },
+      icon(snippet.icon),
       h("span", { class: "name" }, snippet.name),
-      h("code", {}, more.length ? `${first} …` : first),
     );
   }
 

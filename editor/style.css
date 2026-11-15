@@ -620,40 +620,8 @@ select.field {
   box-shadow: inset 0 0 0 1px var(--accent);
 }
 
-.snippets {
-  display: flex;
-  flex-direction: column;
-  padding: 0 4px;
-}
-
-.snippet {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  height: 32px;
-  padding: 0 8px;
-  border: 0;
-  border-radius: var(--radius);
-  background: none;
-  text-align: left;
+.tile.snippet {
   cursor: pointer;
-}
-
-.snippet .name {
-  flex: none;
-  width: 76px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.snippet code {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--text-2);
 }
 
 /* What is dragged from the palette, on its way to the canvas. */

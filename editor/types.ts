@@ -21,6 +21,8 @@ export type DiagramType = "tam" | UmlKind;
 /** A piece of source a click adds: the usual statements of a diagram type. */
 export interface Snippet {
   name: string;
+  /** The drawing of what the statement adds. */
+  icon: IconName;
   text: string;
 }
 
@@ -167,12 +169,20 @@ export const TYPES: TypeInfo[] = [
   Customer "1" --> "*" Order : places
   Order "1" *-- "*" OrderItem`,
     snippets: [
-      { name: "Class", text: "  class NewClass {\n    +field: string\n    +method()\n  }" },
-      { name: "Interface", text: "  class NewInterface {\n    <<interface>>\n    +method()\n  }" },
-      { name: "Inheritance", text: "  Base <|-- Derived" },
-      { name: "Association", text: '  A "1" --> "*" B : has' },
-      { name: "Composition", text: "  Whole *-- Part" },
-      { name: "Dependency", text: "  A ..> B : uses" },
+      {
+        name: "Class",
+        icon: "class",
+        text: "  class NewClass {\n    +field: string\n    +method()\n  }",
+      },
+      {
+        name: "Interface",
+        icon: "uml-interface",
+        text: "  class NewInterface {\n    <<interface>>\n    +method()\n  }",
+      },
+      { name: "Inheritance", icon: "uml-inherit", text: "  Base <|-- Derived" },
+      { name: "Association", icon: "uml-arrow", text: '  A "1" --> "*" B : has' },
+      { name: "Composition", icon: "uml-compose", text: "  Whole *-- Part" },
+      { name: "Dependency", icon: "uml-dashed", text: "  A ..> B : uses" },
     ],
   },
   {
@@ -197,11 +207,15 @@ export const TYPES: TypeInfo[] = [
   User --> order
   Admin --> manage`,
     snippets: [
-      { name: "Actor", text: "  actor NewActor" },
-      { name: "Use case", text: "  newCase(New Use Case)" },
-      { name: "System", text: "  systemBoundary sys[System]\n    inner(Inner Use Case)\n  end" },
-      { name: "Association", text: "  NewActor --> newCase" },
-      { name: "Include", text: "  newCase ..> : include inner" },
+      { name: "Actor", icon: "uml-actor", text: "  actor NewActor" },
+      { name: "Use case", icon: "uml-usecase", text: "  newCase(New Use Case)" },
+      {
+        name: "System",
+        icon: "uml-system",
+        text: "  systemBoundary sys[System]\n    inner(Inner Use Case)\n  end",
+      },
+      { name: "Association", icon: "uml-arrow", text: "  NewActor --> newCase" },
+      { name: "Include", icon: "uml-dashed", text: "  newCase ..> : include inner" },
     ],
   },
   {
@@ -220,14 +234,19 @@ export const TYPES: TypeInfo[] = [
   wait --> check
   ship --> done(((End)))`,
     snippets: [
-      { name: "Step", text: "  a[Do something] --> b[Do the next thing]" },
+      { name: "Step", icon: "uml-step", text: "  a[Do something] --> b[Do the next thing]" },
       {
         name: "Decision",
+        icon: "uml-decision",
         text: "  ask{Decide?} -->|yes| one[One way]\n  ask -->|no| other[Other way]",
       },
-      { name: "Start", text: "  start((Start)) --> first[First step]" },
-      { name: "End", text: "  last[Last step] --> stop(((End)))" },
-      { name: "Group", text: "  subgraph part [A part]\n    x[Inside] --> y[Also inside]\n  end" },
+      { name: "Start", icon: "uml-start", text: "  start((Start)) --> first[First step]" },
+      { name: "End", icon: "uml-end", text: "  last[Last step] --> stop(((End)))" },
+      {
+        name: "Group",
+        icon: "group",
+        text: "  subgraph part [A part]\n    x[Inside] --> y[Also inside]\n  end",
+      },
     ],
   },
   {
@@ -250,9 +269,13 @@ export const TYPES: TypeInfo[] = [
   order --> check
   ship --> receive`,
     snippets: [
-      { name: "Lane", text: "  subgraph NewLane\n    step(New Step)\n  end" },
-      { name: "Step", text: "  a(Do something) --> b(Do the next thing)" },
-      { name: "Decision", text: "  ask{ } -->|yes| one(One way)\n  ask -->|no| other(Other way)" },
+      { name: "Lane", icon: "uml-lane", text: "  subgraph NewLane\n    step(New Step)\n  end" },
+      { name: "Step", icon: "uml-step", text: "  a(Do something) --> b(Do the next thing)" },
+      {
+        name: "Decision",
+        icon: "uml-decision",
+        text: "  ask{ } -->|yes| one(One way)\n  ask -->|no| other(Other way)",
+      },
     ],
   },
   {
@@ -271,12 +294,16 @@ export const TYPES: TypeInfo[] = [
   Submitted --> Draft : reject
   Approved --> [*]`,
     snippets: [
-      { name: "State", text: '  state "New State" as NewState' },
-      { name: "Transition", text: "  A --> B : event" },
-      { name: "Start", text: "  [*] --> First" },
-      { name: "End", text: "  Last --> [*]" },
-      { name: "Composite", text: "  state Outer {\n    [*] --> Inner\n    Inner --> [*]\n  }" },
-      { name: "Note", text: "  note right of A : A note" },
+      { name: "State", icon: "uml-step", text: '  state "New State" as NewState' },
+      { name: "Transition", icon: "uml-arrow", text: "  A --> B : event" },
+      { name: "Start", icon: "uml-start", text: "  [*] --> First" },
+      { name: "End", icon: "uml-end", text: "  Last --> [*]" },
+      {
+        name: "Composite",
+        icon: "uml-composite",
+        text: "  state Outer {\n    [*] --> Inner\n    Inner --> [*]\n  }",
+      },
+      { name: "Note", icon: "uml-note", text: "  note right of A : A note" },
     ],
   },
   {
@@ -297,16 +324,17 @@ export const TYPES: TypeInfo[] = [
   P-->>S: paid
   S-->>U: confirmation`,
     snippets: [
-      { name: "Participant", text: "  participant N as New" },
-      { name: "Actor", text: "  actor A as Person" },
-      { name: "Message", text: "  A->>B: message" },
-      { name: "Reply", text: "  B-->>A: reply" },
+      { name: "Participant", icon: "uml-participant", text: "  participant N as New" },
+      { name: "Actor", icon: "uml-actor", text: "  actor A as Person" },
+      { name: "Message", icon: "uml-message", text: "  A->>B: message" },
+      { name: "Reply", icon: "uml-reply", text: "  B-->>A: reply" },
       {
         name: "Alternative",
+        icon: "uml-frame",
         text: "  alt condition\n    A->>B: one\n  else otherwise\n    A->>B: other\n  end",
       },
-      { name: "Loop", text: "  loop every time\n    A->>B: again\n  end" },
-      { name: "Note", text: "  Note over A,B: A note" },
+      { name: "Loop", icon: "uml-loop", text: "  loop every time\n    A->>B: again\n  end" },
+      { name: "Note", icon: "uml-note", text: "  Note over A,B: A note" },
     ],
   },
 ];

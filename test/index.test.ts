@@ -33,7 +33,7 @@ describe("package boundary", () => {
                 (spec.startsWith("vitest") || spec === "mermaid" || spec.startsWith("node:"))) ||
               (file === join("editor", "vite.config.ts") && spec === "vite") ||
               // The editor's source pane is CodeMirror.
-              (file.startsWith("editor") && /^@(codemirror|lezer)\//.test(spec))
+              (/^(editor|test)/.test(file) && /^@(codemirror|lezer)\//.test(spec))
             ),
       );
     expect(outside).toEqual([]);

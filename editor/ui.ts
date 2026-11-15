@@ -7,7 +7,7 @@
 import type { Box } from "../src/scene.ts";
 import { chooser, helpDialog, syntaxDialog } from "./dialogs.ts";
 import { h, icon, iconButton, prose, setOff, tipped } from "./dom.ts";
-import type { Editor, Tool } from "./editor.ts";
+import type { Editor, Tool, TreeItem } from "./editor.ts";
 import type { IconName } from "./icons.ts";
 import { Inspector } from "./inspector.ts";
 import { menuButton, popup } from "./menu.ts";
@@ -281,7 +281,12 @@ export class Panels {
           void editor.doc.apply(text);
         }, 200);
       },
-      ids: () => editor.tree.flatMap(within).filter((id) => !id.includes("#")),
+      elements: () => {
+        const flat = (items: TreeItem[]): TreeItem[] =>
+          items.flatMap((item) => [item, ...flat(item.children)]);
+        return flat(editor.tree).filter((item) => !item.id.includes("#"));
+      },
+      completes: () => editor.editable,
       cursorAt: (line) => {
         const node = [...(editor.doc.picture?.diagram.nodes.values() ?? [])].find(
           (item) => item.line === line && !item.id.includes("#"),
@@ -723,8 +728,6 @@ export class Panels {
     this.chip.replaceChildren(icon(info.icon), h("span", {}, info.name), icon("chevron"));
     Object.assign(this.chip.dataset, { tip: `${info.about}. Click for a new diagram.` });
     this.dot.hidden = !shell.unsaved;
-    this.tabs.get("shapes")!.textContent = text ? "Snippets" : "Shapes";
-    this.toggles.get("shapes")!.dataset.tip = text ? "Snippets" : "Shapes";
 
     if (!this.typing && this.source.setText(doc.source)) this.lines = "replaced";
     this.source.setProblem(doc.problem);
