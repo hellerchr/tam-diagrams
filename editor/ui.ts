@@ -7,6 +7,7 @@ import type { Direction } from "../src/elk.ts";
 import { TAM_EXAMPLES } from "../src/samples/tam-examples.ts";
 import type { Editor, Tool, TreeItem } from "./editor.ts";
 import { ICONS } from "./icons.ts";
+import { SourcePane } from "./source.ts";
 
 type Child = Node | string | false | null | undefined;
 
@@ -154,14 +155,9 @@ export class Panels {
   private readonly shell: Shell;
   private readonly tools = new Map<Tool, HTMLButtonElement>();
   private readonly inspector = h("div", { class: "inspector" });
-  private readonly source = h("textarea", {
-    class: "source",
-    spellcheck: "false",
-    autocomplete: "off",
-    autocapitalize: "off",
-    wrap: "off",
-    "aria-label": "Diagram source",
-  });
+  private readonly sourceBox = h("div", { class: "source" });
+  private readonly source: SourcePane;
+  private lines = "";
   private readonly problem = h("div", { class: "problem", role: "status" });
   private readonly warning = h("div", { class: "problem warning", role: "status" });
   private readonly status = h("div", { class: "hint" });
@@ -267,19 +263,26 @@ export class Panels {
         button("image", "Export as PNG", () => shell.exportPng(), "PNG"),
         button("copy", "Copy the source", () => shell.copySource()),
         button("theme", "Light or dark", () => shell.toggleTheme()),
+        button("help", "Keyboard and mouse (?)", () => this.help()),
       ),
     );
     const tools = this.palette(root);
-    this.source.addEventListener("input", () => {
-      // The picture follows the typing after a pause.
-      window.clearTimeout(this.typing);
-      this.typing = window.setTimeout(() => void editor.doc.apply(this.source.value), 200);
-    });
-    this.source.addEventListener("keydown", (event) => {
-      if (event.key !== "Tab") return;
-      event.preventDefault();
-      this.source.setRangeText("  ", this.source.selectionStart, this.source.selectionEnd, "end");
-      this.source.dispatchEvent(new Event("input"));
+    this.source = new SourcePane(this.sourceBox, {
+      changed: (text) => {
+        // The picture follows the typing after a pause.
+        window.clearTimeout(this.typing);
+        this.typing = window.setTimeout(() => void editor.doc.apply(text), 200);
+      },
+      ids: () => editor.tree.flatMap(within).filter((id) => !id.includes("#")),
+      cursorAt: (line) => {
+        const node = [...(editor.doc.picture?.diagram.nodes.values() ?? [])].find(
+          (item) => item.line === line && !item.id.includes("#"),
+        );
+        if (!node || editor.doc.problem || editor.doc.picture?.source !== editor.doc.source) return;
+        this.lines = String(line);
+        editor.select([{ type: "element", id: node.id }]);
+        editor.reveal(node.id);
+      },
     });
     const side = h(
       "aside",
@@ -289,7 +292,7 @@ export class Panels {
         "section",
         { class: "pane grow" },
         h("h2", {}, "Source"),
-        this.source,
+        this.sourceBox,
         this.problem,
         this.warning,
       ),
@@ -298,6 +301,7 @@ export class Panels {
     root.append(bar, tools, stage, side, h("footer", { class: "status" }, this.status));
     editor.notify = (message) => this.toast(message);
     editor.onMenu = (at, point) => this.menu(at, point);
+    editor.onHelp = () => this.help();
     editor.editText = (box, text, options, done) => this.editText(box, text, options, done);
     editor.view.onView = () => this.showZoom();
     this.showZoom();
@@ -762,6 +766,81 @@ export class Panels {
     window.addEventListener("keydown", escape, true);
   }
 
+  /** What the keyboard and the mouse do, in a dialog. */
+  private help() {
+    const existing = document.querySelector<HTMLDialogElement>("dialog.help");
+    if (existing) return existing.close();
+    const groups: [string, [string, string][]][] = [
+      [
+        "Add and connect",
+        [
+          ["Drag a shape from the left", "Add it where it is dropped"],
+          ["A  U  S  G", "Agent, human, storage, group: then click"],
+          ["Double-click the canvas", "Add an agent"],
+          ["Click a dot beside an element", "Add a connected agent on that side"],
+          ["Drag a dot", "Connect to another element, or to a new one"],
+          ["C", "Connect tool"],
+        ],
+      ],
+      [
+        "Select and change",
+        [
+          ["Click, Shift-click, drag a frame", "Select"],
+          ["Double-click, Enter or F2", "Name an element or label a connection"],
+          ["Drag an end of a connection", "Attach it to another element"],
+          ["Right-click", "Menu: put in a box, change a connection, …"],
+          ["Ctrl+G, Ctrl+Shift+G", "Put the selection in an agent, in a group"],
+          ["Delete", "Remove"],
+        ],
+      ],
+      [
+        "Move and arrange",
+        [
+          ["Drag", "Move; into a container to put it inside"],
+          ["Shift-drag", "Keep to one axis"],
+          ["Ctrl-drag", "Drag a copy away"],
+          ["Alt-drag", "No snapping"],
+          ["Arrow keys, with Shift", "Move by 10, by 1"],
+          ["Ctrl+D, Ctrl+C/X/V", "Duplicate, copy, cut, paste"],
+          ["Ctrl+Z, Ctrl+Shift+Z", "Undo, redo"],
+        ],
+      ],
+      [
+        "View",
+        [
+          ["Wheel, Space-drag, middle button", "Move the view"],
+          ["Ctrl + wheel, + and −", "Zoom"],
+          ["1, 2, Ctrl+0", "Fit the diagram, fit the selection, 100%"],
+          ["V, H", "Select tool, pan tool"],
+        ],
+      ],
+    ];
+    const dialog = h(
+      "dialog",
+      { class: "help" },
+      h("h1", {}, "Keyboard and mouse"),
+      h(
+        "div",
+        { class: "columns" },
+        ...groups.map(([title, rows]) =>
+          h(
+            "section",
+            {},
+            h("h2", {}, title),
+            ...rows.map(([keys, does]) => h("p", {}, h("kbd", {}, keys), h("span", {}, does))),
+          ),
+        ),
+      ),
+      h("button", { class: "button", type: "button", onClick: () => dialog.close() }, "Close"),
+    ) as HTMLDialogElement;
+    dialog.addEventListener("close", () => dialog.remove());
+    dialog.addEventListener("click", (event) => {
+      if (event.target === dialog) dialog.close();
+    });
+    document.body.append(dialog);
+    dialog.showModal();
+  }
+
   /** Says something for a few seconds. */
   toast(message: string) {
     const note = h("div", { class: "toast" }, message);
@@ -836,8 +915,17 @@ export class Panels {
     this.snap.setAttribute("aria-pressed", String(editor.snapping));
     this.undo.disabled = !doc.canUndo;
     this.redo.disabled = !doc.canRedo;
-    if (this.source.value !== doc.source && document.activeElement !== this.source)
-      this.source.value = doc.source;
+    if ((!this.source.focused || !this.typing) && this.source.setText(doc.source))
+      this.lines = "replaced";
+    this.source.setProblem(doc.problem);
+    // The lines of what is selected on the canvas are marked in the source.
+    const lines = doc.problem
+      ? []
+      : editor.selectedElements.flatMap((id) => doc.picture?.diagram.nodes.get(id)?.line ?? []);
+    if (lines.join() !== this.lines) {
+      this.lines = lines.join();
+      this.source.setSelectedLines(lines);
+    }
     this.problem.textContent = doc.problem?.message ?? "";
     this.problem.hidden = !doc.problem;
     // Not an error of the source, but not TAM either: elements that lie on each other.
@@ -1032,6 +1120,35 @@ export class Panels {
     this.sync.push(() => {
       interfaces.hidden = !editor.allowsInterface(id);
     });
+    // Where the element stands and how large it is, to the pixel.
+    const number = (name: "x" | "y" | "width" | "height", label: string) => {
+      const field = this.text(
+        () => {
+          const box = editor.selectedBox;
+          return box ? String(Math.round(box[name] * 10) / 10) : "";
+        },
+        (value) => {
+          const next = Number(value);
+          if (value.trim() && Number.isFinite(next)) editor.setBox({ [name]: next });
+        },
+      );
+      field.setAttribute("inputmode", "decimal");
+      field.setAttribute("aria-label", label);
+      return h("label", { class: "number" }, h("span", {}, label), field);
+    };
+    const position = h(
+      "div",
+      { class: "row top" },
+      h("span", {}, "Position"),
+      h(
+        "div",
+        { class: "numbers" },
+        number("x", "X"),
+        number("y", "Y"),
+        number("width", "W"),
+        number("height", "H"),
+      ),
+    );
     // Aligning and spreading need several elements; sizes can be made one, or left to the contents.
     const act = (name: keyof typeof ICONS, title: string, run: () => void, least = 2) => {
       const control = h(
@@ -1118,6 +1235,7 @@ export class Panels {
             editor.allowsElements({ stack: value === "stack", multiple: value === "several" }),
         ),
       ),
+      single && position,
       h("div", { class: "row top" }, h("span", {}, "Arrange"), arrangement),
       single && copyRow,
       single && interfaces,

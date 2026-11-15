@@ -29,11 +29,18 @@ export class View {
   /** Called when the viewport changed. */
   onView: () => void = () => {};
   private picture: { image: HTMLImageElement; bounds: Box } | undefined;
+  /** The page color and the grid, under the picture; `canvas` lies over it with what the editor draws. */
+  private readonly back: HTMLCanvasElement;
   private loading = 0;
   private pending = false;
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
+    // Three layers: the page with its grid, the picture as an image, and the overlay that takes the
+    // pointer. The browser draws the image from its vectors at every zoom, so it stays sharp.
+    this.back = document.createElement("canvas");
+    this.back.className = "layer";
+    canvas.before(this.back);
     new ResizeObserver(() => this.draw()).observe(canvas);
   }
 
@@ -69,6 +76,7 @@ export class View {
   async show(svg: string | undefined, bounds: Box): Promise<void> {
     const turn = ++this.loading;
     if (!svg) {
+      this.picture?.image.remove();
       this.picture = undefined;
       this.invalidate();
       return;
@@ -81,7 +89,14 @@ export class View {
       return;
     }
     if (turn !== this.loading) return;
+    // The new picture takes the place of the one before in one step, so nothing flickers.
+    image.className = "layer picture";
+    image.alt = "";
+    image.draggable = false;
+    if (this.picture) this.picture.image.replaceWith(image);
+    else this.canvas.before(image);
     this.picture = { image, bounds };
+    this.place();
     this.invalidate();
   }
 
@@ -135,29 +150,41 @@ export class View {
     });
   }
 
+  /** Puts the picture where the viewport shows it. */
+  private place() {
+    if (!this.picture) return;
+    const at = this.boxOnScreen(this.picture.bounds);
+    Object.assign(this.picture.image.style, {
+      left: `${at.x}px`,
+      top: `${at.y}px`,
+      width: `${at.width}px`,
+      height: `${at.height}px`,
+    });
+  }
+
   private draw() {
-    const { canvas } = this,
-      { width, height } = this.size,
+    const { width, height } = this.size,
       ratio = window.devicePixelRatio || 1;
     if (!width || !height) return;
-    if (
-      canvas.width !== Math.round(width * ratio) ||
-      canvas.height !== Math.round(height * ratio)
-    ) {
-      canvas.width = Math.round(width * ratio);
-      canvas.height = Math.round(height * ratio);
-    }
-    const context = canvas.getContext("2d")!;
-    context.setTransform(ratio, 0, 0, ratio, 0, 0);
-    context.fillStyle = this.colors.page;
-    context.fillRect(0, 0, width, height);
-    if (this.grid) this.drawGrid(context, width, height);
-    if (this.picture) {
-      const { image, bounds } = this.picture,
-        at = this.boxOnScreen(bounds);
-      context.imageSmoothingQuality = "high";
-      context.drawImage(image, at.x, at.y, at.width, at.height);
-    }
+    const fitted = (canvas: HTMLCanvasElement) => {
+      if (
+        canvas.width !== Math.round(width * ratio) ||
+        canvas.height !== Math.round(height * ratio)
+      ) {
+        canvas.width = Math.round(width * ratio);
+        canvas.height = Math.round(height * ratio);
+      }
+      const context = canvas.getContext("2d")!;
+      context.setTransform(ratio, 0, 0, ratio, 0, 0);
+      return context;
+    };
+    const page = fitted(this.back);
+    page.fillStyle = this.colors.page;
+    page.fillRect(0, 0, width, height);
+    if (this.grid) this.drawGrid(page, width, height);
+    this.place();
+    const context = fitted(this.canvas);
+    context.clearRect(0, 0, width, height);
     this.overlay(context);
   }
 

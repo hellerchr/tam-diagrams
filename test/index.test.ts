@@ -1,5 +1,5 @@
 // @vitest-environment node
-// The package is self-contained: it imports only its own files and elkjs (tests also vitest, mermaid and node; the editor's build also vite).
+// The package is self-contained: it imports only its own files and elkjs (tests also vitest, mermaid and node; the editor also vite and CodeMirror).
 import { describe, expect, it } from "vitest";
 import { readdirSync, readFileSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
@@ -7,8 +7,7 @@ import { join, relative, resolve } from "node:path";
 const root = resolve(__dirname, "..");
 const files = (dir: string): string[] =>
   readdirSync(dir, { withFileTypes: true }).flatMap((entry) =>
-    // Spikes try other libraries out and are no part of the package.
-    entry.name === "node_modules" || entry.name === "spikes"
+    entry.name === "node_modules"
       ? []
       : entry.isDirectory()
         ? files(join(dir, entry.name))
@@ -32,7 +31,9 @@ describe("package boundary", () => {
               spec.startsWith("elkjs/") ||
               (!file.startsWith("src") &&
                 (spec.startsWith("vitest") || spec === "mermaid" || spec.startsWith("node:"))) ||
-              (file === join("editor", "vite.config.ts") && spec === "vite")
+              (file === join("editor", "vite.config.ts") && spec === "vite") ||
+              // The editor's source pane is CodeMirror.
+              (file.startsWith("editor") && /^@(codemirror|lezer)\//.test(spec))
             ),
       );
     expect(outside).toEqual([]);
