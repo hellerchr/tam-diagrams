@@ -32,6 +32,7 @@ const HEADERS = [
   "swimlane-beta",
   "stateDiagram-v2",
   "sequenceDiagram",
+  "erDiagram",
 ];
 
 describe("completing the first line of a source", () => {

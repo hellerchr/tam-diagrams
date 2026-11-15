@@ -1,6 +1,7 @@
 /**
  * Editing TAM sources: placements (`@x,y`), the layout that follows them, and changes to a source
- * as text. An editor is built from these and `drawScene`; editor/ is one.
+ * as text. An editor is built from these and `drawScene`; editor/ is one. For the Mermaid types:
+ * the places of their parts (`%% @id x,y`) and the layout that follows them.
  */
 export {
   addElement,
@@ -30,6 +31,17 @@ export {
 } from "./tam-edit.ts";
 export { declaredElements, elementBoxes, layoutWithin, overlapping, pin } from "./tam-pin.ts";
 export { layoutDiagram, layoutPlaced } from "./tam-layout.ts";
+export {
+  followPlaces,
+  hasPlaces,
+  type Places,
+  prunePlaces,
+  readPlaces,
+  removePlaces,
+  renamePlace,
+  setPlaces,
+} from "./uml-places.ts";
+export { placeable, placeScene, placesOf } from "./uml-placed.ts";
 export {
   COLORS,
   type Connection,

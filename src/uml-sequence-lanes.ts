@@ -1,6 +1,6 @@
 /** Sequence diagram lanes: participant headers and the lane positions solved from what messages and frames need. */
 
-import type { Box, Scene } from "./scene.ts";
+import type { Box, Point, Scene } from "./scene.ts";
 import type { SequenceDiagram } from "./uml-sequence.ts";
 import { addText, FONT, LINE, type Measure, SMALL, wrap } from "./text.ts";
 import { smallSize } from "./labels.ts";
@@ -26,11 +26,14 @@ interface SequenceLanes {
 }
 
 /** Sizes every participant's header and solves the lane positions from what each message and frame needs. */
-export function sequenceLanes(diagram: SequenceDiagram, measure: Measure): SequenceLanes {
-  const ids = [...diagram.participants.keys()],
-    index = new Map(ids.map((id, i) => [id, i]));
+export function sequenceLanes(
+  diagram: SequenceDiagram,
+  measure: Measure,
+  places: ReadonlyMap<string, Point> = new Map(),
+): SequenceLanes {
+  const declared = [...diagram.participants.keys()];
   const headers = new Map<string, LaneHeader>(
-    ids.map((id) => {
+    declared.map((id) => {
       const item = diagram.participants.get(id)!;
       return [
         id,
@@ -39,6 +42,19 @@ export function sequenceLanes(diagram: SequenceDiagram, measure: Measure): Seque
     }),
   );
   const head = (id: string) => headerSize(headers.get(id)!, measure);
+  /** The left edge the source places a participant's head at: its lane stands that far right. */
+  const placedAt = (id: string) => places.get(`head:${id}`)?.x;
+  const ids = declared.some((id) => placedAt(id) !== undefined)
+      ? placedOrder(
+          declared,
+          (id) => diagram.participants.get(id)!.box ?? undefined,
+          (id) => {
+            const left = placedAt(id);
+            return left === undefined ? undefined : left + head(id).width / 2;
+          },
+        )
+      : declared,
+    index = new Map(ids.map((id, i) => [id, i]));
   const labelOf = (text: string) => (text ? smallSize(text, measure) : { width: 0, height: 0 });
 
   // Columns: wide enough for the heads, the labels of the messages between them and the notes beside them.
@@ -205,11 +221,22 @@ export function sequenceLanes(diagram: SequenceDiagram, measure: Measure): Seque
   }
   // Frames need room for their keyword tab left of the first column.
   const framed = diagram.events.some((event) => event.type === "start");
-  const { centers: xs } = solveLanes(extents, demands, {
+  const { centers } = solveLanes(extents, demands, {
     gap: GAP,
     start: 0,
     margin: MARGIN + (framed ? 48 : 12),
   });
+  // A place that is the rounded automatic position means that position.
+  const wanted = ids.map((id, lane) => {
+    const left = placedAt(id);
+    if (left === undefined) return undefined;
+    return Math.round(centers[lane] - head(id).width / 2) === left
+      ? centers[lane]
+      : left + head(id).width / 2;
+  });
+  const xs = wanted.some((center) => center !== undefined)
+    ? placedLanes(extents, demands, GAP, centers[0], wanted)
+    : centers;
   const x = (id: string) => xs[index.get(id)!];
 
   // Frames' horizontal extent depends only on what happens inside them: find it first, so their
@@ -338,6 +365,63 @@ function solveLanes(
     (centers.at(-1) ?? options.start) + (extents.at(-1)?.right ?? 0) + margin,
   ];
   return { centers, bounds };
+}
+
+/**
+ * Column center lines where the source places some: each lane at its wanted center, or as near
+ * to the lane before it as the content of both and every span demand allow, and never nearer. A
+ * first lane without a place starts at `start`.
+ */
+function placedLanes(
+  extents: LaneExtent[],
+  demands: SpanDemand[],
+  gap: number,
+  start: number,
+  wanted: (number | undefined)[],
+): number[] {
+  const centers: number[] = [];
+  extents.forEach((extent, k) => {
+    const least = Math.max(
+      k ? centers[k - 1] + extents[k - 1].right + gap + extent.left : -Infinity,
+      ...demands
+        .filter(({ from, to }) => from !== to && Math.max(from, to) === k)
+        .map(({ from, to, width }) => centers[Math.min(from, to)] + width),
+    );
+    const center = Math.max(least, wanted[k] ?? -Infinity);
+    centers[k] = Number.isFinite(center) ? center : start;
+  });
+  return centers;
+}
+
+/**
+ * The order of the lanes where the source places some: by their wanted centers, a lane without a
+ * place after the lane it follows in the source, and the lanes of one group side by side where
+ * the first of them stands.
+ */
+function placedOrder(
+  ids: string[],
+  groupOf: (id: string) => number | undefined,
+  wanted: (id: string) => number | undefined,
+): string[] {
+  /** Sorted by their wanted centers; one without follows the one before it. */
+  const sorted = <T>(items: T[], at: (item: T) => number | undefined): T[] => {
+    let last = -Infinity;
+    return items
+      .map((item, index) => ({ item, index, key: (last = at(item) ?? last) }))
+      .toSorted((a, b) => a.key - b.key || a.index - b.index)
+      .map(({ item }) => item);
+  };
+  const units: string[][] = [];
+  for (const id of ids) {
+    const group = groupOf(id),
+      unit = group === undefined ? undefined : units.find((list) => groupOf(list[0]) === group);
+    if (unit) unit.push(id);
+    else units.push([id]);
+  }
+  return sorted(units, (unit) => {
+    const centers = unit.map(wanted).filter((center) => center !== undefined);
+    return centers.length ? Math.min(...centers) : undefined;
+  }).flatMap((unit) => sorted(unit, wanted));
 }
 
 /** A lane's header: a bold title (swimlanes), a box with the agent's underlined name, or a stick figure with the name below (human agents). */

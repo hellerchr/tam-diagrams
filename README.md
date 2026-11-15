@@ -1,8 +1,8 @@
 # tam-diagrams
 
 Lays out and draws [SAP TAM](https://www.fmc-modeling.org/download/fmc-and-tam/SAP-TAM_Standard.pdf)
-block diagrams and the UML class, use case, activity, state machine and sequence diagrams of
-[Mermaid](https://mermaid.js.org) as standalone SVG, all in one style. Layout uses
+block diagrams and the UML class, use case, activity, state machine and sequence diagrams and the
+entity relationship diagrams of [Mermaid](https://mermaid.js.org) as standalone SVG, all in one style. Layout uses
 [elkjs](https://github.com/kieler/elkjs), the only dependency.
 
 | Diagram                                    | Source                                                                 |
@@ -13,6 +13,7 @@ block diagrams and the UML class, use case, activity, state machine and sequence
 | Activity diagram                           | Mermaid `flowchart` / `graph`; `swimlane-beta` with one lane per agent |
 | State machine diagram                      | Mermaid `stateDiagram-v2`                                              |
 | Sequence diagram                           | Mermaid `sequenceDiagram`                                              |
+| Entity relationship diagram                | Mermaid `erDiagram`, in crow's foot notation                           |
 
 ## Use
 
@@ -37,7 +38,7 @@ img.src = svgUrl(svg);
 ```
 
 - **Errors.** Invalid sources throw `TamError` or `UmlError` with the line. A `UmlError` marked
-  `unsupported` means valid Mermaid this package does not draw (ER, pie, ...): hand those to Mermaid.js.
+  `unsupported` means valid Mermaid this package does not draw (pie, gantt, ...): hand those to Mermaid.js.
   `renderUml` and `renderTam` (and the parsers) both raise it for a source that starts with such a type.
 - **Class diagrams to explore.** `renderClassView(source, colors, view)` draws a class diagram with
   some packages collapsed into folders and some classes without members; with `view` null it uses
@@ -68,8 +69,9 @@ package needs one of the others, or the command line, which runs from the bundle
 
 `npm run editor` serves a diagram editor (`npm run build:editor` writes it as a static page to
 `dist/editor`). It edits every diagram type on a canvas: TAM block diagrams with elements placed by
-hand, and the UML types (class, use case, activity with and without lanes, state machine, sequence)
-by their structure, with the layout automatic.
+hand, and the UML types (class, use case, activity with and without lanes, state machine, sequence,
+entity relationship)
+by their structure, with the layout automatic until a part is moved.
 A first visit shows a sample block diagram and a note that says what to try. *File ▸ New* opens a
 chooser with a card for each type, and below the cards what to start from (an empty diagram, a
 recent one, an example) beside a picture of it; the chip beside the title says which type is on show.
@@ -82,19 +84,27 @@ usual. A moved element lines up with the edges and middles of others and with th
 A selection is aligned, distributed, made one size, put in a box or laid out on its own from the
 Arrange menu, the Properties section or a right click, which also changes what a connection is.
 
-A UML diagram lays itself out; its structure is edited on the canvas. The Shapes tab holds the
+A UML diagram lays itself out until a part is moved; its structure is edited on the canvas. The Shapes tab holds the
 pieces of the type (classes and packages, actors and use cases, steps and decisions, states,
-participants) and its kinds of connection. A click on a piece adds it at the selected part, a drag
+participants, entities) and its kinds of connection. A click on a piece adds it at the selected part, a drag
 carries it onto a part or the empty canvas; a piece dropped on a group stands inside it, one dropped
 on a part is joined to it where the type has such a join (a step follows a step). A drag from the
 dots beside a part connects it to another with the kind of connection picked in the palette; a
 selected connection changes its kind there or in the Properties section. A double click names a
 part or labels a connection; Delete removes what is selected with its connections. A class lists its
-members in the Properties section.
+members in the Properties section; an entity lists its attributes there, and a relationship says how
+many of each entity it joins (exactly one, zero or one, one or more, zero or more) and whether it
+identifies.
 
 The source pane colors every type's syntax and completes it in context: statements and ids at the
 start of a line, the relations a part can start, the parts a relation can reach, members inside a
-class, the branches of a fragment.
+class, types and keys inside an entity, the branches of a fragment.
+
+*Help ▸ … guide* (F1, or the question mark above the source) opens the guide of the diagram type
+beside the source: its rules, every statement the parser reads, an example, and what is refused,
+with a filter and a click that writes a row into the source. The same guides are the pages under
+[docs/guides](docs/guides); `UPDATE_GUIDES=1 npx vitest run test/editor-reference.test.ts` writes
+them anew from `editor/reference.ts`.
 
 The window has a menu bar (File, Edit, View, Arrange, Help) with the document's title, a rail with
 the pointer tools, a left panel (Shapes and Outline), a right panel (Properties above Source, with a
@@ -118,7 +128,10 @@ the light colors unless the theme is asked for, so one made in the dark theme re
 The document is the TAM source, shown beside the canvas and editable there: every gesture is an edit
 of that text, and every other line stays as its author wrote it. A source without positions is laid
 out automatically, as everywhere else; moving an element writes a position for every element
-(`@x,y`, see [Positions](#positions)), and *Arrange ▸ Auto layout* removes them again.
+(`@x,y`, see [Positions](#positions)), and *Arrange ▸ Auto layout* removes them again. The parts
+of a UML diagram are moved the same way, with the same snapping, arrow keys and alignment: the first
+move writes a place for every part (`%% @id x,y` at the end of the source), a part dropped onto a
+group moves into it, and the participants of a sequence diagram move along their row.
 
 ## Command line
 
@@ -162,12 +175,48 @@ widths and names that font stack in the SVG, so the picture is exact where those
 - `tam-diagrams/edit`: what an editor is built from. Edits of a source as text, each returning the
   new source: `place`, `unplace`, `pin` (positions from a layout), `addElement`, `setElement`,
   `connect`, `setConnection`, `addInterface`, `remove`, `moveInto`, `duplicate`, `copyOf`, `paste`,
-  `setHeader`; and `layoutPlaced`, the synchronous layout of a placed diagram.
+  `setHeader`; and `layoutPlaced`, the synchronous layout of a placed diagram. For the Mermaid
+  types the places of their parts as text (`readPlaces`, `setPlaces`, `removePlaces`, `renamePlace`,
+  `prunePlaces`, `followPlaces` across an edit of the structure) and the layout that follows them
+  (`placeScene` over the automatic scene, `placesOf` to pin one).
 - `tam-diagrams/layout`: building blocks for further diagram types (`layoutGraph`, `addWire`,
   `attachEnds`, `hugLabels`, `straightenScene`, `bestScene`, scene helpers, `prepare`, ...) and the
   TAM layout steps (`layoutTam`, `bestLayout`).
 - `tam-diagrams/samples/tam-examples`, `tam-diagrams/samples/uml-examples`: example sources.
 - `tam-diagrams/samples/fuzz`: seeded generators of random diagrams, for tests and stress runs.
+
+## Entity relationship diagrams
+
+An `erDiagram` source is drawn in crow's foot notation. An entity is a box with its name over one
+row per attribute, in columns: type, name, keys (`PK`, `FK`, `UK`) and comment; the name of a
+primary key is bold and underlined. A relationship is a line with a symbol at each end for how many
+of that entity take part, solid when it identifies (`--`) and dashed when it does not (`..`), with
+its label on the line. The entity there is one of stands above the many that belong to it.
+
+```mermaid
+erDiagram
+  CUSTOMER ||--o{ ORDER : places
+  ORDER ||--|{ ORDER-ITEM : contains
+  CUSTOMER }o..o| ADDRESS : prefers
+  ORDER {
+    int id PK
+    int customerId FK
+    string status "open or closed"
+  }
+```
+
+- Entities: `CUSTOMER`, with a name to show `p["Person"]`, with a name in quotes `"Sports club"`.
+- Attributes, in the braces of an entity: a type and a name, then keys (`PK`, `FK`, `UK`, several
+  with commas) and a comment in quotes.
+- The ends of a relationship: exactly one (`||`, `only one`, `1`) is two bars; zero or one (`|o`
+  before the line, `o|` after it, `zero or one`) a ring and a bar; one or more (`}|`, `|{`,
+  `one or more`, `1+`) a bar and a crow's foot; zero or more (`}o`, `o{`, `zero or more`, `many`,
+  `0+`) a ring and a crow's foot.
+- The line: `--` or `to` identifies, `..` or `optionally to` does not.
+- The label follows a colon, in quotes when it is more than a word; Mermaid asks for one, so the
+  editor writes `""` for none.
+- A `title` in the front matter and a `direction` line are read as in the other types. Mermaid's
+  relationship to a parent (`u`) is left to Mermaid.
 
 ## TAM syntax
 
@@ -239,6 +288,33 @@ api -- reads/writes --> cart
 - A source without positions is laid out automatically, exactly as before. Positions are the only
   addition to the syntax; a protocol's `@` (inside a connection) is not one.
 
+A Mermaid source places its parts with comment lines, so it stays valid Mermaid. They stand as one
+block at the end of the source:
+
+```mermaid
+classDiagram
+  namespace billing {
+    class Invoice
+  }
+  class Order
+  Order --> Invoice : bills
+%% @Order 120,80
+%% @Invoice 60,300
+```
+
+- `%% @<id> <x>,<y>`: the id is that of the part's shape in the scene (a class or state by its id,
+  an empty namespace `ns:billing`, the start of a composite `Review#initial`, a participant
+  `head:Alice`), x and y the top left corner of its box, in whole pixels.
+- A part keeps the size the automatic layout gives it. A group (namespace, composite state, subgraph,
+  system boundary) fits what it holds and needs no place; an empty one has a place of its own.
+- A part without a place stands where the automatic layout puts it, or beside a placed part it
+  would lie on. Wires are not stored: those of the parts that moved are routed again in the style
+  of the type, with their markers, end texts and labels.
+- In a swimlane diagram a node stays in its lane, and the lanes are as long as their nodes. In a
+  sequence diagram only participants take a place and only its x counts: it orders the lifelines
+  and sets the room between them, never less than the messages need; time runs down as written.
+- A source without such lines is laid out automatically, exactly as before.
+
 ## Files
 
 | File                         | Contents                                                                             |
@@ -269,11 +345,18 @@ api -- reads/writes --> cart
 | `src/uml-usecase-layout.ts`  | Use case layout: actors and use cases in columns inside their system boundaries      |
 | `src/uml-usecase-lines.ts`   | Use case lines: straight or curved links and loops                                   |
 | `src/uml-usecase-label.ts`   | Use case line labels: beside the middle of the line, on the side with room           |
+| `src/uml-places.ts`          | Positions in a Mermaid source as text: read, set, remove, follow an edit             |
+| `src/uml-placed.ts`          | Mermaid types laid out by hand: parts at their places, containers, lanes             |
+| `src/uml-placed-wires.ts`    | Mermaid types laid out by hand: the wires of moved parts, markers, labels            |
+| `src/scene-tree.ts`          | What holds what in a scene, read from its geometry                                   |
 | `src/uml-activity.ts`        | Flowcharts and activity diagrams: the parser                                         |
 | `src/structure.ts`           | What an editor needs to change a diagram that lays itself out: parts, pieces, edits  |
 | `src/uml-activity-edit.ts`   | Edits of a flowchart or swimlane source as text, and its `Structure`                 |
 | `src/uml-class-edit.ts`      | Edits of a class diagram source as text, its members, and its `Structure`            |
 | `src/uml-usecase-edit.ts`    | Edits of a use case source as text, and its `Structure`                              |
+| `src/uml-er.ts`              | Entity relationship diagrams: the parser                                             |
+| `src/uml-er-layout.ts`       | Entity relationship layout: attribute columns, crow's foot ends, loops side by side  |
+| `src/uml-er-edit.ts`         | Edits of an entity relationship source as text, attributes, ends, its `Structure`    |
 | `src/uml-state-edit.ts`      | Edits of a state machine source as text, and its `Structure`                         |
 | `src/uml-sequence-edit.ts`   | Edits of a sequence diagram source as text, message order, and its `Structure`       |
 | `src/uml-activity-layout.ts` | Flowchart layout with ELK and the node shapes swimlanes share                        |

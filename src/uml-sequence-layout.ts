@@ -25,13 +25,20 @@ import {
   TAB,
 } from "./lane-frames.ts";
 
+/**
+ * Lays a sequence diagram out. Time runs down in the order of the source; `places` gives
+ * participants (`head:` and their id) the x their heads stand at, which orders the lifelines and
+ * sets the room between them, never less than their messages and notes need.
+ */
 export async function layoutSequenceDiagram(
   diagram: SequenceDiagram,
   measure: Measure,
+  places?: ReadonlyMap<string, Point>,
 ): Promise<Scene> {
   const { frameX, guardRoom, head, headers, ids, labelOf, titleRoom, x, xs } = sequenceLanes(
     diagram,
     measure,
+    places,
   );
   /** Lifelines and the activation bars open now, as intervals a condition must keep clear of. */
   const blockedNow = () => [

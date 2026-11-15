@@ -231,7 +231,10 @@ const structureKeys = (info: TypeInfo): SheetGroup[] => {
     [
       "Layout",
       [
-        ["Automatic", `${info.plural} lay themselves out: parts are not moved by hand`],
+        [
+          "Positions",
+          `${info.plural} lay themselves out until a part is dragged: then every part keeps its place (Arrange ▸ Auto layout lays them out again)`,
+        ],
         [
           "Source",
           "Every change is an edit of the text in the Source section, and the other way round",
@@ -409,6 +412,26 @@ const UML_SYNTAX: Record<Exclude<DiagramType, "tam">, SheetRow[]> = {
     ],
     ["loop every day\n  S->>S: check supply\nend", "A loop, with a message to itself"],
     ["Note over U,S: A note", "A note over participants"],
+  ],
+  er: [
+    ["erDiagram", "The first line: an entity relationship diagram"],
+    ["direction LR", "The way the layout runs: TB, LR, BT or RL"],
+    ["CUSTOMER", "An entity"],
+    [
+      'ORDER {\n  int id PK\n  int customerId FK\n  string status "open or closed"\n}',
+      "Attributes: a type and a name, then PK, FK or UK and a comment in quotes",
+    ],
+    ['ITEM["Order item"] {\n  int orderId PK, FK\n  int position PK\n}', "A name to show"],
+    ["CUSTOMER ||--o{ ORDER : places", "One customer, zero or more orders"],
+    ["ORDER ||--|{ ITEM : contains", "One order, one or more items"],
+    [
+      'CUSTOMER }o..o| ORDER : "last looked at"',
+      "Zero or one with o| and |o; two dots when the relationship does not identify",
+    ],
+    [
+      'ORDER one or more to only one CUSTOMER : "belongs to"',
+      "The same in words: zero or one, zero or more, one or more, only one; to, optionally to",
+    ],
   ],
 };
 
@@ -889,6 +912,17 @@ const THUMBS: Partial<Record<DiagramType, string>> = {
   U->>S: place order
   S->>P: charge
   P-->>S: paid`,
+  er: `erDiagram
+  direction LR
+  CUSTOMER ||--o{ ORDER : places
+  CUSTOMER {
+    int id PK
+    string name
+  }
+  ORDER {
+    int id PK
+    date placed
+  }`,
 };
 
 /** How much wider than high a picture may be to fill the window of a card; any other shows whole. */

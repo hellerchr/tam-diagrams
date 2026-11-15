@@ -1,6 +1,7 @@
 /**
  * tam-diagrams: SAP TAM block diagrams (```tam) and the UML class, use case, activity, state machine
- * and sequence diagrams of Mermaid, laid out with ELK and drawn as standalone SVG in one style.
+ * and sequence diagrams and the entity relationship diagrams of Mermaid, laid out with ELK and drawn
+ * as standalone SVG in one style.
  * Depends only on elkjs. See README.md.
  */
 import { cachedLayout } from "./best.ts";
@@ -26,7 +27,11 @@ import {
 } from "./uml-class.ts";
 import { layoutClassDiagram } from "./uml-class-layout.ts";
 import { parseUseCaseDiagram } from "./uml-usecase.ts";
+import { hasPlaces, readPlaces } from "./uml-places.ts";
+import { placedLayout, placeScene } from "./uml-placed.ts";
 import { layoutUseCaseDiagram } from "./uml-usecase-layout.ts";
+import { parseErDiagram } from "./uml-er.ts";
+import { layoutErDiagram } from "./uml-er-layout.ts";
 
 export { parseTam, TamError, type TamDiagram } from "./tam.ts";
 export { renderTam, type TamPicture } from "./tam-layout.ts";
@@ -82,10 +87,28 @@ const UML_NAMES: Record<UmlKind, string> = {
   swimlane: "Activity diagram",
   usecase: "Use case diagram",
   sequence: "Sequence diagram",
+  er: "Entity relationship diagram",
 };
 
-/** Parses a source of any supported type; throws UmlError on errors and on unsupported syntax. */
+/**
+ * Parses a source of any supported type; throws UmlError on errors and on unsupported syntax. A
+ * source that places its parts (`%% @id x,y`, uml-places.ts) is laid out automatically and then
+ * by hand: every part at its place, at the size the automatic layout gave it.
+ */
 export function parseUml(source: string): ParsedUml {
+  const parsed = parseAutomatic(source);
+  // A sequence diagram takes its places in its own layout: time runs down whatever they say.
+  if (parsed.kind === "sequence" || !hasPlaces(source)) return parsed;
+  return {
+    ...parsed,
+    layout: placedLayout(source, parsed.layout, {
+      lines: parsed.kind === "usecase" ? "straight" : "orthogonal",
+    }),
+  };
+}
+
+/** A source parsed for its automatic layout. */
+function parseAutomatic(source: string): ParsedUml {
   const kind = detectUml(source);
   switch (kind) {
     case "class": {
@@ -117,7 +140,15 @@ export function parseUml(source: string): ParsedUml {
       return {
         kind,
         title: diagram.title,
-        layout: (measure) => layoutSequenceDiagram(diagram, measure),
+        layout: (measure) => layoutSequenceDiagram(diagram, measure, readPlaces(source)),
+      };
+    }
+    case "er": {
+      const diagram = parseErDiagram(source);
+      return {
+        kind,
+        title: diagram.title,
+        layout: (measure, layout) => layoutErDiagram(diagram, measure, { layout }),
       };
     }
     case "swimlane": {
@@ -202,11 +233,15 @@ export async function renderClassView(
     [...shown.collapsed].sort().join(","),
     [...shown.bare].sort().join(","),
   ].join("\u0000");
+  // The classes on show stand where the source places them, as in the whole diagram.
+  const places = readPlaces(source);
+  const laidOut = async (measure: Measure) => {
+    const scene = await layoutClassDiagram(diagram, measure, { layout: options.layout });
+    return places.size ? placeScene(scene, places, measure, { lines: "orthogonal" }) : scene;
+  };
   const scene = await (options.measure
-    ? layoutClassDiagram(diagram, options.measure, { layout: options.layout })
-    : cachedLayout(key, () =>
-        layoutClassDiagram(diagram, textMeasure(colors.font), { layout: options.layout }),
-      ));
+    ? laidOut(options.measure)
+    : cachedLayout(key, () => laidOut(textMeasure(colors.font))));
   return {
     ...picture(scene, colors, full.title || UML_NAMES.class, "class"),
     diagram,

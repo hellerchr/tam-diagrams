@@ -7,7 +7,7 @@ import { HEADER_END, scan, unsupported } from "./uml.ts";
  */
 const STEMS = [
   ...["agentflow-beta", "architecture", "block", "C4Component", "C4Container", "C4Context"],
-  ...["C4Deployment", "C4Dynamic", "cynefin-beta", "erDiagram", "eventmodeling", "gantt"],
+  ...["C4Deployment", "C4Dynamic", "cynefin-beta", "eventmodeling", "gantt"],
   ...["gitGraph", "info", "ishikawa", "journey", "kanban", "mindmap", "packet", "pie"],
   ...["quadrantChart", "radar-beta", "railroad-abnf-beta", "railroad-beta", "railroad-ebnf-beta"],
   ...["railroad-peg-beta", "requirement", "requirementDiagram", "sankey", "timeline", "treemap"],

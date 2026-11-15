@@ -3,7 +3,15 @@
 import { crossesBox, crossesShape } from "./audit.ts";
 import { markerBounds, type MarkerKind, markerPoints } from "./markers.ts";
 import { entryPoint } from "./outline.ts";
-import { centerOf, distance, grow, type Point, type Scene, type SceneShape, unit } from "./scene.ts";
+import {
+  centerOf,
+  distance,
+  grow,
+  type Point,
+  type Scene,
+  type SceneShape,
+  unit,
+} from "./scene.ts";
 
 /** Aims beside the centers (in steps of 9px across the line), so lines into one shape keep their ends apart. */
 const AIMS = [
@@ -102,16 +110,23 @@ function sampleCurve(start: Point, control: Point, end: Point, steps = 24): Poin
   });
 }
 
+/** A curve around a shape passes its box this far from the nearest corner. */
+const PASS = 18;
+
 /**
  * Draws a line between two elements: straight where it hits nothing, else one smooth curve bending
  * around what is in the way, the least bent and least crossing one. The ends meet the outlines
- * exactly, aimed at (or a little beside) the centers. Returns whether it drew one.
+ * exactly, aimed at (or a little beside) the centers. With `around`, curves that pass a corner of
+ * a shape between the two are tried as well: where the elements stand as a hand placed them, a
+ * bend in the middle of the line does not always clear what stands near one end. Returns whether
+ * it drew one.
  */
 export function drawLine(
   scene: Scene,
   shapes: Map<string, SceneShape>,
   link: Link,
   home: Set<string>,
+  around = false,
 ): boolean {
   const a = shapes.get(link.source),
     b = shapes.get(link.target);
@@ -122,23 +137,56 @@ export function drawLine(
     d = unit(ca0, cb0),
     n = { x: -d.y, y: d.x },
     chord = distance(ca0, cb0);
-  const candidates = AIMS.flatMap(([ka, kb]) =>
-    BENDS.filter((bend) => Math.abs(bend) <= Math.max(44, chord / 2)).map((bend) => ({
-      ka,
-      kb,
-      bend,
-      base: Math.abs(bend) + 5 * (Math.abs(ka) + Math.abs(kb)),
-    })),
-  ).toSorted((p, q) => p.base - q.base);
+  const middle = { x: (ca0.x + cb0.x) / 2, y: (ca0.y + cb0.y) / 2 };
+  // The corners of the shapes between the two elements, a little outside them: a curve whose
+  // middle lies on one costs as much as it leaves the straight line there.
+  const corners: { ka: number; kb: number; bend: number; base: number; through?: Point }[] = around
+    ? [...shapes.values()]
+        .filter(
+          (shape) =>
+            shape !== a &&
+            shape !== b &&
+            !shape.container &&
+            crossesBox(ca0, cb0, grow(shape.box, 60)),
+        )
+        .flatMap(({ box }) =>
+          [
+            { x: box.x - PASS, y: box.y - PASS },
+            { x: box.x + box.width + PASS, y: box.y - PASS },
+            { x: box.x - PASS, y: box.y + box.height + PASS },
+            { x: box.x + box.width + PASS, y: box.y + box.height + PASS },
+          ].map((through) => ({
+            ka: 0,
+            kb: 0,
+            bend: 1,
+            base: 10 + 1.5 * distanceToLine(through, ca0, cb0) + 0.2 * distance(through, middle),
+            through,
+          })),
+        )
+    : [];
+  const candidates = [
+    ...AIMS.flatMap(([ka, kb]) =>
+      BENDS.filter((bend) => Math.abs(bend) <= Math.max(44, chord / 2)).map((bend) => ({
+        ka,
+        kb,
+        bend,
+        base: Math.abs(bend) + 5 * (Math.abs(ka) + Math.abs(kb)),
+        through: undefined as Point | undefined,
+      })),
+    ),
+    ...corners,
+  ].toSorted((p, q) => p.base - q.base);
   let best: { cost: number; points: Point[]; control?: Point } | null = null;
-  for (const { ka, kb, bend, base } of candidates) {
+  for (const { ka, kb, bend, base, through } of candidates) {
     if (best && best.cost <= base) break;
     const ca = { x: ca0.x + n.x * ka * 9, y: ca0.y + n.y * ka * 9 },
       cb = { x: cb0.x + n.x * kb * 9, y: cb0.y + n.y * kb * 9 };
     // A quadratic curve's middle lies halfway between the chord and its control point.
-    const control = bend
-      ? { x: (ca.x + cb.x) / 2 + n.x * 2 * bend, y: (ca.y + cb.y) / 2 + n.y * 2 * bend }
-      : undefined;
+    const control = through
+      ? { x: 2 * through.x - middle.x, y: 2 * through.y - middle.y }
+      : bend
+        ? { x: (ca.x + cb.x) / 2 + n.x * 2 * bend, y: (ca.y + cb.y) / 2 + n.y * 2 * bend }
+        : undefined;
     const start = entryPoint(control ?? cb, ca, outline(a), a.box),
       end = entryPoint(control ?? ca, cb, outline(b), b.box);
     if (!start || !end || distance(start, end) < 16) continue;

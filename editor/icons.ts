@@ -3,6 +3,22 @@
 const svg = (body: string) =>
   `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">${body}</svg>`;
 
+/** The crow's foot symbol of an end of a relationship, at the left end of a line across the icon. */
+const CROW_ENDS = {
+  "only-one": '<path d="M4 7v6M6.500 7v6"/>',
+  "zero-or-one":
+    '<path d="M3.500 7v6"/><circle cx="7" cy="10" r="1.700" fill="var(--panel, #fff)"/>',
+  "one-or-more": '<path d="M1 6.500L5.500 10 1 13.500M7 7v6"/>',
+  "zero-or-more":
+    '<path d="M1 6.500L5.500 10 1 13.500"/><circle cx="7.300" cy="10" r="1.700" fill="var(--panel, #fff)"/>',
+};
+
+/** A relationship as its icon: a line with the symbol of each end's cardinality. */
+const crow = (left: keyof typeof CROW_ENDS, right: keyof typeof CROW_ENDS) =>
+  svg(
+    `<path d="M1 10h18"/>${CROW_ENDS[left]}<g transform="translate(20 0) scale(-1 1)">${CROW_ENDS[right]}</g>`,
+  );
+
 export const ICONS = {
   // The shapes of the UML diagrams, for the tiles that add their statements.
   "uml-interface": svg(
@@ -61,6 +77,17 @@ export const ICONS = {
   "uml-loop": svg(
     '<rect x="2.500" y="3.500" width="15" height="13"/><path d="M2.500 8h5l1.500-1.500V3.500"/><path d="M13.500 10.500a2.500 2.500 0 1 1-1-2"/><path d="M12.800 7v1.800h-1.800"/>',
   ),
+  // An entity with its attribute rows, and the relationships by the crow's foot symbols at their ends.
+  "uml-entity": svg(
+    '<rect x="2.500" y="3" width="15" height="14"/><path d="M2.500 7.500h15M5 10.500h2.500M9.500 10.500h5.500M5 13.500h2.500M9.500 13.500h5.500"/>',
+  ),
+  "er-one-to-many": crow("only-one", "zero-or-more"),
+  "er-many-to-one": crow("zero-or-more", "only-one"),
+  "er-one-to-one": crow("only-one", "only-one"),
+  "er-many-to-many": crow("zero-or-more", "zero-or-more"),
+  "er-zero-or-one-to-many": crow("zero-or-one", "zero-or-more"),
+  "er-one-to-one-or-more": crow("only-one", "one-or-more"),
+  "er-one-to-zero-or-one": crow("only-one", "zero-or-one"),
   logo: svg(
     '<rect x="2" y="3" width="7" height="5"/><rect x="11" y="12" width="7" height="5" rx="2.5"/><path d="M5.500 8v6.500h5.500"/>',
   ),
@@ -185,6 +212,9 @@ export const ICONS = {
   ),
   sequence: svg(
     '<rect x="2.500" y="2.500" width="5" height="3"/><rect x="12.500" y="2.500" width="5" height="3"/><path d="M5 5.500v12M15 5.500v12M5 9h10M12.500 7l2.500 2-2.500 2M15 14H5"/>',
+  ),
+  er: svg(
+    '<rect x="1.500" y="4" width="6.500" height="9"/><path d="M1.500 7h6.500"/><rect x="13" y="7" width="5.500" height="9"/><path d="M13 10h5.500M8 10h5M13 8l-2.500 2 2.500 2"/>',
   ),
 } as const;
 

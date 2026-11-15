@@ -13,6 +13,7 @@ import {
   reverseClassRelation,
   ungroupClassPackage,
 } from "../src/uml-class-edit.ts";
+import { erStructure } from "../src/uml-er-edit.ts";
 import {
   connectSequence,
   renameParticipantId,
@@ -66,6 +67,7 @@ const STRUCTURES: Record<string, Structure | undefined> = {
     ungroup: ungroupComposite,
     reid: renameStateId,
   },
+  er: erStructure,
   sequence: {
     ...sequenceStructure,
     join: (source, from, to, kind, after) => connectSequence(source, from, to, kind, { after }),
@@ -79,6 +81,7 @@ export const structureOf = (type: string): Structure | undefined => STRUCTURES[t
 
 /** The drawings of the pieces, by words their kinds contain: the most telling word first. */
 const ICONS: [RegExp, IconName][] = [
+  [/entity/, "uml-entity"],
   [/interface/, "uml-interface"],
   [/abstract/, "uml-abstract"],
   [/enum/, "uml-enum"],
@@ -105,6 +108,13 @@ export const pieceIcon = (kind: string): IconName =>
 
 /** The drawings of the joins, by words their kinds contain. */
 const LINK_ICONS: [RegExp, IconName][] = [
+  [/^one-to-many$/, "er-one-to-many"],
+  [/^many-to-one$/, "er-many-to-one"],
+  [/^one-to-one$/, "er-one-to-one"],
+  [/^many-to-many$/, "er-many-to-many"],
+  [/^zero-or-one-to-many$/, "er-zero-or-one-to-many"],
+  [/^one-to-one-or-more$/, "er-one-to-one-or-more"],
+  [/^one-to-zero-or-one$/, "er-one-to-zero-or-one"],
   [/realiz/, "uml-realize"],
   [/inherit|general/, "uml-inherit"],
   [/aggreg/, "uml-aggregate"],

@@ -22,6 +22,7 @@ import { type Bench, Menus, type PanelName, type Shell } from "./menus.ts";
 import { Minimap } from "./minimap.ts";
 import { Outline, within } from "./outline.ts";
 import { Palette } from "./palette.ts";
+import { GuideSheet } from "./reference-dialog.ts";
 import { declarationLines } from "./completion-uml.ts";
 import type { Problem } from "./document.ts";
 import { SourcePane } from "./source.ts";
@@ -83,6 +84,8 @@ export class Panels {
   private readonly inspector: Inspector;
   private readonly minimap: Minimap;
   private readonly source: SourcePane;
+  /** The reference guide of a diagram type, beside the source. */
+  private readonly guide: GuideSheet;
   /** The lines marked in the source, to mark them again only when they changed. */
   private lines = "";
   /** Set while typed text waits to become the document. */
@@ -177,10 +180,28 @@ export class Panels {
     this.shell = shell;
     this.stage = stage;
     installTooltips();
+    this.guide = new GuideSheet({
+      type: () => editor.type,
+      insert: (text) => this.insert(text),
+      example: (source, at) => {
+        // An empty diagram is replaced at once; one with unsaved changes after the shell asked.
+        if (!editor.doc.source.trim()) shell.replace(source, true);
+        else if (shell.unsaved) shell.replace(source);
+        else
+          popup(
+            [{ name: "Replace the diagram on show", run: () => shell.replace(source, true) }],
+            at,
+            { above: true },
+          );
+      },
+      notify: (message) => this.toast(message),
+      shown: (open) => root.classList.toggle("guide-open", open),
+    });
     const bench: Bench = {
       chooser: () => this.chooser(),
       help: () => helpDialog(editor.type),
       syntax: () => syntaxDialog(editor.type),
+      guide: (page) => (page ? this.guide.open(page) : this.guide.toggle()),
       commands: () => commandDialog(this.menus.commands()),
       autoLayout: () => void this.autoLayout(),
       shows: (panel) => this.shows(panel),
@@ -527,7 +548,16 @@ export class Panels {
       section(
         "source",
         "Source",
-        [this.problems, this.expand],
+        [
+          this.problems,
+          iconButton(
+            "help",
+            { tip: "Guide: the rules and the syntax of this diagram", key: "F1" },
+            () => this.guide.toggle(),
+            "button small",
+          ),
+          this.expand,
+        ],
         sourceBox,
         // Over the foot of the source, so the text stays where it is when a problem comes and goes.
         h("div", { class: "strips" }, this.problem, this.warning),
@@ -560,7 +590,15 @@ export class Panels {
     canvas.addEventListener("pointerleave", () => {
       this.pointer = undefined;
     });
-    root.append(header, rail, this.leftPanel, stage, this.sidePanel, this.status.element);
+    root.append(
+      header,
+      rail,
+      this.leftPanel,
+      stage,
+      this.guide.element,
+      this.sidePanel,
+      this.status.element,
+    );
 
     // What was chosen on an earlier visit.
     const number = (key: string, start: number) => Number(shell.recall(key)) || start;
@@ -656,6 +694,8 @@ export class Panels {
           run = () => commandDialog(this.menus.commands());
         else if (key === "F10" && !command && !event.altKey && !event.shiftKey)
           run = () => this.focusBar();
+        else if (key === "F1" && !command && !event.altKey && !event.shiftKey)
+          run = () => this.guide.toggle();
         else if (event.altKey && !command && !event.shiftKey && /^[a-z]$/.test(key)) {
           // Alt with the first letter of a menu opens it.
           if (dialogOpen() || !this.mnemonic(key)) return;

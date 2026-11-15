@@ -51,7 +51,7 @@ describe("renderSource", () => {
   });
 
   it("marks a Mermaid type the package does not draw as unsupported, at its line", async () => {
-    const error = await rejection(() => renderSource("%% about\nerDiagram\n  A ||--o{ B : has"));
+    const error = await rejection(() => renderSource("%% about\ngantt\n  title A plan"));
     expect(error).toBeInstanceOf(UmlError);
     expect(error).toMatchObject({ line: 2, unsupported: true });
   });

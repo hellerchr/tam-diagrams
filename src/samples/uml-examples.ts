@@ -930,3 +930,232 @@ usecase-beta
   transfer --> core`,
   ],
 ];
+
+/** Entity relationship diagrams: from two entities to an order management schema. */
+export const ER_EXAMPLES: [string, string][] = [
+  [
+    "er: customer and order (minimal)",
+    `erDiagram
+  CUSTOMER ||--o{ ORDER : places`,
+  ],
+  [
+    "er: order example (Mermaid docs)",
+    `---
+title: Order example
+---
+erDiagram
+  CUSTOMER ||--o{ ORDER : places
+  ORDER ||--|{ LINE-ITEM : contains
+  CUSTOMER }|..|{ DELIVERY-ADDRESS : uses
+  CUSTOMER {
+    string name
+    string custNumber
+    string sector
+  }
+  ORDER {
+    int orderNumber
+    string deliveryAddress
+  }
+  LINE-ITEM {
+    string productCode
+    int quantity
+    float pricePerUnit
+  }`,
+  ],
+  [
+    "er: every cardinality",
+    `erDiagram
+  direction LR
+  PERSON ||--|| PASSPORT : holds
+  PERSON |o--o| PARKING-SPACE : rents
+  TEAM }|--|{ PLAYER : fields
+  STUDENT }o--o{ COURSE : attends
+  COUNTRY ||..o{ CITY : "has, apart from the capital"
+  CITY }|..o| MAYOR : elects
+  PASSPORT only one to zero or more VISA : carries
+  PLAYER one or more optionally to zero or one SPONSOR : "is paid by"
+  COURSE 1+ to many(0) LECTURE : "consists of"`,
+  ],
+  [
+    "er: self-relationship and parallel relationships",
+    `erDiagram
+  EMPLOYEE |o--o{ EMPLOYEE : manages
+  EMPLOYEE }o--|| DEPARTMENT : "works in"
+  EMPLOYEE |o..o| DEPARTMENT : heads
+  EMPLOYEE {
+    int id PK
+    string name
+    int managerId FK
+    int departmentId FK
+  }
+  DEPARTMENT {
+    int id PK
+    string name UK
+    int headId FK
+  }
+  FLIGHT }o--|| AIRPORT : "departs from"
+  FLIGHT }o--|| AIRPORT : "arrives at"
+  FLIGHT {
+    string number PK
+    string origin FK
+    string destination FK
+    datetime departure
+  }
+  AIRPORT {
+    string code PK
+    string city
+  }`,
+  ],
+  [
+    "er: aliases, keys and comments",
+    `erDiagram
+  %% Names in the picture are the aliases; relationships use the short ids.
+  p["Person"] {
+    uuid id PK "generated"
+    string firstName
+    string lastName
+    string email UK "one account per address"
+    date born "may be unknown"
+  }
+  a["Postal address"] {
+    uuid id PK
+    uuid personId FK "the person living there"
+    string street
+    string city
+    string postalCode
+  }
+  m["Membership"] {
+    uuid personId PK, FK
+    uuid clubId PK, FK
+    date since
+  }
+  "Sports club" {
+    uuid id PK
+    string name UK
+    varchar(2) country "ISO 3166-1"
+    string[] colours
+  }
+  p ||--o{ a : "lives at"
+  p ||--o{ m : has
+  "Sports club" ||--o{ m : "is joined by"`,
+  ],
+  [
+    "er: library BT with non-identifying relationships",
+    `erDiagram
+  direction BT
+  BOOK }|..|{ AUTHOR : "written by"
+  BOOK }o..|| PUBLISHER : "published by"
+  COPY }|--|| BOOK : "is a copy of"
+  LOAN }o--|| COPY : lends
+  LOAN }o--|| MEMBER : "taken out by"
+  BOOK {
+    string isbn PK
+    string title
+    int year
+  }
+  COPY {
+    int id PK
+    string isbn FK
+    string shelf
+  }
+  LOAN {
+    int id PK
+    int copyId FK
+    int memberId FK
+    date due
+  }
+  MEMBER {
+    int id PK
+    string name
+  }`,
+  ],
+  [
+    "er: order management (large)",
+    `---
+title: Order management
+---
+erDiagram
+  CUSTOMER ||--o{ ORDER : places
+  CUSTOMER ||--|{ ADDRESS : "is reached at"
+  ORDER }o--|| ADDRESS : "ships to"
+  ORDER ||--|{ ORDER-ITEM : contains
+  PRODUCT ||--o{ ORDER-ITEM : "is ordered as"
+  CATEGORY ||--o{ PRODUCT : groups
+  CATEGORY |o--o{ CATEGORY : "is parent of"
+  SUPPLIER ||--o{ PRODUCT : supplies
+  ORDER ||--o{ PAYMENT : "is paid by"
+  ORDER ||--o{ SHIPMENT : "is sent as"
+  SHIPMENT }o..|| CARRIER : "is carried by"
+  ORDER ||--o| INVOICE : "is billed by"
+  CUSTOMER {
+    int id PK
+    string name
+    string email UK
+    date registered
+  }
+  ADDRESS {
+    int id PK
+    int customerId FK
+    string street
+    string city
+    string postalCode
+    string country
+  }
+  ORDER {
+    int id PK
+    int customerId FK
+    int shipToId FK
+    datetime placed
+    string status "open, paid, shipped, closed"
+  }
+  ORDER-ITEM {
+    int orderId PK, FK
+    int position PK
+    int productId FK
+    int quantity
+    decimal unitPrice
+  }
+  PRODUCT {
+    int id PK
+    string sku UK
+    string name
+    int categoryId FK
+    int supplierId FK
+    decimal price
+  }
+  CATEGORY {
+    int id PK
+    string name
+    int parentId FK "empty for a root"
+  }
+  SUPPLIER {
+    int id PK
+    string name
+    string phone
+  }
+  PAYMENT {
+    int id PK
+    int orderId FK
+    decimal amount
+    string method
+    datetime paid
+  }
+  SHIPMENT {
+    int id PK
+    int orderId FK
+    int carrierId FK
+    string trackingNumber UK
+    date shipped
+  }
+  CARRIER {
+    int id PK
+    string name
+  }
+  INVOICE {
+    int id PK
+    int orderId FK, UK
+    date issued
+    decimal total
+  }`,
+  ],
+];

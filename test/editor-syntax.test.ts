@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { TAM_EXAMPLES } from "../src/samples/tam-examples.ts";
 import {
   CLASS_EXAMPLES,
+  ER_EXAMPLES,
   FLOWCHART_EXAMPLES,
   SEQUENCE_EXAMPLES,
   STATE_EXAMPLES,
@@ -19,6 +20,7 @@ const EXAMPLES: [DiagramType, [string, string][]][] = [
   ["swimlane", SWIMLANE_EXAMPLES],
   ["state", STATE_EXAMPLES],
   ["sequence", SEQUENCE_EXAMPLES],
+  ["er", ER_EXAMPLES],
 ];
 
 /** The tokens of the last line of a source, as `text:tag`. */

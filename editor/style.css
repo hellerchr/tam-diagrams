@@ -2240,3 +2240,307 @@ code.id {
     justify-content: flex-end;
   }
 }
+
+/* The guide sheet: the reference of a diagram type, between the canvas and the source. It takes its
+   room from the canvas while that leaves enough of it, and lies over the canvas in a small window. */
+
+.guide {
+  grid-area: stage;
+  justify-self: end;
+  z-index: 7;
+  display: flex;
+  flex-direction: column;
+  width: min(var(--guide, 440px), 100%);
+  min-height: 0;
+  background: var(--raised);
+  border-left: 1px solid var(--line);
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.app.guide-open .stage {
+  margin-right: clamp(0px, calc(100% - 320px), var(--guide, 440px));
+}
+
+.guide-head {
+  display: flex;
+  align-items: center;
+  flex: none;
+  gap: 6px;
+  height: 36px;
+  padding: 0 4px 0 10px;
+  background: var(--panel-2);
+  border-bottom: 1px solid var(--line);
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.guide-head h2 {
+  font: inherit;
+  font-weight: 600;
+}
+
+.guide-head .field.choice {
+  flex: 1;
+  height: 24px;
+}
+
+.guide-tools {
+  display: flex;
+  align-items: center;
+  flex: none;
+  gap: 8px;
+  padding: 8px 12px 6px;
+}
+
+.guide-tools .field {
+  flex: 1;
+  height: 24px;
+}
+
+.guide-count {
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.guide-count:empty {
+  display: none;
+}
+
+.guide-nav {
+  display: flex;
+  flex-wrap: wrap;
+  flex: none;
+  gap: 4px;
+  padding: 0 12px 8px;
+  border-bottom: 1px solid var(--line);
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.guide-link {
+  height: 20px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--panel-2);
+  color: var(--text-2);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.guide-link:hover {
+  background: var(--active);
+  color: var(--text);
+}
+
+.guide-body {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  padding: 0 12px 32px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--line-strong) transparent;
+  line-height: 17px;
+}
+
+.guide-body h3 {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  margin: 0 -12px 6px;
+  padding: 14px 12px 6px;
+  background: var(--raised);
+  color: var(--text-2);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.guide-prose {
+  margin-bottom: 8px;
+}
+
+.guide-rules {
+  margin: 0 0 4px;
+  padding-left: 16px;
+}
+
+.guide-rules li {
+  margin-bottom: 5px;
+}
+
+.guide-rules li::marker {
+  color: var(--text-3);
+}
+
+.guide code {
+  color: var(--syntax-word);
+  font-size: 11.5px;
+}
+
+/* A row: what is written beside what it means; long code stands above its meaning. */
+
+.guide-row {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 9fr) minmax(0, 11fr);
+  align-items: baseline;
+  gap: 2px 12px;
+  /* At the right the room of the buttons that show with the pointer or the focus on the row. */
+  padding: 5px 56px 5px 6px;
+  border-top: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
+  outline: none;
+}
+
+.guide-row.wide {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.guide-row:hover,
+.guide-row:focus {
+  background: var(--panel);
+}
+
+.guide-row:focus-visible {
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+
+.guide .guide-code {
+  color: var(--text);
+  line-height: 17px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.guide-rows.refused .guide-row {
+  border-left: 2px solid color-mix(in srgb, var(--danger) 55%, transparent);
+}
+
+.guide-acts {
+  position: absolute;
+  top: 1px;
+  right: 2px;
+  display: none;
+  gap: 1px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--raised);
+  box-shadow: var(--shadow);
+}
+
+.guide-row:hover .guide-acts,
+.guide-row:focus .guide-acts,
+.guide-row:focus-within .guide-acts {
+  display: flex;
+}
+
+.guide-example pre {
+  margin: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--field);
+  overflow-x: auto;
+}
+
+.guide-example .guide-code {
+  white-space: pre;
+}
+
+.guide-example-acts {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+/* The colors of the source pane. */
+
+.guide .tok-comment {
+  color: var(--text-2);
+  font-style: italic;
+}
+
+.guide .tok-keyword {
+  color: var(--syntax-keyword);
+  font-weight: 600;
+}
+
+.guide .tok-string,
+.guide .tok-meta {
+  color: var(--syntax-string);
+}
+
+.guide .tok-meta,
+.guide .tok-annotation {
+  font-style: italic;
+}
+
+.guide .tok-number,
+.guide .tok-atom,
+.guide .tok-annotation {
+  color: var(--syntax-number);
+}
+
+.guide .tok-typeName {
+  color: var(--syntax-word);
+}
+
+.guide .tok-modifier {
+  color: var(--syntax-keyword);
+}
+
+.guide .tok-operator,
+.guide .tok-punctuation {
+  color: var(--text-2);
+}
+
+/* The list of all guides. */
+
+.guide-index {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-top: 8px;
+}
+
+.guide-entry {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 8px;
+  border: 0;
+  border-radius: var(--radius);
+  background: none;
+  text-align: left;
+  cursor: pointer;
+}
+
+.guide-entry:hover {
+  background: var(--hover);
+}
+
+.guide-entry strong,
+.guide-entry .note {
+  display: block;
+}
+
+.guide-entry strong {
+  font-weight: 600;
+}
+
+:is(.guide-link, .guide-entry):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* Code inside a sentence stays whole: no line breaks at the dashes of an arrow. */
+
+.guide-means code,
+.guide-prose code,
+.guide-rules code {
+  white-space: nowrap;
+}

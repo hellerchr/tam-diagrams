@@ -119,10 +119,10 @@ describe("check", () => {
   });
 
   it("exits 1 for an unsupported Mermaid type, worded by the library, no hint", async () => {
-    const port = memoryIo({ "er.md": "erDiagram\n  A ||--o{ B : has" });
-    const message = "erDiagram is drawn by Mermaid, not the built-in renderer.";
-    expect(await main(["check", "er.md"], port.io)).toBe(1);
-    expect(port.stderr()).toBe(`er.md:1: ${message}\n`);
+    const port = memoryIo({ "pie.md": 'pie\n  "a" : 1' });
+    const message = "pie is drawn by Mermaid, not the built-in renderer.";
+    expect(await main(["check", "pie.md"], port.io)).toBe(1);
+    expect(port.stderr()).toBe(`pie.md:1: ${message}\n`);
   });
 });
 

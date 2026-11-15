@@ -5,13 +5,15 @@
 
 import { drawScene, type DiagramColors } from "../src/draw.ts";
 import type { ElkLayout } from "../src/elk.ts";
-import type { Scene } from "../src/scene.ts";
+import { overlaps, type Scene } from "../src/scene.ts";
 import { isPlaced, parseTam, TamError, type TamDiagram } from "../src/tam.ts";
 import { bestLayout, layoutPlaced } from "../src/tam-layout.ts";
 import { layoutWithin, overlapping, pin } from "../src/tam-pin.ts";
 import type { Measure } from "../src/text.ts";
 import { parseUml } from "../src/index.ts";
 import { UmlError } from "../src/uml.ts";
+import { keepAutomatic, placesOf } from "../src/uml-placed.ts";
+import { hasPlaces, prunePlaces, setPlaces } from "../src/uml-places.ts";
 import type { StructureEdge, StructureNode } from "../src/structure.ts";
 import { structureOf } from "./structures.ts";
 import { type DiagramType, typeInfo, typeOf } from "./types.ts";
@@ -82,6 +84,19 @@ function structureDiagram(nodes: StructureNode[], edges: StructureEdge[]): TamDi
   return diagram;
 }
 
+/** The parts of a scene placed by hand that lie on each other: pairs of shape ids. */
+function lyingOn(scene: Scene): [string, string][] {
+  const parts = scene.shapes.filter(
+    (shape) => !shape.container && !shape.passable && shape.kind !== "region",
+  );
+  return parts.flatMap((a, index) =>
+    parts
+      .slice(index + 1)
+      .filter((b) => overlaps(a.box, b.box, 0.5))
+      .map((b): [string, string] => [a.id, b.id]),
+  );
+}
+
 /** Steps of one run made within this many milliseconds of each other are undone together. */
 const RUN = 1200;
 
@@ -100,6 +115,8 @@ export class Doc {
   private undone: string[] = [];
   private redone: string[] = [];
   private run = 0;
+  /** The picture of a UML source shown last that was no preview: what cancelling a preview returns to. */
+  private shown: Picture | undefined;
   /** The run the last step belonged to, and when it was made. */
   private lastRun: string | undefined;
   private lastTime = 0;
@@ -126,32 +143,47 @@ export class Doc {
     };
   }
 
+  /**
+   * The picture of a UML source: parsed and laid out by its own type, with the parts and joins of
+   * its structure, which are selected and changed on the canvas. Throws what the parser throws;
+   * `ready` is called once the source is known to parse, before the layout.
+   */
+  private async umlPicture(source: string, ready: () => void = () => {}): Promise<Picture> {
+    const type = typeOf(source),
+      parsed = parseUml(source);
+    const structure = structureOf(type)?.read(source),
+      diagram = structure ? structureDiagram(structure.nodes, structure.edges) : NO_DIAGRAM();
+    ready();
+    const scene = await parsed.layout(this.measure, this.elk),
+      placed = hasPlaces(source);
+    // Its parts are moved from where the automatic layout shows them.
+    if (!placed && structure) keepAutomatic(source, this.measure, scene);
+    return {
+      source,
+      diagram,
+      scene,
+      placed,
+      overlaps: placed ? lyingOn(scene) : [],
+      type: parsed.kind,
+      title: parsed.title,
+      parts: new Map(structure?.nodes.map((node) => [node.id, node])),
+      joins: new Map(structure?.edges.map((edge) => [edge.id, edge])),
+    };
+  }
+
   /** Shows a source's picture: at once when it is placed, after the automatic layout else. */
   private async show(source: string): Promise<void> {
     const run = ++this.run;
     try {
       const type = typeOf(source);
       if (type !== "tam") {
-        // A UML source: parsed and laid out by its own type; the picture is to look at.
-        const parsed = parseUml(source);
-        // The parts and joins of a diagram with a structure are selected and changed on the canvas.
-        const structure = structureOf(type)?.read(source),
-          diagram = structure ? structureDiagram(structure.nodes, structure.edges) : NO_DIAGRAM();
-        this.problem = undefined;
-        this.onChange();
-        const scene = await parsed.layout(this.measure, this.elk);
+        const picture = await this.umlPicture(source, () => {
+          this.problem = undefined;
+          this.onChange();
+        });
         if (run !== this.run) return;
-        this.picture = {
-          source,
-          diagram,
-          scene,
-          placed: false,
-          overlaps: [],
-          type: parsed.kind,
-          title: parsed.title,
-          parts: new Map(structure?.nodes.map((node) => [node.id, node])),
-          joins: new Map(structure?.edges.map((edge) => [edge.id, edge])),
-        };
+        this.picture = picture;
+        this.shown = picture;
         this.onChange();
         return;
       }
@@ -219,6 +251,7 @@ export class Doc {
 
   /** Shows a placed source without committing it: the state of a gesture under way. False when it does not parse. */
   preview(source: string): boolean {
+    if (typeOf(source) !== "tam") return this.previewUml(source);
     try {
       this.picture = this.layout(source);
     } catch {
@@ -229,9 +262,36 @@ export class Doc {
     return true;
   }
 
+  /**
+   * Shows a placed UML source without committing it. Its picture comes a moment later: the layout
+   * by hand starts from the automatic scene that is kept, so it waits for no layout engine.
+   */
+  private previewUml(source: string): boolean {
+    try {
+      parseUml(source);
+    } catch {
+      return false;
+    }
+    const run = ++this.run;
+    void this.umlPicture(source).then(
+      (picture) => {
+        if (run !== this.run) return;
+        this.picture = picture;
+        this.onChange();
+      },
+      () => {},
+    );
+    return true;
+  }
+
   /** Ends a preview without committing it. */
   cancel() {
-    void this.show(this.source);
+    // The picture of the committed source is at hand unless the source changed since.
+    if (this.shown?.source === this.source && !this.problem) {
+      this.run++;
+      this.picture = this.shown;
+      this.onChange();
+    } else void this.show(this.source);
   }
 
   get canUndo() {
@@ -268,6 +328,24 @@ export class Doc {
       return undefined;
     if (picture.placed && allPlaced(picture.diagram)) return this.source;
     return pin(this.source, picture.scene, this.measure);
+  }
+
+  /**
+   * The committed source of a diagram with a structure with every part placed where the picture
+   * shows it (`%% @id x,y`), and without the places of parts that are gone: what moving a part
+   * starts from. Undefined while there is no picture of the committed source.
+   */
+  pinnedSource(): string | undefined {
+    const { picture } = this;
+    if (this.problem || !picture || picture.source !== this.source || !picture.parts?.size)
+      return undefined;
+    return setPlaces(
+      prunePlaces(
+        this.source,
+        picture.scene.shapes.map((shape) => shape.id),
+      ),
+      placesOf(picture.scene),
+    );
   }
 
   /** Lays some elements of the placed source out automatically among themselves: see `layoutWithin`. */

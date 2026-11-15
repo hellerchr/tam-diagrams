@@ -4,7 +4,12 @@ import type { Box, Point } from "./scene.ts";
 
 export const round1 = (value: number) => Math.round(value * 10) / 10;
 
-/** `socket`: the half circle of a required interface, around the point the wire ends at. */
+/**
+ * `socket`: the half circle of a required interface, around the point the wire ends at. The last
+ * four are the crow's foot symbols of entity relationship diagrams, drawn on the wire where it
+ * meets an entity: two bars for exactly one, a ring and a bar for zero or one, a bar and a crow's
+ * foot for one or more, a ring and a crow's foot for zero or more.
+ */
 export type MarkerKind =
   | "arrow"
   | "open"
@@ -13,7 +18,32 @@ export type MarkerKind =
   | "filled-diamond"
   | "cross"
   | "circle"
-  | "socket";
+  | "socket"
+  | "only-one"
+  | "zero-or-one"
+  | "one-or-more"
+  | "zero-or-more";
+
+/**
+ * The measures of the crow's foot symbols, along the wire back from the entity and across it:
+ * half the width of a bar and of the foot, how far the foot reaches back, where the bars and the
+ * ring stand, and the ring's radius.
+ */
+const CROW = { half: 6.5, foot: 12, near: 6, far: 11, behind: 16, ring: 4 };
+
+/** What each crow's foot symbol is made of, from the entity outward. */
+const CROW_PARTS: Record<string, { foot: boolean; bars: number[]; ring?: number }> = {
+  "only-one": { foot: false, bars: [CROW.near, CROW.far] },
+  "zero-or-one": { foot: false, bars: [CROW.near], ring: CROW.far + CROW.ring + 0.5 },
+  "one-or-more": { foot: true, bars: [CROW.behind] },
+  "zero-or-more": { foot: true, bars: [], ring: CROW.foot + CROW.ring + 0.5 },
+};
+
+/** How far a crow's foot symbol reaches back along its wire. */
+const crowLength = (kind: string) => {
+  const { foot, bars, ring } = CROW_PARTS[kind];
+  return Math.max(foot ? CROW.foot : 0, ...bars, ring ? ring + CROW.ring : 0);
+};
 
 /** Radius of a socket's half circle. */
 export const SOCKET = 9;
@@ -28,12 +58,17 @@ export const MARKER_LENGTH: Record<MarkerKind, number> = {
   cross: 4,
   circle: 5,
   socket: SOCKET,
+  "only-one": crowLength("only-one"),
+  "zero-or-one": crowLength("zero-or-one"),
+  "one-or-more": crowLength("one-or-more"),
+  "zero-or-more": crowLength("zero-or-more"),
 };
 
 /**
  * How far before the anchor the wire's stroke stops, so it never pokes through a head: at the notch
  * of filled heads, inside the apex of open heads, at the base of hollow shapes. Wires run to the
- * center of crosses and circles (a circle's fill covers the wire).
+ * center of crosses and circles (a circle's fill covers the wire), and through the crow's foot
+ * symbols to the entity.
  */
 export const MARKER_TRIM: Record<MarkerKind, number> = {
   arrow: 6.5,
@@ -44,6 +79,10 @@ export const MARKER_TRIM: Record<MarkerKind, number> = {
   cross: 0,
   circle: 0,
   socket: SOCKET,
+  "only-one": 0,
+  "zero-or-one": 0,
+  "one-or-more": 0,
+  "zero-or-more": 0,
 };
 
 const at = (tip: Point, d: Point, back: number, side = 0): Point => ({
@@ -105,6 +144,19 @@ export function markerPoints(kind: MarkerKind, tip: Point, d: Point, small = fal
         const angle = Math.atan2(-d.y, -d.x) - Math.PI / 2 + (k * Math.PI) / 8;
         return { x: tip.x + SOCKET * Math.cos(angle), y: tip.y + SOCKET * Math.sin(angle) };
       });
+    // The box around the symbol: from the entity back to its last stroke, as wide as its bars.
+    case "only-one":
+    case "zero-or-one":
+    case "one-or-more":
+    case "zero-or-more": {
+      const length = crowLength(kind);
+      return [
+        at(tip, d, 0, CROW.half),
+        at(tip, d, length, CROW.half),
+        at(tip, d, length, -CROW.half),
+        at(tip, d, 0, -CROW.half),
+      ];
+    }
   }
 }
 
@@ -148,5 +200,25 @@ export function markerSvg(
       return `<circle cx="${round1(tip.x)}" cy="${round1(tip.y)}" r="4.5" fill="${behind}" stroke="${ink}" stroke-width="1.3"/>`;
     case "socket":
       return `<path d="M${round1(points[0].x)} ${round1(points[0].y)}A${SOCKET} ${SOCKET} 0 0 1 ${round1(points.at(-1)!.x)} ${round1(points.at(-1)!.y)}" fill="none" stroke="${ink}" stroke-width="1.4"/>`;
+    case "only-one":
+    case "zero-or-one":
+    case "one-or-more":
+    case "zero-or-more": {
+      const { foot, bars, ring } = CROW_PARTS[kind];
+      // The foot spreads from a point on the wire to the entity's outline, on both sides of the wire.
+      const strokes = [
+        ...bars.map((back) => [at(tip, d, back, CROW.half), at(tip, d, back, -CROW.half)]),
+        ...(foot
+          ? [[at(tip, d, 0, CROW.half), at(tip, d, CROW.foot), at(tip, d, 0, -CROW.half)]]
+          : []),
+      ];
+      const center = ring ? at(tip, d, ring) : undefined;
+      return (
+        `<path d="${strokes.map((stroke) => path(stroke, false)).join("")}" fill="none" stroke="${ink}" stroke-width="1.3" stroke-linejoin="round" stroke-linecap="round"/>` +
+        (center
+          ? `<circle cx="${round1(center.x)}" cy="${round1(center.y)}" r="${CROW.ring}" fill="${behind}" stroke="${ink}" stroke-width="1.3"/>`
+          : "")
+      );
+    }
   }
 }

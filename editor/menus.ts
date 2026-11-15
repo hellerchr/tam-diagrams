@@ -12,7 +12,8 @@ import type { Arrangement } from "./guides.ts";
 import type { IconName } from "./icons.ts";
 import { ageOf, type Recent } from "./files.ts";
 import { type MenuEntry, type MenuItem, refusal } from "./menu.ts";
-import { kindName, TYPES, typeInfo, typeOf } from "./types.ts";
+import { GUIDES, guideOf } from "./reference.ts";
+import { type DiagramType, kindName, TYPES, typeInfo, typeOf } from "./types.ts";
 
 /** How the page follows light and dark: one of them, or the system's choice. */
 export type ThemeChoice = "light" | "dark" | "system";
@@ -54,6 +55,11 @@ export interface Bench {
   chooser(): void;
   help(): void;
   syntax(): void;
+  /**
+   * Opens the reference guide of a diagram type, or the list of all guides. Without a type it
+   * opens the guide of the diagram on show, and closes that guide when it is open.
+   */
+  guide(page?: DiagramType | "all"): void;
   /** Opens the list of all commands, to pick one by typing. */
   commands(): void;
   readonly minimap: boolean;
@@ -209,7 +215,7 @@ export class Menus {
     this.bench = bench;
   }
 
-  /** The menus of the bar, in their order. Arrange is off in a diagram that lays itself out. */
+  /** The menus of the bar, in their order. Arrange is off in a diagram that is edited as text. */
   bar(): BarMenu[] {
     const { editor } = this,
       info = typeInfo(editor.type);
@@ -220,11 +226,7 @@ export class Menus {
       {
         name: "Arrange",
         items: () => this.arrange(),
-        off: editor.editable
-          ? undefined
-          : editor.structural
-            ? `${info.plural} lay themselves out: there is nothing to arrange`
-            : `${info.plural} are edited as text`,
+        off: editor.editable || editor.structural ? undefined : `${info.plural} are edited as text`,
       },
       { name: "Help", items: () => this.help() },
     ];
@@ -269,7 +271,12 @@ export class Menus {
       path: "View",
       run: () => editor.view.zoomTo(percent / 100),
     }));
-    return [...this.menuCommands(), ...tools, ...shapes, ...zooms];
+    const guides: Command[] = GUIDES.map((guide) => ({
+      name: `Guide: ${guide.name}`,
+      path: "Help",
+      run: () => bench.guide(guide.type),
+    }));
+    return [...this.menuCommands(), ...guides, ...tools, ...shapes, ...zooms];
   }
 
   /** Every command of the bar's menus, each with the menus that lead to it. */
@@ -477,7 +484,11 @@ export class Menus {
       },
       "line",
       // Only elements placed by hand snap to anything.
-      editor.editable && { name: "Snap", checked: editor.snapping, run: () => bench.toggleSnap() },
+      (editor.editable || editor.structural) && {
+        name: "Snap",
+        checked: editor.snapping,
+        run: () => bench.toggleSnap(),
+      },
       { name: "Grid", checked: editor.view.grid, run: () => bench.toggleGrid() },
       { name: "Minimap", checked: bench.minimap, run: () => bench.toggleMinimap() },
       "line",
@@ -598,6 +609,12 @@ export class Menus {
         name: info.type === "tam" ? "TAM syntax" : `${info.name} syntax`,
         run: () => bench.syntax(),
       },
+      {
+        name: `${guideOf(info.type)?.name ?? info.name} guide`,
+        key: "F1",
+        run: () => bench.guide(),
+      },
+      { name: "All guides", run: () => bench.guide("all") },
       "line",
       { name: "All commands…", key: "Ctrl+K", run: () => bench.commands() },
     ];

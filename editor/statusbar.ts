@@ -200,10 +200,10 @@ export class StatusBar {
       .join(", ");
     this.selection.hidden = !elements && !wires;
     const placed = !!doc.picture?.placed && doc.picture.diagram.nodes.size > 0;
-    this.mode.parentElement!.hidden = !editor.editable;
+    this.mode.parentElement!.hidden = !editor.editable && !editor.structural;
     this.mode.firstElementChild!.textContent = placed ? "Manual positions" : "Auto layout";
     this.mode.dataset.tip = placed
-      ? "Elements stand where the source places them (@x,y). Click for Auto layout."
+      ? `Parts stand where the source places them (${editor.structural ? "%% @id x,y" : "@x,y"}). Click for Auto layout.`
       : "No element is placed: the layout is automatic until one is moved.";
     this.mode.dataset.side = "top";
     this.snap.setAttribute("aria-pressed", String(editor.snapping));

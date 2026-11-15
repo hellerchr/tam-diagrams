@@ -17,20 +17,20 @@ const GENERIC = "This diagram type is drawn by Mermaid, not the built-in rendere
 
 describe("Mermaid types this package does not draw", () => {
   const sources: [string, string, string, number][] = [
-    ["erDiagram", "erDiagram\n  A ||--o{ B : has", "erDiagram", 1],
+    ["journey", "journey\n  title A working day", "journey", 1],
     ["pie with data", 'pie\n  "a" : 1', "pie", 1],
     ["pie title", "pie title Pets", "pie", 1],
     ["pie showData", "pie showData", "pie", 1],
     ["gitGraph direction", "gitGraph LR:", "gitGraph", 1],
     ["gantt after frontmatter", "---\ntitle: Plan\n---\ngantt\n  title Plan", "gantt", 4],
-    ["erDiagram after a directive", "%%{init: {}}%%\n\nerDiagram", "erDiagram", 3],
-    ["erDiagram after a multi-line directive", "%%{\n  init: {}\n}%%\nerDiagram", "erDiagram", 4],
+    ["gantt after a directive", "%%{init: {}}%%\n\ngantt", "gantt", 3],
+    ["gantt after a multi-line directive", "%%{\n  init: {}\n}%%\ngantt", "gantt", 4],
     ["architecture-beta", "architecture-beta", "architecture-beta", 1],
     ["xychart-beta", "xychart-beta", "xychart-beta", 1],
     ["C4Context", "C4Context", "C4Context", 1],
     ["info", "info", "info", 1],
-    ["erDiagram over 400 lines", "erDiagram" + "\n  A ||--o{ B : has".repeat(500), "erDiagram", 1],
-    ["erDiagram over 20,000 characters", "erDiagram\n" + "x".repeat(30_000), "erDiagram", 1],
+    ["gantt over 400 lines", "gantt" + "\n  Task : a, 1d".repeat(500), "gantt", 1],
+    ["gantt over 20,000 characters", "gantt\n" + "x".repeat(30_000), "gantt", 1],
   ];
 
   it.each(sources)("raises the unsupported UmlError for %s", async (_name, source, word, line) => {

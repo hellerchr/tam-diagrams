@@ -695,6 +695,96 @@ function usecaseStatement(stream: StringStream, state: SyntaxState): string | nu
   return null;
 }
 
+const ER_NAME = /^("[^"]*"?|[\p{L}\p{N}_][\p{L}\p{N}_.-]*)/u;
+
+/** The cardinalities of a relationship's ends, as symbols and in words, and the ways its line is written. */
+const ER_CARDINALITY =
+  /^(\|\||\|o|o\||\}\||\|\{|\}o|o\{|(?:one or zero|zero or one|one or more|one or many|many\(1\)|1\+|zero or more|zero or many|many\(0\)|0\+|many|only one|one|1)(?![\p{L}\p{N}_]))/u;
+
+const ER_LINE = /^(--|\.\.|\.-|-\.|(?:optionally to|to)(?![\p{L}\p{N}_]))/u;
+
+const ER_KEY = /^(PK|FK|UK)(?![\p{L}\p{N}_])/u;
+
+/** An attribute in the block of an entity: its type, its name, its keys and its comment. */
+function erAttribute(stream: StringStream, state: SyntaxState): string | null {
+  state.start = false;
+  if (stream.eat("}")) {
+    state.body = false;
+    state.blocks.pop();
+    return "punctuation";
+  }
+  if (stream.match(/^"[^"]*"?/)) {
+    state.phase = "";
+    return "string";
+  }
+  if (stream.eat(",")) return "punctuation";
+  if (state.phase === "attribute-keys" && stream.match(ER_KEY)) return "modifier";
+  if (stream.match(/^[^\s,"}]+/)) {
+    const name = state.phase === "attribute-name";
+    state.phase = name ? "attribute-keys" : "attribute-name";
+    return name ? "propertyName" : "typeName";
+  }
+  stream.next();
+  return null;
+}
+
+/** The statements of an entity relationship diagram: entities with their attributes, and relationships. */
+function erStatement(stream: StringStream, state: SyntaxState): string | null {
+  if (state.body) return erAttribute(stream, state);
+  const first = state.start;
+  if (first) {
+    state.start = false;
+    if (styling(stream, state, /^(classDef|class|style|linkStyle|click|callback|link)(?=\s)/))
+      return "keyword";
+  }
+  const marked = mark(stream);
+  if (marked) return marked;
+  // The alias of an entity, in brackets behind its name.
+  if (state.after && stream.match(/^\[[^\]]*\]?/)) return "string";
+  state.after = false;
+  const name = () => {
+    if (!stream.match(ER_NAME)) return null;
+    state.want = "edge";
+    state.after = true;
+    // A line that only names an entity declares it.
+    return first &&
+      /^\s*("[^"]*"|[^\s"[{:]+)\s*(\[[^\]]*\]?)?\s*(:::[\w,-]*)?\s*(\{.*)?$/.test(stream.string)
+      ? "variableName.definition"
+      : "variableName";
+  };
+  const relation = () => {
+    if (stream.match(ER_LINE)) {
+      state.arrow = true;
+      return "operator";
+    }
+    if (!stream.match(ER_CARDINALITY)) return null;
+    // The cardinality behind the line is the last piece before the second entity.
+    if (state.arrow) state.want = "node";
+    return "operator";
+  };
+  // After an entity a cardinality comes before a brace, so that `}o` is not read as the end of a block.
+  const edge = state.want === "edge" ? relation() : null;
+  if (edge) return edge;
+  if (stream.eat("{")) {
+    state.blocks.push("entity");
+    state.body = true;
+    state.phase = "";
+    return "punctuation";
+  }
+  if (stream.eat("}")) {
+    state.blocks.pop();
+    return "punctuation";
+  }
+  const tag = state.want === "node" ? (name() ?? relation()) : name();
+  if (tag) return tag;
+  if (stream.eat(":")) {
+    state.phase = "text";
+    return "punctuation";
+  }
+  stream.next();
+  return null;
+}
+
 const KINDS = new Set<string>(ELEMENT_KINDS);
 
 const TAM_HEADERS = new Set(["title", "direction", "level"]);
@@ -762,6 +852,7 @@ const TOKENIZERS: Record<DiagramType, StreamParser<SyntaxState>> = {
   swimlane: mermaid(new RegExp(`^swimlane-beta${boundary}`), true, flowStatement),
   sequence: mermaid(new RegExp(`^sequenceDiagram${boundary}`), false, sequenceStatement),
   usecase: mermaid(new RegExp(`^usecase-beta${boundary}`), false, usecaseStatement),
+  er: mermaid(new RegExp(`^erDiagram${boundary}`), false, erStatement, /^\s*\}$/),
 };
 
 /**
@@ -801,6 +892,7 @@ function opens(type: DiagramType, line: string): boolean {
   switch (type) {
     case "tam":
     case "class":
+    case "er":
       return /\{\s*$/.test(line);
     case "state":
       return /\{\s*$/.test(line) || /^\s*note\s+(left|right)\s+of\s+[^:]+$/i.test(line);
@@ -821,6 +913,7 @@ function closes(type: DiagramType, line: string): boolean {
   switch (type) {
     case "tam":
     case "class":
+    case "er":
       return /^\s*\}/.test(line);
     case "state":
       return /^\s*(\}|end\s+note\s*$)/i.test(line);
@@ -842,7 +935,7 @@ export function indentChange(type: DiagramType, before: string, line: string): n
 }
 
 const HEADER =
-  /^\s*(classDiagram(-v2)?|stateDiagram(-v2)?|flowchart(-elk)?|graph|swimlane-beta|usecase-beta|sequenceDiagram)(?![\w-])/;
+  /^\s*(classDiagram(-v2)?|stateDiagram(-v2)?|flowchart(-elk)?|graph|swimlane-beta|usecase-beta|sequenceDiagram|erDiagram)(?![\w-])/;
 
 /**
  * The indentation of a line: that of the line before it, moved by the blocks the two open and
@@ -916,7 +1009,7 @@ const CLOSERS = /^[)\]}|"']+\s*$/;
 export function pastClosers(type: DiagramType, line: string, column: number): number | undefined {
   const rest = line.slice(column);
   if (!CLOSERS.test(rest) || !line.slice(0, column).trim()) return undefined;
-  const block = type === "tam" || type === "class" || type === "state";
+  const block = type === "tam" || type === "class" || type === "state" || type === "er";
   if (block && rest.startsWith("}") && /\{\s*$/.test(line.slice(0, column))) return undefined;
   return column + rest.trimEnd().length;
 }
@@ -930,7 +1023,7 @@ export function braceBelow(
   type: DiagramType,
   state: EditorState,
 ): { from: number; to: number; cursor: number } | undefined {
-  if (type !== "tam" && type !== "class" && type !== "state") return undefined;
+  if (type !== "tam" && type !== "class" && type !== "state" && type !== "er") return undefined;
   const range = state.selection.main,
     line = state.doc.lineAt(range.head);
   if (!range.empty || line.text.trim() || line.number === state.doc.lines) return undefined;

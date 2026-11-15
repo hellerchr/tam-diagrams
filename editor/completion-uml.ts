@@ -203,6 +203,8 @@ function namedIn(type: DiagramType, source: string): Named[] {
           !!special,
           !!special || defined,
         );
+      } else if (type === "er") {
+        add(text(token).replace(/^"|"$/g, ""), "uml-class", unwrap(label), false, defined);
       } else if (type === "sequence") {
         const alias = tokens[index + 2]?.tag === "string" ? text(tokens[index + 2]) : "";
         add(
@@ -344,6 +346,150 @@ function completeClass(cursor: Cursor): CompletionResult | null {
     !before.includes(":")
   )
     return result(cursor.at(match[1].length), elements(cursor.ids()), /^[\p{L}\p{N}_.]*$/u);
+  return null;
+}
+
+/** An entity as an option: a name with spaces is written in quotes. */
+const entity = (item: Known): Completion => ({
+  ...element(item),
+  ...(/^[\p{L}_][\p{L}\p{N}_-]*$/u.test(item.id) ? {} : { apply: `"${item.id}"` }),
+  detail: (item.label !== item.id && item.label) || "entity",
+});
+
+const ER_RELATIONS = arrows([
+  ["||--o{", "one to zero or more"],
+  ["||--|{", "one to one or more"],
+  ["}o--||", "zero or more to one"],
+  ["}|--||", "one or more to one"],
+  ["||--||", "one to one"],
+  ["||--o|", "one to zero or one"],
+  ["|o--o{", "zero or one to zero or more"],
+  ["}o--o{", "zero or more to zero or more"],
+  ["}|--|{", "one or more to one or more"],
+  ["||..o{", "one to zero or more, not identifying"],
+  ["}o..||", "zero or more to one, not identifying"],
+  ["|o..o|", "zero or one to zero or one, not identifying"],
+  ["}o..o{", "zero or more to zero or more, not identifying"],
+]);
+
+/** The cardinality behind the line of a relationship: how many of the second entity. */
+const ER_ENDS = ranked(
+  [
+    option("o{", "connection", "zero or more", "o{ "),
+    option("|{", "connection", "one or more", "|{ "),
+    option("||", "connection", "exactly one", "|| "),
+    option("o|", "connection", "zero or one", "o| "),
+  ],
+  20,
+);
+
+const ER_TYPES = ranked(
+  [
+    ["string", "text"],
+    ["int", "a whole number"],
+    ["decimal", "a number with a fixed scale"],
+    ["float", "a floating point number"],
+    ["boolean", "true or false"],
+    ["date", "a day"],
+    ["datetime", "a day and a time"],
+    ["timestamp", "a moment"],
+    ["uuid", "a generated identifier"],
+    ["text", "long text"],
+    ["json", "structured data"],
+  ].map(([name, detail]) => option(name, "constant", detail, `${name} `)),
+  20,
+);
+
+const ER_KEYS = ranked(
+  [
+    option("PK", "keyword", "primary key"),
+    option("FK", "keyword", "foreign key"),
+    option("UK", "keyword", "unique key"),
+  ],
+  20,
+);
+
+const ER_KEYWORDS = /^(direction|classDef|class|style|linkStyle|click|callback|link)$/;
+
+const ER_WORD = /^[\p{L}\p{N}_.-]*$/u;
+
+/** The completions of an entity relationship diagram. */
+function completeEr(cursor: Cursor): CompletionResult | null {
+  const { before, start } = cursor;
+  let match: RegExpMatchArray | null;
+  // Inside the braces of an entity: its attributes, each a type, a name and its keys.
+  if (start.body) {
+    if ((match = before.match(/^([^\s,"]*)$/))) {
+      if (!match[1] && !cursor.explicit) return null;
+      return result(
+        cursor.at(match[1].length),
+        [
+          ...ER_TYPES,
+          ...ranked(
+            statements([
+              ["attribute", "${type} ${name}", "uml-attribute", "a value of the entity"],
+              ["primary key", "${type} ${name} PK", "uml-attribute", "identifies the entity"],
+              ["foreign key", "${type} ${name} FK", "uml-attribute", "refers to another entity"],
+            ]),
+            5,
+          ),
+        ],
+        /^[^\s,"]*$/,
+      );
+    }
+    // After the type and the name: the keys, several with commas between.
+    if ((match = before.match(/^[^\s,"]+\s+[^\s,"]+\s+(?:(?:PK|FK|UK)\s*,\s*)*([A-Z]*)$/)))
+      return match[1] || cursor.explicit || /,\s*$/.test(before)
+        ? result(cursor.at(match[1].length), ER_KEYS, /^[A-Z]*$/)
+        : null;
+    return null;
+  }
+  const found = direction(cursor);
+  if (found !== undefined) return found;
+  const names = () => inOrder(cursor.ids().map(entity));
+  const word = before.match(ER_WORD) ? (before || cursor.explicit ? before : null) : undefined;
+  if (word === null) return null;
+  if (word !== undefined)
+    return result(
+      cursor.at(word.length),
+      [
+        ...ranked(
+          [
+            ...statements([
+              ["entity", "${NAME} {\n\t${}\n}", "declare-uml-class", "an entity with attributes"],
+              [
+                "entity with alias",
+                '${id}["${Name}"] {\n\t${}\n}',
+                "declare-uml-class",
+                "an entity shown under another name",
+              ],
+              [
+                "relationship",
+                "${A} ||--o{ ${B} : ${label}",
+                "connection",
+                "one of the first has many of the second",
+              ],
+            ]),
+            DIRECTION_LINE,
+          ],
+          30,
+        ),
+        ...names(),
+      ],
+      ER_WORD,
+    );
+  if (before.includes(":")) return null;
+  // Behind the line of a relationship: the cardinality of its second end, then the entities.
+  if ((match = before.match(/(?:--|\.\.)([|o{]?)$/)))
+    return result(cursor.at(match[1].length), ER_ENDS, /^[|o{]*$/);
+  if ((match = before.match(/(?:--|\.\.)(?:\|\||o\||\|\{|o\{)\s*("?[\p{L}\p{N}_-]*)$/u)))
+    return result(cursor.at(match[1].length), names(), /^"?[\p{L}\p{N}_ -]*"?$/u);
+  // After an entity: the relationships it can have.
+  if (
+    (match = before.match(/^("[^"]+"|[\p{L}\p{N}_][\p{L}\p{N}_.-]*)\s+([|o}.-]*)$/u)) &&
+    !ER_KEYWORDS.test(match[1])
+  )
+    return result(cursor.at(match[2].length), ER_RELATIONS, /^[|o{}.-]*$/);
   return null;
 }
 
@@ -830,6 +976,8 @@ export function completeUml(
       return completeState(cursor);
     case "sequence":
       return completeSequence(cursor);
+    case "er":
+      return completeEr(cursor);
   }
 }
 
@@ -841,6 +989,7 @@ const HEADERS: [header: string, template: string, type: string, detail: string][
   ["swimlane-beta", "swimlane-beta ${TB}", "declare-uml-lanes", "Activity with lanes"],
   ["stateDiagram-v2", "stateDiagram-v2", "declare-uml-state", "State machine"],
   ["sequenceDiagram", "sequenceDiagram", "declare-uml-participant", "Sequence diagram"],
+  ["erDiagram", "erDiagram", "declare-uml-class", "Entity relationship diagram"],
 ];
 
 /** What a source of a type offers at the cursor, whatever is typed there. */

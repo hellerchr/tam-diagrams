@@ -17,10 +17,26 @@ import {
   setClassMultiplicity,
   setClassStereotype,
 } from "../src/uml-class-edit.ts";
+import type { Cardinality } from "../src/uml-er.ts";
+import {
+  erAttributes,
+  erRelationshipEnds,
+  setErAttributes,
+  setErCardinality,
+  setErIdentifying,
+} from "../src/uml-er-edit.ts";
 import { replyTo, toggleActivation } from "../src/uml-sequence-edit.ts";
 import { setStateDescription, stateDescription } from "../src/uml-state-edit.ts";
 import { pieceIcon } from "./structures.ts";
 import { kindName, typeInfo } from "./types.ts";
+
+/** The cardinalities of an end of a relationship, as the Properties name them. */
+const CARDINALITY_NAMES: { value: Cardinality; name: string }[] = [
+  { value: "only-one", name: "Exactly one" },
+  { value: "zero-or-one", name: "Zero or one" },
+  { value: "one-or-more", name: "One or more" },
+  { value: "zero-or-more", name: "Zero or more" },
+];
 
 /** One of the buttons of a segmented control: a name or an icon, and what its tooltip says. */
 interface Segment<T extends string> {
@@ -151,15 +167,19 @@ export class Inspector {
     return field;
   }
 
-  /** A list to choose one of; elements that differ show as mixed. */
+  /**
+   * A list to choose one of; elements that differ show as mixed, and a value that is none of
+   * the list under the name given for it.
+   */
   private choice<T extends string>(
     options: { value: T; name: string }[],
     read: () => T | "",
     write: (value: T) => void,
     allowed: (value: T) => boolean = () => true,
+    none = "Mixed",
   ) {
     const items = options.map((option) => h("option", { value: option.value }, option.name)),
-      mixed = h("option", { value: "", disabled: true }, "Mixed");
+      mixed = h("option", { value: "", disabled: true }, none);
     const select = h(
       "select",
       { class: "field", onChange: () => write(select.value as T) },
@@ -227,6 +247,47 @@ export class Inspector {
         ),
       ),
     );
+  }
+
+  /**
+   * How many of each end's entity a relationship of an entity relationship diagram joins, and
+   * whether it identifies: a solid line, or a dashed one.
+   */
+  private cardinalities(id: string): HTMLElement[] {
+    const { editor } = this,
+      ends = () => erRelationshipEnds(editor.doc.source, id);
+    if (!ends()) return [];
+    const identifying = h("input", {
+      type: "checkbox",
+      onChange: () => editor.amend((source) => setErIdentifying(source, id, identifying.checked)),
+    }) as HTMLInputElement;
+    this.sync.push(() => {
+      identifying.checked = !!ends()?.identifying;
+    });
+    return [
+      ...(["from", "to"] as const).map((end) =>
+        this.row(
+          end === "from" ? "At source" : "At target",
+          this.choice<Cardinality>(
+            CARDINALITY_NAMES,
+            () => ends()?.[end === "from" ? "fromCardinality" : "toCardinality"] ?? "",
+            (cardinality) =>
+              editor.amend((source) => setErCardinality(source, id, end, cardinality)),
+          ),
+        ),
+      ),
+      h(
+        "label",
+        {
+          class: "row check",
+          ...tipped({
+            tip: "A solid line: the entity at the target cannot exist without the other",
+          }),
+        },
+        h("span", {}, "Identifying"),
+        identifying,
+      ),
+    ];
   }
 
   private remove() {
@@ -658,6 +719,29 @@ export class Inspector {
               true,
             ),
           ),
+        // An entity lists its attributes, one a line: a type, a name, keys and a comment.
+        editor.type === "er" &&
+          kind === "entity" &&
+          this.group(
+            "Attributes",
+            this.text(
+              () => erAttributes(editor.doc.source, id).join("\n"),
+              (text) =>
+                editor.amend((source) =>
+                  setErAttributes(
+                    source,
+                    id,
+                    text
+                      .split("\n")
+                      .map((line) => line.trim())
+                      .filter(Boolean),
+                  ),
+                ),
+              'int id PK\nstring name "a comment"',
+              true,
+              true,
+            ),
+          ),
         h(
           "p",
           { class: "note" },
@@ -684,14 +768,21 @@ export class Inspector {
         this.group(
           "Identity",
           // A join of a kind that is only read has none to choose.
-          structure.links.some((link) => link.kind === editor.linkKind(id)) &&
+          // A relationship whose two cardinalities are no usual pair still takes one.
+          (structure.links.some((link) => link.kind === editor.linkKind(id)) ||
+            editor.type === "er") &&
             structure.links.length > 1 &&
             this.row(
               "Kind",
               this.choice(
                 structure.links.map((link) => ({ value: link.kind, name: link.name })),
-                () => editor.linkKind(id) ?? "",
+                () => {
+                  const kind = editor.linkKind(id) ?? "";
+                  return structure.links.some((link) => link.kind === kind) ? kind : "";
+                },
                 (kind) => editor.relink(id, kind),
+                () => true,
+                "Other",
               ),
             ),
           !!editor.wireLabel(id) &&
@@ -705,6 +796,7 @@ export class Inspector {
               ),
             ),
           ...(editor.type === "class" ? this.multiplicities(id) : []),
+          ...(editor.type === "er" ? this.cardinalities(id) : []),
         ),
         h(
           "div",

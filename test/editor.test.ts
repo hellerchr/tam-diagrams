@@ -1,6 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { arialMeasure } from "../src/arial-measure.ts";
 import { parseTam } from "../src/tam.ts";
+import { readPlaces, setPlaces } from "../src/uml-places.ts";
 import { Doc } from "../editor/document.ts";
 import { boxOf, dropTarget, elementsIn, partAt, wireOf } from "../editor/hit.ts";
 
@@ -138,5 +139,61 @@ describe("an activity diagram in the editor", () => {
     const [wire] = picture!.scene.wires.filter((item) => item.edge === "e2"),
       middle = wire.points[Math.floor(wire.points.length / 2)];
     expect(partAt(picture!, middle)).toEqual({ type: "wire", id: "e2" });
+  });
+});
+
+describe("the positions of a diagram with a structure", () => {
+  const CHART = "flowchart TB\n  a[A] --> b{B?}\n  b -->|yes| c[C]\n  b -->|no| a";
+  /** Waits for a picture that comes after the call that asked for it. */
+  const settled = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+  it("pins every part where the picture shows it, and shows the same picture", async () => {
+    const made = await doc(CHART),
+      auto = made.picture!;
+    expect(auto.placed).toBe(false);
+    const pinned = made.pinnedSource()!;
+    expect(pinned.startsWith(`${CHART}\n%% @`)).toBe(true);
+    expect([...readPlaces(pinned).keys()].toSorted()).toEqual(
+      auto.scene.shapes.map((shape) => shape.id).toSorted(),
+    );
+    await made.apply(pinned);
+    expect(made.picture).toMatchObject({ placed: true, overlaps: [] });
+    expect(made.picture!.scene).toEqual(auto.scene);
+    // A block diagram is pinned in its own syntax, a source with an error not at all.
+    expect(made.placedSource()).toBeUndefined();
+    await made.apply(`${pinned}\n  b -->`);
+    expect(made.pinnedSource()).toBeUndefined();
+  });
+
+  it("previews a move from the picture on show, and returns to it", async () => {
+    const made = await doc(CHART),
+      before = made.picture!,
+      was = boxOf(before, "c")!;
+    const moved = setPlaces(made.pinnedSource()!, {
+      c: { x: Math.round(was.x) + 200, y: Math.round(was.y) },
+    });
+    expect(made.preview(moved)).toBe(true);
+    await settled();
+    expect(boxOf(made.picture!, "c")!.x).toBe(Math.round(was.x) + 200);
+    expect(boxOf(made.picture!, "a")).toEqual(boxOf(before, "a"));
+    expect(made.source).toBe(CHART);
+    expect(made.canUndo).toBe(false);
+    made.cancel();
+    expect(made.picture).toBe(before);
+    expect(made.preview(`${moved}\n  c -->`)).toBe(false);
+  });
+
+  it("says which parts lie on each other once they are placed", async () => {
+    const made = await doc(CHART),
+      a = boxOf(made.picture!, "a")!;
+    await made.apply(
+      setPlaces(made.pinnedSource()!, { c: { x: Math.round(a.x) + 5, y: Math.round(a.y) + 5 } }),
+    );
+    expect(made.picture!.overlaps).toEqual([["a", "c"]]);
+    // Undo returns to the source without places, and its automatic layout.
+    made.undo();
+    expect(made.source).toBe(CHART);
+    await vi.waitFor(() => expect(made.picture!.source).toBe(CHART));
+    expect(made.picture!.placed).toBe(false);
   });
 });

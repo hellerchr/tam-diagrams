@@ -7,8 +7,8 @@ import type { Direction, GraphEdge, GraphNode, GraphPort } from "./elk.ts";
  * ports the behavior diagrams give their small symbols.
  */
 
-/** Mermaid diagram types detectUml recognizes; this package draws state, flowchart, swimlane and sequence. */
-export type UmlKind = "class" | "state" | "flowchart" | "swimlane" | "usecase" | "sequence";
+/** Mermaid diagram types detectUml recognizes and this package draws; `er` is an entity relationship diagram. */
+export type UmlKind = "class" | "state" | "flowchart" | "swimlane" | "usecase" | "sequence" | "er";
 /** The TAM abstraction level a source declares with `%% level conceptual` or `%% level design`. */
 export type Level = "conceptual" | "design";
 
@@ -46,6 +46,7 @@ const HEADERS: [RegExp, UmlKind][] = [
   [new RegExp(String.raw`^swimlane-beta${HEADER_END}`), "swimlane"],
   [new RegExp(String.raw`^usecase-beta${HEADER_END}`), "usecase"],
   [new RegExp(String.raw`^sequenceDiagram${HEADER_END}`), "sequence"],
+  [new RegExp(String.raw`^erDiagram${HEADER_END}`), "er"],
 ];
 
 interface SourceLine {

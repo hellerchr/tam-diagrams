@@ -6,6 +6,7 @@
 import { TAM_EXAMPLES } from "../src/samples/tam-examples.ts";
 import {
   CLASS_EXAMPLES,
+  ER_EXAMPLES,
   FLOWCHART_EXAMPLES,
   SEQUENCE_EXAMPLES,
   STATE_EXAMPLES,
@@ -392,6 +393,53 @@ export const TYPES: TypeInfo[] = [
       },
       { name: "Loop", icon: "uml-loop", text: "  loop every time\n    A->>B: again\n  end" },
       { name: "Note", icon: "uml-note", text: "  Note over A,B: A note" },
+    ],
+  },
+  {
+    type: "er",
+    name: "ER diagram",
+    plural: "ER diagrams",
+    icon: "er",
+    mode: "text",
+    palette: [],
+    examples: examples(ER_EXAMPLES, {
+      "er: order example (Mermaid docs)": "Order example",
+      "er: every cardinality": "Every cardinality",
+      "er: self-relationship and parallel relationships": "Self and parallel relationships",
+      "er: aliases, keys and comments": "Aliases, keys and comments",
+      "er: library BT with non-identifying relationships": "Library",
+      "er: order management (large)": "Order management",
+    }),
+    about:
+      "Entity relationships: entities with their attributes, and how many of each belong together",
+    starter: `erDiagram
+  CUSTOMER ||--o{ ORDER : places
+  ORDER ||--|{ ORDER-ITEM : contains
+  CUSTOMER {
+    int id PK
+    string name
+    string email UK
+  }
+  ORDER {
+    int id PK
+    int customerId FK
+    date placed
+  }
+  ORDER-ITEM {
+    int orderId PK, FK
+    int position PK
+    int quantity
+  }`,
+    snippets: [
+      {
+        name: "Entity",
+        icon: "uml-entity",
+        text: "  ENTITY {\n    int id PK\n    string name\n  }",
+      },
+      { name: "One to many", icon: "er-one-to-many", text: "  A ||--o{ B : has" },
+      { name: "Many to one", icon: "er-many-to-one", text: '  A }o--|| B : "belongs to"' },
+      { name: "One to one", icon: "er-one-to-one", text: "  A ||--|| B : is" },
+      { name: "Many to many", icon: "er-many-to-many", text: "  A }o--o{ B : has" },
     ],
   },
 ];

@@ -29,7 +29,7 @@ describe("diagramMessage", () => {
 
 describe("unsupported Mermaid types", () => {
   it("are reported as the library words them, on one line with no hint", () => {
-    const message = "erDiagram is drawn by Mermaid, not the built-in renderer.";
+    const message = "pie is drawn by Mermaid, not the built-in renderer.";
     const error = new UmlError(4, message, true);
     expect(diagramMessage("a.md", error)).toEqual([`a.md:4: ${message}`]);
   });

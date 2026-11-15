@@ -43,6 +43,7 @@ import {
   boxOf,
   contains,
   dropTarget,
+  elementOf,
   elementShapes,
   elementsIn,
   type Part,
@@ -64,6 +65,8 @@ import { parseUml } from "../src/index.ts";
 import type { Structure, StructureEdge } from "../src/structure.ts";
 import { classMembers, setClassMembers } from "../src/uml-class-edit.ts";
 import { moveMessage, moveParticipant } from "../src/uml-sequence-edit.ts";
+import { placeable } from "../src/uml-placed.ts";
+import { followPlaces, hasPlaces, removePlaces, setPlaces } from "../src/uml-places.ts";
 import { structureOf } from "./structures.ts";
 import { type DiagramType, typeInfo, typeOf, withUmlTitle } from "./types.ts";
 import type { View } from "./view.ts";
@@ -120,6 +123,8 @@ type Gesture =
         outer: string[];
         places: Map<string, Placement>;
         all: Set<string>;
+        /** In a diagram with a structure: its source with every part placed where it stands. */
+        pinned?: string;
       };
       result?: string;
       target?: string | null;
@@ -397,21 +402,25 @@ export class Editor {
     return typeOf(this.doc.source);
   }
 
-  /** The structure of the diagram, when its parts are edited on the canvas and laid out automatically. */
+  /** The structure of the diagram, when its parts are edited on the canvas by one. */
   get structure(): Structure | undefined {
     return structureOf(this.type);
   }
 
   /**
-   * Whether the diagram's structure is edited on the canvas while its layout stays automatic: its
-   * parts are added, named, joined and removed, not moved.
+   * Whether the diagram's structure is edited on the canvas: its parts are added, named, joined
+   * and removed by edits of its `Structure`, and moved by places (`%% @id x,y`) at the end of the
+   * source. Without places its layout is automatic.
    */
   get structural(): boolean {
     return !!this.structure;
   }
 
   /** An edit of a structure's source: applied when the result still reads as a diagram of its type. */
-  private structEdit(make: (structure: Structure, source: string) => string): boolean {
+  private structEdit(
+    make: (structure: Structure, source: string) => string,
+    run?: string,
+  ): boolean {
     const { structure } = this;
     if (this.doc.problem || !structure) return this.change(undefined);
     if (this.picture?.source !== this.doc.source) {
@@ -419,9 +428,11 @@ export class Editor {
       return false;
     }
     try {
-      const next = make(structure, this.doc.source);
+      // The places follow the parts: a part given another id keeps its place, one that is gone leaves none.
+      const made = make(structure, this.doc.source),
+        next = hasPlaces(made) ? followPlaces(structure.read, this.doc.source, made) : made;
       parseUml(next);
-      void this.doc.apply(next);
+      void this.doc.apply(next, run);
       return true;
     } catch (reason) {
       this.notify(
@@ -435,9 +446,10 @@ export class Editor {
    * Adds a piece to a diagram with a structure, at a part: inside it when it is a group, else
    * joined to it as the piece joins (a step follows, a start leads) and in its group. Without `at`
    * the one selected part is taken; with null the piece stands alone; `joined` joins it to the part
-   * whatever the piece says, as a connection drawn to the empty canvas asks. Its name opens for typing.
+   * whatever the piece says, as a connection drawn to the empty canvas asks. In a diagram whose
+   * parts are placed it stands around `spot`. Its name opens for typing.
    */
-  addPiece(kind: string, at?: string | null, lane?: string, joined = false) {
+  addPiece(kind: string, at?: string | null, lane?: string, joined = false, spot?: Point) {
     const { picture, structure } = this,
       piece = structure?.pieces.find((item) => item.kind === kind);
     if (!structure || !piece || !picture) return;
@@ -465,10 +477,19 @@ export class Editor {
     const done = this.structEdit((edits, source) => {
       const added = edits.add(source, { kind, parent });
       made = added.id;
-      if (!made || !node || !joins) return added.source;
-      return piece.joins === "before"
-        ? edits.connect(added.source, made, node.id)
-        : edits.connect(added.source, node.id, made);
+      const next =
+        !made || !node || !joins
+          ? added.source
+          : piece.joins === "before"
+            ? edits.connect(added.source, made, node.id)
+            : edits.connect(added.source, node.id, made);
+      // Where the parts are placed, the new one stands where it was dropped.
+      return made && spot && hasPlaces(source)
+        ? setPlaces(
+            next,
+            new Map([[made, { x: snap(spot.x - 48, false), y: snap(spot.y - 18, false) }]]),
+          )
+        : next;
     });
     if (!done) return;
     // Some pieces exist only at another: the start of a state machine at the state it leads to.
@@ -513,7 +534,7 @@ export class Editor {
 
   /** A piece dropped on the canvas: at the part under it, or alone on the empty canvas. */
   dropPiece(kind: string, at: Point) {
-    this.addPiece(kind, this.targetAt(at) ?? null, this.laneAt(at));
+    this.addPiece(kind, this.targetAt(at) ?? null, this.laneAt(at), false, at);
   }
 
   /**
@@ -725,6 +746,8 @@ export class Editor {
   shift(delta: -1 | 1) {
     if (this.type !== "sequence" || this.selection.length !== 1) return;
     const [part] = this.selection;
+    // Where the participants are placed, their places order them: one moves along its row.
+    if (part.type === "element" && hasPlaces(this.doc.source)) return this.nudge(delta * GRID, 0);
     this.structEdit((_, source) =>
       part.type === "wire"
         ? moveMessage(source, part.id, delta)
@@ -907,8 +930,105 @@ export class Editor {
     return { base, picture, boxes };
   }
 
+  /**
+   * The shapes that take a place of some parts of a structure, with all that their groups hold:
+   * what moves when the parts are moved.
+   */
+  private placedShapes(picture: Picture, ids: string[]): string[] {
+    const { parts } = picture,
+      chosen = new Set(ids);
+    const within = (id: string) => {
+      for (let at = parts?.get(id); at; at = at.parent ? parts?.get(at.parent) : undefined)
+        if (chosen.has(at.id)) return true;
+      return false;
+    };
+    return placeable(picture.scene).filter((shape) => {
+      const part = elementOf(picture.diagram, shape);
+      return part !== undefined && within(part);
+    });
+  }
+
+  /**
+   * What moving parts of a structure starts from: the source with every part placed where it
+   * stands, the outermost of the parts, the places of the shapes that move with them, and every
+   * part among them. Undefined, with a notice, while there is no picture of the source.
+   */
+  private partMovers(ids: string[]) {
+    const { picture } = this,
+      pinned = this.structural ? this.doc.pinnedSource() : undefined;
+    if (!picture || pinned === undefined) {
+      this.notify(
+        this.doc.problem ? "Fix the error in the source first." : "The layout is not ready yet.",
+      );
+      return undefined;
+    }
+    const { parts } = picture,
+      chosen = new Set(ids);
+    const holders = (id: string) => {
+      const found: string[] = [];
+      for (let at = parts?.get(id)?.parent; at; at = parts?.get(at)?.parent) found.push(at);
+      return found;
+    };
+    const boxes = new Map(picture.scene.shapes.map((shape) => [shape.id, shape.box]));
+    return {
+      picture,
+      pinned,
+      outer: ids.filter((id) => parts?.has(id) && !holders(id).some((at) => chosen.has(at))),
+      places: new Map<string, Placement>(
+        this.placedShapes(picture, ids).map((shape) => {
+          const box = boxes.get(shape)!;
+          return [shape, { x: Math.round(box.x), y: Math.round(box.y) }];
+        }),
+      ),
+      all: new Set(
+        [...(parts?.keys() ?? [])].filter(
+          (id) => chosen.has(id) || holders(id).some((at) => chosen.has(at)),
+        ),
+      ),
+    };
+  }
+
+  /** Applies a source that only places parts of a structure differently. */
+  private placeParts(source: string, run?: string) {
+    try {
+      parseUml(source);
+    } catch (reason) {
+      return this.notify(reason instanceof Error ? reason.message : String(reason));
+    }
+    void this.doc.apply(source, run);
+  }
+
   /** Aligns the selected elements on a side or middle of the box around them, or spreads them with even gaps. */
   arrange(how: Arrangement) {
+    if (this.structural) {
+      const moving = this.partMovers(this.selectedElements);
+      if (!moving) return;
+      const { picture, pinned } = moving;
+      // Each outermost part is one box: its own, or the one around what moves with it.
+      const units = new Map(
+        moving.outer.flatMap((id) => {
+          const shapes = this.placedShapes(picture, [id]),
+            box =
+              boxOf(picture, id) ??
+              (shapes.length ? around(shapes.flatMap((shape) => boxOf(picture, shape) ?? [])) : 0);
+          return box && shapes.length ? [[id, { box, shapes }] as const] : [];
+        }),
+      );
+      const places = new Map<string, Point>();
+      for (const [id, step] of arrange(
+        new Map([...units].map(([id, unit]) => [id, unit.box])),
+        how,
+      ))
+        for (const shape of units.get(id)!.shapes) {
+          const at = moving.places.get(shape)!;
+          places.set(shape, {
+            x: at.x + step.x,
+            y: this.type === "sequence" ? at.y : at.y + step.y,
+          });
+        }
+      if (places.size) this.placeParts(setPlaces(pinned, places));
+      return;
+    }
     const units = this.units();
     if (!units) return void this.change(undefined);
     let source = units.base;
@@ -922,6 +1042,7 @@ export class Editor {
 
   /** Makes the selected elements as wide, or as high, as the largest of them. */
   sameSize(side: "width" | "height") {
+    if (this.structural) return this.notify("The parts of this diagram size themselves.");
     const units = this.units();
     if (!units) return void this.change(undefined);
     const most = Math.max(...[...units.boxes.values()].map((box) => box[side]));
@@ -940,6 +1061,7 @@ export class Editor {
 
   /** Lets the selected containers fit their parts, and leaves take the size of their names. */
   fitSize() {
+    if (this.structural) return this.notify("The parts of this diagram size themselves.");
     const units = this.units();
     if (!units) return void this.change(undefined);
     this.change(
@@ -1006,18 +1128,46 @@ export class Editor {
     const ids = this.selectedElements;
     if (!ids.length) return;
     if (this.structural) {
-      // The layout places the copies: each stands for itself, without the joins of its original.
-      const made: string[] = [];
+      // Each copy stands for itself, without the joins of its original: where the parts are
+      // placed beside its original, further down while something stands there; else where the
+      // layout puts it.
+      const made: string[] = [],
+        { picture } = this,
+        taken = picture
+          ? elementShapes(picture)
+              .filter(({ shape }) => !shape.container)
+              .map(({ shape }) => shape.box)
+          : [];
       const done = this.structEdit((edits, source) => {
         if (!edits.copy) throw new Error("Parts of this diagram are not copied yet.");
         let next = source;
+        const places = new Map<string, Point>();
         for (const id of ids) {
           const copy = edits.copy(next, id);
           next = copy.source;
-          if (copy.id) made.push(copy.id);
+          if (!copy.id) continue;
+          made.push(copy.id);
+          const box = picture && placeable(picture.scene).includes(id) && boxOf(picture, id);
+          if (!box || !hasPlaces(source)) continue;
+          const spot = {
+            ...box,
+            x: snap(box.x + box.width + 2 * GRID, false),
+            y: Math.round(box.y),
+          };
+          const clear = () =>
+            taken.every(
+              (other) =>
+                spot.x >= other.x + other.width + GRID ||
+                other.x >= spot.x + spot.width + GRID ||
+                spot.y >= other.y + other.height + GRID ||
+                other.y >= spot.y + spot.height + GRID,
+            );
+          for (let tries = 0; tries < 40 && !clear(); tries++) spot.y += 2 * GRID;
+          taken.push(spot);
+          places.set(copy.id, { x: spot.x, y: spot.y });
         }
         if (!made.length) throw new Error("This part cannot be copied.");
-        return next;
+        return places.size ? setPlaces(next, places) : next;
       });
       if (done) this.select(made.map((id) => ({ type: "element", id })));
       return;
@@ -1264,6 +1414,13 @@ export class Editor {
 
   /** Clears every placement: the layout is automatic again. */
   async autoLayout() {
+    if (this.structural) {
+      if (this.doc.problem) return void this.change(undefined);
+      if (!hasPlaces(this.doc.source)) return;
+      void this.doc.apply(removePlaces(this.doc.source));
+      await this.fitSoon();
+      return;
+    }
     if (this.edit(unplace)) await this.fitSoon();
   }
 
@@ -1362,6 +1519,17 @@ export class Editor {
 
   /** Moves the selected elements by a step. */
   nudge(dx: number, dy: number) {
+    if (this.structural) {
+      if (!this.selectedElements.length) return;
+      const moving = this.partMovers(this.selectedElements);
+      if (!moving?.places.size) return;
+      // Presses in a row are one step to undo.
+      this.placeParts(
+        setPlaces(moving.pinned, shifted(moving.places, dx, this.type === "sequence" ? 0 : dy)),
+        "nudge",
+      );
+      return;
+    }
     const base = this.doc.placedSource();
     if (base === undefined || !this.selectedElements.length) return;
     const moving = this.movers(parseTam(base), this.selectedElements);
@@ -1690,8 +1858,7 @@ export class Editor {
     point: Point,
     event: PointerEvent,
   ) {
-    // An activity diagram lays itself out: its nodes are not moved.
-    if (this.structural) return;
+    if (this.structural) return this.dragParts(gesture, screen, point, event);
     if (!gesture.base) {
       if (Math.hypot(screen.x - gesture.screen.x, screen.y - gesture.screen.y) < SLOP) return;
       const source = this.doc.placedSource();
@@ -1728,30 +1895,9 @@ export class Editor {
     // The first element lands on the grid; the others keep their distance to it.
     const lead = places.get(outer[0]) ?? [...places.values()][0];
     if (!lead) return;
-    // What is moved lines up with the edges and middles of others, or evenly between them, where
-    // the pointer brings it near; else its first element lands on the grid.
-    let dx = point.x - gesture.start.x,
-      dy = point.y - gesture.start.y;
-    // With Shift the move keeps to one axis: the one the pointer went further along.
-    if (event.shiftKey) {
-      if (Math.abs(dx) >= Math.abs(dy)) dy = 0;
-      else dx = 0;
-    }
-    gesture.guides = [];
     const boxes = outer.flatMap((id) => boxOf(picture, id) ?? []),
-      free = this.free(event);
-    const others = elementShapes(picture)
-      .filter(({ id }) => !all.has(id))
-      .map(({ shape }) => shape.box);
-    const box = boxes.length ? around(boxes) : undefined;
-    const snapped =
-      box && !free
-        ? snapMove({ ...box, x: box.x + dx, y: box.y + dy }, others, ALIGN / this.view.zoom)
-        : undefined;
-    // Whole steps, so that the source holds whole numbers.
-    dx = snapped?.x ? Math.round(dx + snapped.dx) : snap(lead.x + dx, free) - lead.x;
-    dy = snapped?.y ? Math.round(dy + snapped.dy) : snap(lead.y + dy, free) - lead.y;
-    if (box && snapped) gesture.guides = guidesAt({ ...box, x: box.x + dx, y: box.y + dy }, others);
+      box = boxes.length ? around(boxes) : undefined;
+    const { x: dx, y: dy } = this.step(gesture, point, event, box, lead);
     const moved = place(picture.source, shifted(places, dx, dy));
     // What is moved goes where its middle is: a part leaves its container when most of it has.
     const now = box && { ...box, x: box.x + dx, y: box.y + dy },
@@ -1800,6 +1946,121 @@ export class Editor {
       }
     }
     if (this.doc.preview(result)) gesture.result = result;
+  }
+
+  /**
+   * How far a move has come: what is moved lines up with the edges and middles of the other
+   * elements, or evenly between them, where the pointer brings it near; else its first element,
+   * placed at `lead`, lands on the grid. `box` is the box around what moves, before the move.
+   * Sets the guides of the gesture.
+   */
+  private step(
+    gesture: Extract<Gesture, { type: "move" }>,
+    point: Point,
+    event: PointerEvent,
+    box: Box | undefined,
+    lead: Point,
+  ): Point {
+    const { picture, all } = gesture.base!;
+    let dx = point.x - gesture.start.x,
+      dy = point.y - gesture.start.y;
+    // With Shift the move keeps to one axis: the one the pointer went further along.
+    if (event.shiftKey) {
+      if (Math.abs(dx) >= Math.abs(dy)) dy = 0;
+      else dx = 0;
+    }
+    gesture.guides = [];
+    const free = this.free(event);
+    const others = elementShapes(picture)
+      .filter(({ id }) => !all.has(id))
+      .map(({ shape }) => shape.box);
+    const snapped =
+      box && !free
+        ? snapMove({ ...box, x: box.x + dx, y: box.y + dy }, others, ALIGN / this.view.zoom)
+        : undefined;
+    // Whole steps, so that the source holds whole numbers.
+    dx = snapped?.x ? Math.round(dx + snapped.dx) : snap(lead.x + dx, free) - lead.x;
+    dy = snapped?.y ? Math.round(dy + snapped.dy) : snap(lead.y + dy, free) - lead.y;
+    if (box && snapped) gesture.guides = guidesAt({ ...box, x: box.x + dx, y: box.y + dy }, others);
+    return { x: dx, y: dy };
+  }
+
+  /**
+   * Moves the selected parts of a diagram with a structure with the pointer: the first move places
+   * every part where it stands, then the places of what is moved follow the pointer. A group
+   * under the moved parts shows as what they would be dropped into, where the structure moves
+   * parts between groups. The participants of a sequence diagram move along their row only.
+   */
+  private dragParts(
+    gesture: Extract<Gesture, { type: "move" }>,
+    screen: Point,
+    point: Point,
+    event: PointerEvent,
+  ) {
+    if (!gesture.base) {
+      if (Math.hypot(screen.x - gesture.screen.x, screen.y - gesture.screen.y) < SLOP) return;
+      const moving = this.partMovers(this.selectedElements);
+      // A part that takes no place stays: a lane, a note of a sequence diagram.
+      if (!moving?.places.size) {
+        this.gesture = undefined;
+        return;
+      }
+      gesture.base = moving;
+    }
+    const { picture, outer, places, all, pinned } = gesture.base,
+      [lead] = places.values(),
+      box = around([...places.keys()].flatMap((shape) => boxOf(picture, shape) ?? []));
+    const by = this.step(gesture, point, event, box, lead);
+    if (this.type === "sequence") by.y = 0;
+    const result = setPlaces(pinned!, shifted(places, by.x, by.y));
+    // Dropped onto a group the parts move into it, and out of theirs once they are wholly outside it.
+    gesture.target = undefined;
+    const home = picture.parts?.get(outer[0])?.parent ?? null;
+    if (
+      this.structure?.moveInto &&
+      this.type !== "sequence" &&
+      outer.every((id) => (picture.parts?.get(id)?.parent ?? null) === home)
+    ) {
+      const now = { ...box, x: box.x + by.x, y: box.y + by.y },
+        middle = { x: now.x + now.width / 2, y: now.y + now.height / 2 },
+        homeBox = home ? boxOf(picture, home) : undefined,
+        target =
+          this.type === "swimlane"
+            ? (this.laneAt(point) ?? home)
+            : dropTarget(picture, middle, all, false);
+      const outside =
+        !homeBox ||
+        now.x >= homeBox.x + homeBox.width ||
+        homeBox.x >= now.x + now.width ||
+        now.y >= homeBox.y + homeBox.height ||
+        homeBox.y >= now.y + now.height;
+      if (target !== home && (target ? this.allowsMove(outer, target) : outside))
+        gesture.target = target;
+    }
+    if (this.doc.preview(result)) gesture.result = result;
+  }
+
+  /** Ends a move of parts of a structure: their places are committed, and they change their group where dropped onto one. */
+  private dropParts(gesture: Extract<Gesture, { type: "move" }>) {
+    const { structure } = this,
+      { base, result, target } = gesture;
+    if (!base) return;
+    if (result === undefined || !structure) return this.doc.cancel();
+    let next = result;
+    if (target !== undefined && structure.moveInto) {
+      try {
+        const moved = base.outer.reduce(
+          (source, id) => structure.moveInto!(source, id, target),
+          result,
+        );
+        parseUml(moved);
+        next = followPlaces(structure.read, result, moved);
+      } catch {
+        // The part cannot stand there: it stays in its group, where it was dropped.
+      }
+    }
+    if (next === this.doc.source) return this.doc.cancel();
+    void this.doc.apply(next);
   }
 
   private startResize(id: string, handle: Handle, start: Point) {
@@ -1880,7 +2141,8 @@ export class Editor {
     switch (gesture.type) {
       case "move":
       case "resize":
-        if (gesture.result !== undefined && gesture.result !== this.doc.source) {
+        if (gesture.type === "move" && this.structural) this.dropParts(gesture);
+        else if (gesture.result !== undefined && gesture.result !== this.doc.source) {
           const done = this.change(gesture.result);
           if (done && gesture.type === "move" && gesture.copies)
             this.select(gesture.copies.map((id) => ({ type: "element", id })));
@@ -2077,7 +2339,8 @@ export class Editor {
   private connectNew(from: string, at: Point) {
     if (this.structure) {
       // Only on the empty canvas: a note or a frame under the pointer is no place for a new part.
-      if (!this.drawnAt(at)) this.addPiece(this.structure.pieces[0].kind, from, undefined, true);
+      if (!this.drawnAt(at))
+        this.addPiece(this.structure.pieces[0].kind, from, undefined, true, at);
       return;
     }
     const { picture } = this,
@@ -2129,7 +2392,7 @@ export class Editor {
     if (!part) {
       if (!this.structure) this.create("agent", point, event.altKey);
       else if (!this.drawnAt(point))
-        this.addPiece(this.structure.pieces[0].kind, null, this.laneAt(point));
+        this.addPiece(this.structure.pieces[0].kind, null, this.laneAt(point), false, point);
     } else if (part.type === "element") this.rename(part.id);
     else this.rename(part.id, true, point);
   }
