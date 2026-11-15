@@ -17,7 +17,14 @@ import {
   syntaxHighlighting,
 } from "@codemirror/language";
 import { setDiagnostics } from "@codemirror/lint";
-import { Annotation, EditorState, StateEffect, StateField } from "@codemirror/state";
+import {
+  Annotation,
+  Compartment,
+  EditorSelection,
+  EditorState,
+  StateEffect,
+  StateField,
+} from "@codemirror/state";
 import {
   Decoration,
   type DecorationSet,
@@ -87,52 +94,52 @@ const tam = StreamLanguage.define<{ start: boolean; title: boolean }>({
 
 /** The colors come from the page, so the pane follows the theme. */
 const colors = HighlightStyle.define([
-  { tag: tags.comment, color: "var(--quiet)", fontStyle: "italic" },
+  { tag: tags.comment, color: "var(--text-2)", fontStyle: "italic" },
   { tag: tags.keyword, color: "var(--syntax-keyword)", fontWeight: "600" },
   { tag: tags.string, color: "var(--syntax-string)" },
   { tag: tags.number, color: "var(--syntax-number)" },
   { tag: tags.atom, color: "var(--syntax-number)" },
   { tag: tags.meta, color: "var(--syntax-string)", fontStyle: "italic" },
   { tag: tags.typeName, color: "var(--syntax-word)" },
-  { tag: tags.operator, color: "var(--quiet)" },
-  { tag: tags.punctuation, color: "var(--quiet)" },
+  { tag: tags.operator, color: "var(--text-2)" },
+  { tag: tags.punctuation, color: "var(--text-2)" },
 ]);
 
 const look = EditorView.theme({
   "&": {
     height: "100%",
     fontSize: "12px",
-    border: "1px solid var(--line)",
-    borderRadius: "6px",
-    backgroundColor: "var(--page)",
+    backgroundColor: "var(--field)",
     color: "var(--text)",
   },
-  "&.cm-focused": { outline: "2px solid var(--accent)", outlineOffset: "-1px" },
+  "&.cm-focused": { outline: "none" },
   ".cm-scroller": {
     fontFamily: 'ui-monospace, "SF Mono", Menlo, Consolas, monospace',
     lineHeight: "1.55",
+    scrollbarWidth: "thin",
+    scrollbarColor: "var(--line-strong) transparent",
   },
   ".cm-content": { caretColor: "var(--text)" },
   ".cm-cursor": { borderLeftColor: "var(--text)" },
   ".cm-gutters": {
     backgroundColor: "transparent",
-    color: "var(--quiet)",
+    color: "var(--text-3)",
     border: "none",
-    opacity: "0.6",
   },
   ".cm-activeLine": { backgroundColor: "color-mix(in srgb, var(--text) 5%, transparent)" },
   ".cm-selected-element": { backgroundColor: "var(--accent-soft)" },
   "&.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground, .cm-selectionBackground":
     { backgroundColor: "color-mix(in srgb, var(--accent) 28%, transparent)" },
   ".cm-tooltip": {
-    backgroundColor: "var(--panel)",
+    backgroundColor: "var(--raised)",
     color: "var(--text)",
     border: "1px solid var(--line)",
-    borderRadius: "6px",
+    borderRadius: "4px",
+    boxShadow: "var(--shadow)",
   },
   ".cm-tooltip-autocomplete ul li[aria-selected]": {
     backgroundColor: "var(--accent-soft)",
-    color: "var(--accent)",
+    color: "var(--text)",
   },
 });
 
@@ -172,6 +179,8 @@ export interface SourceHost {
 
 export class SourcePane {
   private readonly view: EditorView;
+  /** Long lines wrap or scroll: set by `setWrap`. */
+  private readonly wrapping = new Compartment();
 
   constructor(parent: HTMLElement, host: SourceHost) {
     const complete = (context: CompletionContext): CompletionResult | null => {
@@ -212,6 +221,7 @@ export class SourcePane {
           autocompletion({ override: [complete], icons: false }),
           keymap.of([...defaultKeymap, ...historyKeymap, indentWithTab]),
           selectedLines,
+          this.wrapping.of([]),
           look,
           EditorView.contentAttributes.of({ "aria-label": "Diagram source", spellcheck: "false" }),
           EditorView.updateListener.of((update) => {
@@ -282,5 +292,43 @@ export class SourcePane {
       ],
       annotations: fromDocument.of(true),
     });
+  }
+
+  /** Wraps long lines at the edge of the pane, or lets them run on and scroll. */
+  setWrap(on: boolean) {
+    this.view.dispatch({ effects: this.wrapping.reconfigure(on ? EditorView.lineWrapping : []) });
+  }
+
+  /** Puts the cursor on a line and the focus in the pane. */
+  focusLine(number: number) {
+    const { doc } = this.view.state,
+      line = doc.line(Math.min(Math.max(1, number), doc.lines));
+    this.view.dispatch({
+      selection: EditorSelection.cursor(line.to),
+      effects: EditorView.scrollIntoView(line.from, { y: "center" }),
+      annotations: fromDocument.of(true),
+    });
+    this.view.focus();
+  }
+
+  /**
+   * Adds statements as lines of their own, as if typed: below the line of the cursor, or at the end
+   * while the cursor has not left the start. The added lines are selected, to type over.
+   */
+  insert(text: string) {
+    const { state } = this.view,
+      head = state.selection.main.head,
+      line = head === 0 ? state.doc.line(state.doc.lines) : state.doc.lineAt(head),
+      // An empty line takes the statements; any other gets them below it.
+      blank = !line.text.trim(),
+      from = blank ? line.from : line.to,
+      lead = blank ? "" : "\n",
+      tail = blank && line.to < state.doc.length ? "" : line.to === state.doc.length ? "\n" : "";
+    this.view.dispatch({
+      changes: { from, to: blank ? line.to : from, insert: `${lead}${text}${tail}` },
+      selection: EditorSelection.range(from + lead.length, from + lead.length + text.length),
+      effects: EditorView.scrollIntoView(from + lead.length, { y: "center" }),
+    });
+    this.view.focus();
   }
 }

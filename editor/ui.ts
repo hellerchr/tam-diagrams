@@ -1,277 +1,285 @@
-/** The editor's panels: toolbar, tools, inspector, source and status, built on the page around the canvas. */
+/**
+ * The editor's window around the canvas: the bar with the menus and the document's title, the tool
+ * rail, the left panel (shapes and outline), the right panel (properties and source), the status
+ * bar, and what lies over the canvas (notices, the banner of an error, the minimap).
+ */
 
 import type { Box } from "../src/scene.ts";
-import { COLORS, ELEMENT_KINDS, type Connection, type Word } from "../src/tam.ts";
-import type { ElementKind } from "../src/tam-edit.ts";
-import type { Direction } from "../src/elk.ts";
-import { TAM_EXAMPLES } from "../src/samples/tam-examples.ts";
-import type { Editor, Tool, TreeItem } from "./editor.ts";
-import { ICONS } from "./icons.ts";
+import { chooser, helpDialog, syntaxDialog } from "./dialogs.ts";
+import { h, icon, iconButton, prose, setOff, tipped } from "./dom.ts";
+import type { Editor, Tool } from "./editor.ts";
+import type { IconName } from "./icons.ts";
+import { Inspector } from "./inspector.ts";
+import { menuButton, popup } from "./menu.ts";
+import { type Bench, Menus, type PanelName, type Shell } from "./menus.ts";
+import { Minimap } from "./minimap.ts";
+import { Outline, within } from "./outline.ts";
+import { Palette } from "./palette.ts";
 import { SourcePane } from "./source.ts";
+import { StatusBar } from "./statusbar.ts";
+import { installTooltips } from "./tooltip.ts";
+import { typeInfo } from "./types.ts";
 
-type Child = Node | string | false | null | undefined;
+/** The pointer tools of the rail. */
+const POINTERS: { tool: Tool; icon: IconName; name: string; key: string }[] = [
+  { tool: "select", icon: "select", name: "Select, move and resize", key: "V" },
+  { tool: "pan", icon: "pan", name: "Pan: move the view", key: "H" },
+  { tool: "connect", icon: "connect", name: "Connect: drag from one element to another", key: "C" },
+];
 
-/** An element with attributes, listeners (`on...`) and children. */
-export function h<K extends keyof HTMLElementTagNameMap>(
-  tag: K,
-  props: Record<string, unknown> = {},
-  ...children: Child[]
-): HTMLElementTagNameMap[K] {
-  const element = document.createElement(tag);
-  for (const [name, value] of Object.entries(props)) {
-    if (value === undefined || value === false) continue;
-    if (name.startsWith("on") && typeof value === "function")
-      element.addEventListener(name.slice(2).toLowerCase(), value as EventListener);
-    else if (name === "class") element.className = String(value);
-    else if (name === "value") (element as HTMLInputElement).value = String(value);
-    else element.setAttribute(name, value === true ? "" : String(value));
-  }
-  element.append(...children.filter((child): child is Node | string => !!child));
-  return element;
-}
+/** The widths the panels start with and may be dragged to, and the widths of the window below which they lie over the canvas. */
+const LEFT = { start: 240, least: 200, most: 360 },
+  RIGHT = { start: 320, text: 480, least: 280, most: 560 },
+  NARROW = 1000,
+  TINY = 860;
 
-/** An icon: one of the drawings in icons.ts, parsed as an image of its own, not as markup of the page. */
-function icon(name: keyof typeof ICONS): HTMLElement {
-  const holder = h("span", { class: "icon", "aria-hidden": "true" });
-  const svg = new DOMParser().parseFromString(ICONS[name], "image/svg+xml").documentElement;
-  holder.append(document.importNode(svg, true));
-  return holder;
-}
-
-interface ToolItem {
-  tool: Tool;
-  icon: keyof typeof ICONS;
+/** A step to take back or go on with, offered in a notice. */
+export interface ToastAction {
   name: string;
-  key?: string;
-  /** What the element stands for, for its tooltip. */
-  hint?: string;
-}
-
-const POINTERS: ToolItem[] = [
-  { tool: "select", icon: "select", name: "Select", key: "V", hint: "Select, move and resize" },
-  { tool: "pan", icon: "pan", name: "Pan", key: "H", hint: "Move the view" },
-  {
-    tool: "connect",
-    icon: "connect",
-    name: "Connect",
-    key: "C",
-    hint: "Drag from one element to another",
-  },
-];
-
-/** The shapes of the palette, by the level of the notation they belong to. */
-const SHAPES: { title: string; items: ToolItem[] }[] = [
-  {
-    title: "Block diagram",
-    items: [
-      {
-        tool: "agent",
-        icon: "agent",
-        name: "Agent",
-        key: "A",
-        hint: "Does something: a service, a process",
-      },
-      {
-        tool: "human",
-        icon: "human",
-        name: "Human",
-        key: "U",
-        hint: "A person who uses the system",
-      },
-      {
-        tool: "storage",
-        icon: "storage",
-        name: "Storage",
-        key: "S",
-        hint: "Keeps information: a database, a file",
-      },
-      { tool: "group", icon: "group", name: "Group", key: "G", hint: "A frame around elements" },
-    ],
-  },
-  {
-    title: "Design level",
-    items: [
-      { tool: "component", icon: "component", name: "Component" },
-      { tool: "subsystem", icon: "subsystem", name: "Subsystem" },
-      { tool: "class", icon: "class", name: "Class" },
-      { tool: "package", icon: "package", name: "Package" },
-    ],
-  },
-];
-
-const HINTS: Record<string, string> = {
-  select:
-    "Drag to move · drag the dots to connect · drag a connection's end to another element · right-click for more",
-  pan: "Drag to move the view · Ctrl + wheel zooms",
-  connect: "Drag from one element to another",
-};
-
-/** The kinds of connection the inspector offers: a word, and for dependencies their keyword. */
-const WIRES: { value: string; name: string; word: Word; keyword?: string }[] = [
-  { value: "calls", name: "Request (calls)", word: "calls" },
-  { value: "sends data", name: "Data flow (sends data)", word: "sends data" },
-  { value: "---", name: "Channel, no direction", word: "---" },
-  { value: "reads", name: "Read access", word: "reads" },
-  { value: "writes", name: "Write access", word: "writes" },
-  { value: "reads/writes", name: "Read and write access", word: "reads/writes" },
-  { value: "requires", name: "Requires an interface", word: "requires" },
-  { value: "delegates", name: "Delegates to a part", word: "delegates" },
-  ...["use", "import", "create", "generate", "pointer"].map((keyword) => ({
-    value: `dependency:${keyword}`,
-    name: `Dependency «${keyword}»`,
-    word: "dependency" as Word,
-    keyword,
-  })),
-];
-
-const wireChange = (kind: (typeof WIRES)[number]) => ({
-  word: kind.word,
-  ...(kind.keyword ? { label: kind.keyword } : {}),
-});
-
-const wireValue = (connection: Connection) =>
-  connection.word === "dependency" ? `dependency:${connection.label}` : connection.word;
-
-/** An element of the tree with everything inside it, as ids. */
-const within = (item: TreeItem): string[] => [item.id, ...item.children.flatMap(within)];
-
-/** What the page offers the panels: files, the theme and the view. */
-export interface Shell {
-  newDiagram(): void;
-  openFile(): void;
-  saveFile(): void;
-  exportSvg(): void;
-  exportPng(): void;
-  copySource(): void;
-  openExample(source: string): void;
-  toggleTheme(): void;
-  /** Remembers a choice across visits. */
-  remember(key: string, value: string): void;
-  recall(key: string): string | null;
+  run(): void;
 }
 
 export class Panels {
+  private readonly root: HTMLElement;
   private readonly editor: Editor;
   private readonly shell: Shell;
-  private readonly tools = new Map<Tool, HTMLButtonElement>();
-  private readonly inspector = h("div", { class: "inspector" });
-  private readonly sourceBox = h("div", { class: "source" });
-  private readonly source: SourcePane;
-  private lines = "";
-  private readonly problem = h("div", { class: "problem", role: "status" });
-  private readonly warning = h("div", { class: "problem warning", role: "status" });
-  private readonly status = h("div", { class: "hint" });
-  private readonly mode = h("span", { class: "mode" });
-  private readonly zoom = h("button", { class: "zoom", title: "Zoom to 100% (Ctrl+0)" });
-  private readonly undo: HTMLButtonElement;
-  private readonly snap = h(
-    "button",
-    {
-      class: "button",
-      type: "button",
-      title: "Snap to the grid and to other elements (Alt turns it off while dragging)",
-      "aria-label": "Snap to the grid and to other elements",
-    },
-    icon("snap"),
-  );
-  private readonly redo: HTMLButtonElement;
   private readonly stage: HTMLElement;
-  private readonly toasts = h("div", { class: "toasts", role: "status" });
-  private readonly tree = h("div", { class: "tree", role: "tree", "aria-label": "Elements" });
-  private readonly empty = h(
-    "div",
-    { class: "empty" },
-    h("strong", {}, "An empty diagram"),
-    h("span", {}, "Drag a shape here from the left, or double-click for an agent."),
-  );
-  private shown = "";
-  private inspected = "";
-  private sync: (() => void)[] = [];
+  private readonly menus: Menus;
+  private readonly status: StatusBar;
+  private readonly palette: Palette;
+  private readonly outline: Outline;
+  private readonly inspector: Inspector;
+  private readonly minimap: Minimap;
+  private readonly source: SourcePane;
+  /** The lines marked in the source, to mark them again only when they changed. */
+  private lines = "";
+  /** Set while typed text waits to become the document. */
   private typing: number | undefined;
 
+  // The bar.
+  private readonly title = h("input", {
+    type: "text",
+    spellcheck: "false",
+    placeholder: "Untitled",
+    "aria-label": "Title of the diagram",
+  });
+  private readonly titleBox = h("label", { class: "doc-title" }, this.title);
+  private readonly chip = h("button", { class: "chip", type: "button" });
+  private readonly dot = h("span", { class: "unsaved", ...tipped({ tip: "Unsaved changes" }) });
+  private readonly arrangeTitle: HTMLElement;
+  private readonly undo: HTMLButtonElement;
+  private readonly redo: HTMLButtonElement;
+
+  // The rail and the panels.
+  private readonly tools = new Map<Tool, HTMLButtonElement>();
+  private readonly toggles = new Map<"shapes" | "outline" | "side", HTMLButtonElement>();
+  private readonly tabs = new Map<"shapes" | "outline", HTMLButtonElement>();
+  private readonly leftPanel: HTMLElement;
+  private readonly sidePanel: HTMLElement;
+  private readonly sections = new Map<"properties" | "source", HTMLElement>();
+  private readonly wrap: HTMLButtonElement;
+  private readonly problem = h("button", { class: "problem", type: "button" });
+  private readonly warning = h("div", { class: "problem warning", role: "status" });
+  private readonly problems = h("span", { class: "count" });
+
+  // Over the canvas.
+  private readonly toasts = h("div", { class: "toasts", role: "status" });
+  private readonly banner = h("button", { class: "banner", type: "button" });
+  private readonly preview = h("div", { class: "preview-label" }, "Preview");
+  private readonly empty = h("div", { class: "empty" });
+
+  // How the window is laid out.
+  /** The tab of the left panel on show; none when the panel is closed. */
+  private left: "shapes" | "outline" | "" = "shapes";
+  /** Whether the right panel shows. */
+  private side = true;
+  private readonly open = { properties: true, source: true };
+  private readonly widths = { left: LEFT.start, right: RIGHT.start };
+  /** The height of the Properties section while Source shows below it. */
+  private split = 300;
+  /** The window is too small for the left panel, or for both panels, beside the canvas: they lie over it. */
+  private narrow = false;
+  private tiny = false;
+  /** Whether the diagram on show is edited as text; undefined before the first one shows. */
+  private text: boolean | undefined;
+
   constructor(root: HTMLElement, stage: HTMLElement, editor: Editor, shell: Shell) {
+    this.root = root;
     this.editor = editor;
     this.shell = shell;
     this.stage = stage;
-    const button = (name: keyof typeof ICONS, title: string, run: () => void, label?: string) =>
-      h("button", { class: "button", title, "aria-label": title, onClick: run }, icon(name), label);
-    this.undo = button("undo", "Undo (Ctrl+Z)", () => editor.doc.undo());
-    this.redo = button("redo", "Redo (Ctrl+Shift+Z)", () => editor.doc.redo());
-    this.zoom.addEventListener("click", () => editor.view.zoomTo(1));
-    this.snap.addEventListener("click", () => {
-      editor.snapping = !editor.snapping;
-      editor.view.grid = editor.snapping;
-      editor.view.invalidate();
-      this.update();
+    installTooltips();
+    const bench: Bench = {
+      chooser: () => this.chooser(),
+      help: () => helpDialog(),
+      syntax: () => syntaxDialog(),
+      autoLayout: () => void this.autoLayout(),
+      shows: (panel) => this.shows(panel),
+      toggle: (panel) => this.toggle(panel),
+      toggleSnap: () => this.toggleSnap(),
+      toggleGrid: () => this.toggleGrid(),
+    };
+    this.menus = new Menus(editor, shell, bench);
+    this.status = new StatusBar(editor, {
+      arrange: () => this.menus.arrange(),
+      zoom: () => this.menus.zoom(),
+      showProblem: () => this.showProblem(),
+      toggleSnap: () => this.toggleSnap(),
     });
-    const examples = h(
-      "select",
-      {
-        class: "select",
-        title: "Open an example",
-        "aria-label": "Open an example",
-        onChange: (event: Event) => {
-          const select = event.target as HTMLSelectElement,
-            found = TAM_EXAMPLES.find(([name]) => name === select.value);
-          select.value = "";
-          if (found) shell.openExample(found[1]);
+    this.palette = new Palette(editor, (text) => this.insert(text));
+    this.outline = new Outline(editor, (at) => popup(this.menus.context({ x: 0, y: 0 }), at));
+    this.inspector = new Inspector(editor);
+    this.minimap = new Minimap(editor);
+
+    // The bar: the menus, the document, and the few commands worth a button.
+    this.undo = iconButton("undo", { tip: "Undo", key: "Ctrl+Z" }, () => editor.doc.undo());
+    this.redo = iconButton("redo", { tip: "Redo", key: "Ctrl+Shift+Z" }, () => editor.doc.redo());
+    const bar = this.menus.bar(),
+      titles = bar.map(({ name }) => h("button", { class: "menu-title", type: "button" }, name)),
+      shown = () => titles.filter((title) => !title.hidden);
+    const opened = titles.map((title, index) =>
+      menuButton(
+        title,
+        () =>
+          this.menus
+            .bar()
+            .find((menu) => menu.name === bar[index].name)!
+            .items(),
+        {
+          // The arrow keys go from menu to menu along the bar.
+          step: (by) => {
+            const list = shown(),
+              next = list[(list.indexOf(title) + by + list.length) % list.length];
+            opened[titles.indexOf(next)].open();
+          },
         },
-      },
-      h("option", { value: "" }, "Examples…"),
-      ...TAM_EXAMPLES.filter(([name]) => !name.startsWith("error")).map(([name]) =>
-        h("option", { value: name }, name),
       ),
     );
-    const bar = h(
+    titles.forEach((title, index) =>
+      // With one menu open, the pointer opens the others as it passes.
+      title.addEventListener("pointerenter", () => {
+        if (opened.some((menu, other) => other !== index && menu.isOpen)) opened[index].open();
+      }),
+    );
+    this.arrangeTitle = titles[bar.findIndex((menu) => menu.name === "Arrange")];
+    this.title.addEventListener("input", () => this.sizeTitle());
+    this.title.addEventListener("change", () => {
+      if (this.title.value.trim() !== (editor.doc.picture?.title ?? ""))
+        editor.setTitle(this.title.value);
+    });
+    this.title.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") this.title.blur();
+      else if (event.key === "Escape") {
+        this.title.value = editor.doc.picture?.title ?? "";
+        this.title.blur();
+      }
+    });
+    this.chip.addEventListener("click", () => this.chooser());
+    const exporting = h(
+      "button",
+      { class: "button primary", type: "button" },
+      icon("export"),
+      h("span", {}, "Export"),
+      icon("chevron"),
+    );
+    menuButton(exporting, () => this.menus.exports(), { right: true });
+    const header = h(
       "header",
       { class: "bar" },
-      h("div", { class: "brand" }, icon("logo"), h("span", {}, "TAM Editor")),
       h(
         "div",
-        { class: "cluster" },
-        button("file", "New diagram", () => shell.newDiagram(), "New"),
-        button("open", "Open a .tam file", () => shell.openFile(), "Open"),
-        button("save", "Save as a .tam file (Ctrl+S)", () => shell.saveFile(), "Save"),
-        examples,
+        { class: "bar-start" },
+        h("span", { class: "logo", ...tipped({ tip: "TAM Editor" }) }, icon("logo")),
+        h("nav", { class: "menubar", "aria-label": "Menus" }, ...titles),
       ),
-      h("div", { class: "cluster" }, this.undo, this.redo),
+      h("div", { class: "bar-doc" }, this.titleBox, this.chip, this.dot),
       h(
         "div",
-        { class: "cluster" },
-        this.mode,
-        button(
-          "layout",
-          "Lay the diagram out automatically: clears every position",
-          () => void editor.autoLayout(),
-          "Auto layout",
-        ),
-      ),
-      h("div", { class: "spacer" }),
-      h(
-        "div",
-        { class: "cluster" },
-        button("minus", "Zoom out (−)", () => editor.view.zoomBy(0.8)),
-        this.zoom,
-        button("plus", "Zoom in (+)", () => editor.view.zoomBy(1.25)),
-        button("fit", "Fit the diagram (1)", () => editor.fit()),
-        this.snap,
-      ),
-      h(
-        "div",
-        { class: "cluster" },
-        button("image", "Export as SVG", () => shell.exportSvg(), "SVG"),
-        button("image", "Export as PNG", () => shell.exportPng(), "PNG"),
-        button("copy", "Copy the source", () => shell.copySource()),
-        button("theme", "Light or dark", () => shell.toggleTheme()),
-        button("help", "Keyboard and mouse (?)", () => this.help()),
+        { class: "bar-end" },
+        this.undo,
+        this.redo,
+        exporting,
+        iconButton("help", { tip: "Keyboard and mouse", key: "?" }, () => helpDialog()),
       ),
     );
-    const tools = this.palette(root);
-    this.source = new SourcePane(this.sourceBox, {
+
+    // The rail: the pointer tools, then what the panels show.
+    const tool = (entry: (typeof POINTERS)[number]) => {
+      const control = iconButton(
+        entry.icon,
+        { tip: entry.name, key: entry.key, side: "right" },
+        () => editor.setTool(entry.tool),
+        "rail-button",
+      );
+      this.tools.set(entry.tool, control);
+      return control;
+    };
+    const toggle = (
+      which: "shapes" | "outline" | "side",
+      name: IconName,
+      tip: string,
+      run: () => void,
+    ) => {
+      const control = iconButton(name, { tip, side: "right" }, run, "rail-button");
+      this.toggles.set(which, control);
+      return control;
+    };
+    const rail = h(
+      "nav",
+      { class: "rail", "aria-label": "Tools and panels" },
+      ...POINTERS.map(tool),
+      h("hr"),
+      toggle("shapes", "shapes", "Shapes", () => this.toggle("shapes")),
+      toggle("outline", "outline", "Outline", () => this.toggle("outline")),
+      h("span", { class: "spacer" }),
+      toggle("side", "panel", "Properties and source", () => this.toggleSide()),
+    );
+
+    // The left panel: two tabs that take its whole height.
+    const tab = (which: "shapes" | "outline", name: string) => {
+      const control = h(
+        "button",
+        { class: "tab", type: "button", role: "tab", onClick: () => this.show(which) },
+        name,
+      );
+      this.tabs.set(which, control);
+      return control;
+    };
+    this.leftPanel = h(
+      "aside",
+      { class: "left", "aria-label": "Shapes and outline" },
+      h(
+        "div",
+        { class: "tabs", role: "tablist" },
+        tab("shapes", "Shapes"),
+        tab("outline", "Outline"),
+        h("span", { class: "spacer" }),
+        iconButton("close", { tip: "Close the panel" }, () => this.show(""), "button small"),
+      ),
+      this.palette.element,
+      this.outline.element,
+      this.resizer(
+        "x",
+        1,
+        LEFT,
+        () => this.widths.left,
+        (width) => {
+          this.widths.left = width;
+          shell.remember("left-width", String(width));
+        },
+      ),
+    );
+
+    // The right panel: properties above the source, each in a place of its own.
+    const sourceBox = h("div", { class: "source" });
+    this.source = new SourcePane(sourceBox, {
       changed: (text) => {
         // The picture follows the typing after a pause.
         window.clearTimeout(this.typing);
-        this.typing = window.setTimeout(() => void editor.doc.apply(text), 200);
+        this.typing = window.setTimeout(() => {
+          this.typing = undefined;
+          void editor.doc.apply(text);
+        }, 200);
       },
       ids: () => editor.tree.flatMap(within).filter((id) => !id.includes("#")),
       cursorAt: (line) => {
@@ -284,573 +292,349 @@ export class Panels {
         editor.reveal(node.id);
       },
     });
-    const side = h(
-      "aside",
-      { class: "side" },
-      h("section", { class: "pane" }, this.inspector),
-      h(
+    this.wrap = iconButton(
+      "wrap",
+      { tip: "Wrap long lines" },
+      () => this.setWrap(this.wrap.getAttribute("aria-pressed") !== "true"),
+      "button small",
+    );
+    this.problem.addEventListener("click", () => this.showProblem());
+    const section = (
+      which: "properties" | "source",
+      name: string,
+      extras: HTMLElement[],
+      ...body: HTMLElement[]
+    ) => {
+      const made = h(
         "section",
-        { class: "pane grow" },
-        h("h2", {}, "Source"),
-        this.sourceBox,
+        { class: `section ${which}` },
+        h(
+          "header",
+          { class: "section-header" },
+          h(
+            "button",
+            { class: "fold", type: "button", onClick: () => this.toggle(which) },
+            icon("chevron"),
+            h("h2", {}, name),
+          ),
+          ...extras,
+        ),
+        ...body,
+      );
+      this.sections.set(which, made);
+      return made;
+    };
+    const splitter = h("div", { class: "splitter", role: "separator" });
+    this.dragging(
+      splitter,
+      "y",
+      1,
+      () => this.sections.get("properties")!.getBoundingClientRect().height,
+      (height) => {
+        const most = this.sidePanel.getBoundingClientRect().height - 120;
+        this.split = Math.round(Math.max(80, Math.min(height, most)));
+        shell.remember("split", String(this.split));
+        this.arrange();
+      },
+    );
+    this.sidePanel = h(
+      "aside",
+      { class: "side", "aria-label": "Properties and source" },
+      this.resizer(
+        "x",
+        -1,
+        RIGHT,
+        () => this.widths.right,
+        (width) => {
+          this.widths.right = width;
+          shell.remember(this.text ? "right-width-text" : "right-width", String(width));
+        },
+      ),
+      section("properties", "Properties", [], this.inspector.element),
+      splitter,
+      section(
+        "source",
+        "Source",
+        [this.problems, this.wrap],
         this.problem,
         this.warning,
+        sourceBox,
       ),
     );
-    stage.append(this.empty, this.toasts);
-    root.append(bar, tools, stage, side, h("footer", { class: "status" }, this.status));
+
+    // Over the canvas.
+    this.banner.addEventListener("click", () => this.showProblem());
+    stage.append(this.empty, this.preview, this.banner, this.minimap.element, this.toasts);
+    // A press on the canvas puts away a panel that lies over it.
+    stage.addEventListener("pointerdown", () => {
+      if (this.narrow && this.left) this.show("");
+      if (this.tiny && this.side) this.toggleSide();
+    });
+    root.append(header, rail, this.leftPanel, stage, this.sidePanel, this.status.element);
+
+    // What was chosen on an earlier visit.
+    const number = (key: string, start: number) => Number(shell.recall(key)) || start;
+    this.left = { shapes: "shapes", outline: "outline", none: "" }[
+      shell.recall("left") ?? "shapes"
+    ] as typeof this.left;
+    this.side = shell.recall("side") !== "closed";
+    this.open.source = shell.recall("source-open") !== "closed";
+    this.widths.left = number("left-width", LEFT.start);
+    this.split = number("split", Math.round(window.innerHeight * 0.55));
+    editor.snapping = shell.recall("snap") !== "off";
+    editor.view.grid = shell.recall("grid") !== "off";
+    this.setWrap(shell.recall("wrap") === "on");
+    const sized = () => {
+      const narrow = window.innerWidth < NARROW,
+        tiny = window.innerWidth < TINY;
+      if (narrow === this.narrow && tiny === this.tiny) return this.arrange();
+      this.narrow = narrow;
+      this.tiny = tiny;
+      // A panel that comes to lie over the canvas starts closed; with room beside it, it is back as it was.
+      this.left = narrow
+        ? ""
+        : ({ shapes: "shapes", outline: "outline", none: "" }[
+            shell.recall("left") ?? "shapes"
+          ] as typeof this.left);
+      this.side = !tiny && shell.recall("side") !== "closed";
+      this.arrange();
+    };
+    window.addEventListener("resize", sized);
+    this.narrow = window.innerWidth < NARROW;
+    this.tiny = window.innerWidth < TINY;
+    if (this.narrow) this.left = "";
+    if (this.tiny) this.side = false;
+
     editor.notify = (message) => this.toast(message);
-    editor.onMenu = (at, point) => this.menu(at, point);
-    editor.onHelp = () => this.help();
+    editor.onMenu = (at, point) => popup(this.menus.context(point), at);
+    editor.onHelp = () => helpDialog();
+    editor.onPointer = (point) => this.status.showPointer(point);
     editor.editText = (box, text, options, done) => this.editText(box, text, options, done);
-    editor.view.onView = () => this.showZoom();
-    this.showZoom();
+    editor.view.onView = () => {
+      this.status.showZoom();
+      this.minimap.draw();
+    };
+    this.arrange();
   }
 
-  /** The left panel: the pointer tools, the shapes to drag onto the canvas, and the tree of the diagram. */
-  private palette(root: HTMLElement): HTMLElement {
-    const { editor, shell } = this;
-    const item = (entry: ToolItem, shape: boolean) => {
-      const title = [entry.name, entry.key && `(${entry.key})`, entry.hint && `· ${entry.hint}`]
-        .filter(Boolean)
-        .join(" ");
-      const control = h(
-        "button",
-        { class: shape ? "tool shape" : "tool", title, "aria-label": title, type: "button" },
-        icon(entry.icon),
-        h("span", { class: "name" }, entry.name),
-        entry.key && h("kbd", {}, entry.key),
-      );
-      this.tools.set(entry.tool, control);
-      if (shape) this.draggable(control, entry);
-      else control.addEventListener("click", () => editor.setTool(entry.tool));
-      return control;
-    };
-    const fold = h(
-      "button",
-      {
-        class: "tool fold",
-        type: "button",
-        title: "Show or hide the names and the tree",
-        "aria-label": "Show or hide the names and the tree",
-        onClick: () => {
-          const compact = root.classList.toggle("compact");
-          shell.remember("palette", compact ? "compact" : "wide");
-          requestAnimationFrame(() => editor.view.invalidate());
-        },
-      },
-      icon("fold"),
-    );
-    root.classList.toggle("compact", shell.recall("palette") === "compact");
-    // The tree takes drops: onto an element, or onto its ground for the top level.
-    this.tree.addEventListener("dragover", (event) => {
-      if (
-        event.target === this.tree &&
-        this.dragged.length &&
-        editor.allowsMove(this.dragged, null)
-      )
-        event.preventDefault();
-    });
-    this.tree.addEventListener("drop", (event) => {
-      if (event.target !== this.tree) return;
-      event.preventDefault();
-      editor.moveElements(this.dragged, null);
-    });
-    return h(
-      "nav",
-      { class: "tools", "aria-label": "Tools and shapes" },
-      h("div", { class: "pointers" }, ...POINTERS.map((entry) => item(entry, false)), fold),
-      ...SHAPES.flatMap((group) => {
-        const title = h("h2", {}, group.title),
-          shapes = h("div", { class: "shapes" }, ...group.items.map((entry) => item(entry, true)));
-        this.groups.push({ title, shapes, items: group.items });
-        return [title, shapes];
-      }),
-      h(
-        "div",
-        { class: "outline" },
-        h("h2", {}, "Elements"),
-        h(
-          "button",
-          {
-            class: "tool mini plain",
-            type: "button",
-            title: "Expand all",
-            "aria-label": "Expand all",
-            onClick: () => this.foldAll(false),
-          },
-          icon("expand"),
-        ),
-        h(
-          "button",
-          {
-            class: "tool mini plain",
-            type: "button",
-            title: "Collapse all",
-            "aria-label": "Collapse all",
-            onClick: () => this.foldAll(true),
-          },
-          icon("collapse"),
-        ),
-      ),
-      h("input", {
-        class: "field search",
-        type: "search",
-        placeholder: "Find an element…",
-        "aria-label": "Find an element",
-        onInput: (event: Event) => {
-          this.filter = (event.target as HTMLInputElement).value;
-          this.showTree();
-        },
-      }),
-      this.tree,
-    );
-  }
+  // The layout of the window.
 
-  /**
-   * A shape of the palette: a click picks it as the tool, to place with a click on the canvas; a
-   * drag carries it there, shown where it would stand.
-   */
-  private draggable(control: HTMLElement, entry: ToolItem) {
-    const { editor } = this,
-      kind = entry.tool as ElementKind;
-    let start: { x: number; y: number } | undefined, chip: HTMLElement | undefined;
-    const over = (event: PointerEvent) => {
-      const rect = editor.view.canvas.getBoundingClientRect();
-      return (
-        event.clientX >= rect.left &&
-        event.clientX <= rect.right &&
-        event.clientY >= rect.top &&
-        event.clientY <= rect.bottom
-      );
-    };
-    const end = () => {
-      start = undefined;
-      chip?.remove();
-      chip = undefined;
-      editor.showGhost(kind, undefined);
-    };
-    control.addEventListener("pointerdown", (event) => {
+  /** Makes a handle drag a length: `start()` is the length at the press, `apply` takes it as the pointer moves. */
+  private dragging(
+    handle: HTMLElement,
+    axis: "x" | "y",
+    sign: 1 | -1,
+    start: () => number,
+    apply: (length: number) => void,
+    reset?: () => void,
+  ) {
+    let from: { at: number; length: number } | undefined;
+    const at = (event: PointerEvent) => (axis === "x" ? event.clientX : event.clientY);
+    handle.addEventListener("pointerdown", (event) => {
       if (event.button !== 0) return;
-      start = { x: event.clientX, y: event.clientY };
-      control.setPointerCapture(event.pointerId);
+      event.preventDefault();
+      from = { at: at(event), length: start() };
+      handle.setPointerCapture(event.pointerId);
+      handle.classList.add("active");
     });
-    control.addEventListener("pointermove", (event) => {
-      if (!start) return;
-      if (!chip && Math.hypot(event.clientX - start.x, event.clientY - start.y) < 5) return;
-      chip ??= document.body.appendChild(
-        h("div", { class: "chip" }, icon(entry.icon), h("span", {}, entry.name)),
-      );
-      // Over the canvas the element shows where it would stand; on the way there, as a chip.
-      const on = over(event);
-      chip.hidden = on;
-      chip.style.transform = `translate(${event.clientX + 10}px, ${event.clientY + 10}px)`;
-      editor.showGhost(
-        kind,
-        on ? editor.view.toScene(editor.view.pointOf(event)) : undefined,
-        event.altKey,
-      );
+    handle.addEventListener("pointermove", (event) => {
+      if (from) apply(from.length + sign * (at(event) - from.at));
     });
-    control.addEventListener("pointerup", (event) => {
-      const dragged = !!chip,
-        on = over(event);
-      end();
-      if (!dragged) editor.setTool(editor.tool === kind ? "select" : kind);
-      else if (on)
-        editor.create(kind, editor.view.toScene(editor.view.pointOf(event)), event.altKey);
+    const end = () => {
+      from = undefined;
+      handle.classList.remove("active");
+    };
+    handle.addEventListener("pointerup", end);
+    handle.addEventListener("pointercancel", end);
+    if (reset) handle.addEventListener("dblclick", reset);
+  }
+
+  /** The handle on the inner edge of a panel: a drag makes the panel wider or narrower, a double click as wide as it started. */
+  private resizer(
+    axis: "x",
+    sign: 1 | -1,
+    range: { start: number; least: number; most: number },
+    read: () => number,
+    write: (width: number) => void,
+  ) {
+    const handle = h("div", {
+      class: `resizer ${sign > 0 ? "at-end" : "at-start"}`,
+      role: "separator",
     });
-    control.addEventListener("pointercancel", end);
+    const set = (width: number) => {
+      write(Math.round(Math.max(range.least, Math.min(width, range.most))));
+      this.arrange();
+    };
+    this.dragging(handle, axis, sign, read, set, () => set(range.start));
+    return handle;
   }
 
-  /** The groups of shapes in the palette, shown as far as the diagram takes their shapes. */
-  private groups: { title: HTMLElement; shapes: HTMLElement; items: ToolItem[] }[] = [];
-
-  /** The elements of the tree that are closed: their parts do not show. */
-  private folded = new Set<string>();
-
-  /** The elements being dragged in the tree. */
-  private dragged: string[] = [];
-
-  /** The rows of the tree by element, to mark the selected ones without building the tree again. */
-  private rows = new Map<string, HTMLElement>();
-  private filter = "";
-  private marked = "";
-
-  /**
-   * The tree of the diagram: the arrow opens and closes an element that holds others, a click
-   * selects, a double click names, a drag puts an element inside another. Built again only when
-   * the elements, the closed ones or the filter changed, so a row stays the row it was between
-   * two clicks.
-   */
-  private showTree() {
-    const { editor } = this,
-      items = editor.tree,
-      selected = editor.selectedElements;
-    // What is selected on the canvas shows in the tree: the elements around it open.
-    const mark = selected.join(" ");
-    if (mark !== this.marked) {
-      const open = (list: TreeItem[], path: string[]): void => {
-        for (const item of list) {
-          if (selected.includes(item.id)) path.forEach((id) => this.folded.delete(id));
-          open(item.children, [...path, item.id]);
-        }
-      };
-      open(items, []);
-    }
-    const words = this.filter.trim().toLowerCase();
-    const matches = (item: TreeItem): boolean =>
-      !words ||
-      item.label.toLowerCase().includes(words) ||
-      item.id.toLowerCase().includes(words) ||
-      item.kind.includes(words) ||
-      item.children.some(matches);
-    const key = JSON.stringify([items, [...this.folded], words]);
-    if (key !== this.shown) {
-      this.shown = key;
-      this.rows.clear();
-      const row = (item: TreeItem, depth: number): HTMLElement[] => {
-        if (!matches(item)) return [];
-        // A search shows what it finds, whatever is closed.
-        const folded = !words && this.folded.has(item.id),
-          parent = item.children.length > 0;
-        const toggle = (deep: boolean) => {
-          const ids = deep ? within(item) : [item.id];
-          for (const id of ids)
-            if (folded) this.folded.delete(id);
-            else this.folded.add(id);
-          this.showTree();
-        };
-        const twist = h(
-          "span",
-          parent
-            ? {
-                class: "twist",
-                role: "button",
-                title: folded ? "Expand (Alt: all inside)" : "Collapse (Alt: all inside)",
-                "aria-label": folded ? "Expand" : "Collapse",
-                "aria-expanded": String(!folded),
-                draggable: "false",
-                onClick: (event: MouseEvent) => {
-                  event.stopPropagation();
-                  toggle(event.altKey);
-                },
-                onDblclick: (event: Event) => event.stopPropagation(),
-                onPointerdown: (event: Event) => event.stopPropagation(),
-              }
-            : { class: "twist none" },
-          parent && icon("chevron"),
-        );
-        const line = h(
-          "div",
-          {
-            class: "node",
-            role: "treeitem",
-            tabindex: "-1",
-            draggable: "true",
-            ...(parent ? { "aria-expanded": String(!folded) } : {}),
-            style: `padding-left:${2 + depth * 14}px`,
-            title: `${item.kind} ${item.id}`,
-          },
-          twist,
-          icon(item.kind),
-          h(
-            "span",
-            { class: "name" },
-            item.label.replace(/<br\s*\/?>/gi, " ") || item.id.replace(/#.*/, ""),
-          ),
-          parent && folded && h("span", { class: "count" }, String(within(item).length - 1)),
-        );
-        this.rows.set(item.id, line);
-        line.addEventListener("click", (event) => {
-          const part = { type: "element" as const, id: item.id };
-          editor.select(
-            event.shiftKey || event.ctrlKey || event.metaKey
-              ? editor.isSelected(part)
-                ? editor.selection.filter((other) => other.id !== item.id)
-                : [...editor.selection, part]
-              : [part],
-          );
-          editor.reveal(item.id);
-          line.focus();
-        });
-        line.addEventListener("dblclick", () => editor.rename(item.id));
-        line.addEventListener("contextmenu", (event) => {
-          event.preventDefault();
-          if (!editor.isSelected({ type: "element", id: item.id }))
-            editor.select([{ type: "element", id: item.id }]);
-          this.menu({ x: event.clientX, y: event.clientY }, { x: 0, y: 0 });
-        });
-        line.addEventListener("keydown", (event) => {
-          const lines = [...this.rows.values()],
-            at = lines.indexOf(line);
-          if (event.key === "ArrowRight" && parent && folded) toggle(false);
-          else if (event.key === "ArrowLeft" && parent && !folded) toggle(false);
-          else if (event.key === "ArrowDown") lines[at + 1]?.click();
-          else if (event.key === "ArrowUp") lines[at - 1]?.click();
-          else if (event.key === "Enter" || event.key === "F2") editor.rename(item.id);
-          else if (event.key === "Delete" || event.key === "Backspace") editor.deleteSelection();
-          else return;
-          event.preventDefault();
-          event.stopPropagation();
-          this.rows.get(item.id)?.focus();
-        });
-        line.addEventListener("dragstart", (event) => {
-          // The arrow opens and closes; it does not start a drag.
-          if ((event.target as HTMLElement).closest?.(".twist")) return event.preventDefault();
-          const chosen = editor.selectedElements;
-          this.dragged = chosen.includes(item.id) ? chosen : [item.id];
-          event.dataTransfer?.setData("text/plain", this.dragged.join(" "));
-          if (event.dataTransfer) event.dataTransfer.effectAllowed = "move";
-        });
-        line.addEventListener("dragend", () => {
-          this.dragged = [];
-        });
-        line.addEventListener("dragover", (event) => {
-          if (!this.dragged.length || !editor.allowsMove(this.dragged, item.id)) return;
-          event.preventDefault();
-          line.classList.add("over");
-        });
-        line.addEventListener("dragleave", () => line.classList.remove("over"));
-        line.addEventListener("drop", (event) => {
-          event.preventDefault();
-          line.classList.remove("over");
-          this.folded.delete(item.id);
-          editor.moveElements(this.dragged, item.id);
-        });
-        return [line, ...(folded ? [] : item.children.flatMap((child) => row(child, depth + 1)))];
-      };
-      const lines = items.flatMap((item) => row(item, 0));
-      this.tree.replaceChildren(
-        ...(lines.length
-          ? lines
-          : [h("p", { class: "note" }, words ? "Nothing found." : "No elements yet.")]),
-      );
-    }
-    for (const [id, line] of this.rows)
-      line.setAttribute("aria-selected", String(selected.includes(id)));
-    if (mark !== this.marked) {
-      this.marked = mark;
-      // The row of what was selected last comes into view, without taking the focus from the canvas.
-      this.rows.get(selected.at(-1) ?? "")?.scrollIntoView({ block: "nearest" });
-    }
-  }
-
-  /** Opens or closes every element of the tree that holds others. */
-  private foldAll(closed: boolean) {
-    this.folded.clear();
-    const walk = (items: TreeItem[]) => {
-      for (const item of items) {
-        if (closed && item.children.length) this.folded.add(item.id);
-        walk(item.children);
-      }
-    };
-    walk(this.editor.tree);
-    this.showTree();
-  }
-
-  private showZoom() {
-    this.zoom.textContent = `${Math.round(this.editor.view.zoom * 100)}%`;
-  }
-
-  /** The menu of a right click: what can be done with the selection, or at the point on the empty canvas. */
-  private menu(at: { x: number; y: number }, point: { x: number; y: number }) {
-    const { editor } = this,
-      elements = editor.selectedElements,
-      wires = editor.selectedWires;
-    document.querySelector(".menu")?.remove();
-    const menu = h("div", { class: "menu", role: "menu" });
-    const close = () => {
-      menu.remove();
-      window.removeEventListener("pointerdown", outside, true);
-      window.removeEventListener("keydown", escape, true);
-    };
-    const outside = (event: Event) => {
-      if (!menu.contains(event.target as Node)) close();
-    };
-    const escape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") close();
-    };
-    const item = (
-      name: string,
-      run: () => void,
-      options: { key?: string; danger?: boolean } = {},
-    ) =>
-      h(
-        "button",
-        {
-          class: options.danger ? "danger" : "",
-          type: "button",
-          role: "menuitem",
-          onClick: () => {
-            close();
-            run();
-          },
-        },
-        h("span", {}, name),
-        options.key && h("kbd", {}, options.key),
-      );
-    const line = () => h("hr");
-    const clip = (cut: boolean) => {
-      const text = editor.copy();
-      if (text === undefined) return;
-      void navigator.clipboard?.writeText(text).catch(() => {});
-      if (cut) editor.deleteSelection();
-    };
-    const paste = () =>
-      void (navigator.clipboard?.readText() ?? Promise.reject(new Error("No clipboard.")))
-        .catch(() => editor.copiedText ?? "")
-        .then((text) => text && editor.paste(text));
-    const rows: (HTMLElement | false)[] = [];
-    if (elements.length) {
-      // Only the boxes that may hold what is selected are offered.
-      const boxes = (
-        [
-          ["agent", "Put in an agent", "Ctrl+G"],
-          ["storage", "Put in a storage", ""],
-          ["component", "Put in a component", ""],
-          ["subsystem", "Put in a subsystem", ""],
-          ["package", "Put in a package", ""],
-          ["group", "Put in a group", "Ctrl+Shift+G"],
-        ] as [ElementKind, string, string][]
-      ).filter(([kind]) => editor.allowsWrap(kind));
-      rows.push(
-        ...boxes.map(([kind, name, key]) => item(name, () => editor.wrapSelection(kind), { key })),
-        !!editor.selectionHolder && item("Take out of its box", () => editor.takeOut()),
-        editor.canLayoutSelection &&
-          item(
-            elements.length === 1 ? "Auto layout inside" : "Auto layout these",
-            () => void editor.layoutSelection(),
-          ),
-        (boxes.length > 0 || !!editor.selectionHolder) && line(),
-        elements.length === 1 && item("Rename", () => editor.rename(elements[0]), { key: "Enter" }),
-        item("Duplicate", () => editor.duplicateSelection(), { key: "Ctrl+D" }),
-        item("Copy", () => clip(false), { key: "Ctrl+C" }),
-        item("Cut", () => clip(true), { key: "Ctrl+X" }),
-        line(),
-        item("Delete", () => editor.deleteSelection(), { key: "Del", danger: true }),
-      );
-    } else if (wires.length) {
-      const [id] = wires,
-        connection = wires.length === 1 ? editor.connection(id) : undefined;
-      // The other kinds this connection may be, between the elements it joins.
-      const kinds = connection
-        ? WIRES.filter(
-            (kind) =>
-              kind.value !== wireValue(connection) && editor.allowsWire(id, wireChange(kind)),
-          )
-        : [];
-      rows.push(
-        ...kinds.map((kind) =>
-          item(`Change to: ${kind.name}`, () => editor.setWire(id, wireChange(kind))),
-        ),
-        kinds.length > 0 && line(),
-        wires.length === 1 &&
-          editor.allowsWire(id, { reverse: true }) &&
-          item("Reverse", () => editor.setWire(id, { reverse: true })),
-        item("Delete", () => editor.deleteSelection(), { key: "Del", danger: true }),
-      );
-    } else {
-      const kinds = (["agent", "human", "storage"] as ElementKind[]).filter((kind) =>
-        editor.allowsKind(kind),
-      );
-      rows.push(
-        ...kinds.map((kind) => item(`Add ${kind} here`, () => editor.create(kind, point))),
-        kinds.length > 0 && line(),
-        item("Paste", paste, { key: "Ctrl+V" }),
-        item("Select all", () => editor.selectAll(), { key: "Ctrl+A" }),
-        item("Fit the diagram", () => editor.fit(), { key: "1" }),
-      );
-    }
-    menu.append(...rows.filter((row) => row !== false));
-    document.body.append(menu);
-    // Inside the window, whichever corner the click was near.
-    const { width, height } = menu.getBoundingClientRect();
-    menu.style.left = `${Math.max(4, Math.min(at.x, window.innerWidth - width - 4))}px`;
-    menu.style.top = `${Math.max(4, Math.min(at.y, window.innerHeight - height - 4))}px`;
-    window.addEventListener("pointerdown", outside, true);
-    window.addEventListener("keydown", escape, true);
-  }
-
-  /** What the keyboard and the mouse do, in a dialog. */
-  private help() {
-    const existing = document.querySelector<HTMLDialogElement>("dialog.help");
-    if (existing) return existing.close();
-    const groups: [string, [string, string][]][] = [
-      [
-        "Add and connect",
-        [
-          ["Drag a shape from the left", "Add it where it is dropped"],
-          ["A  U  S  G", "Agent, human, storage, group: then click"],
-          ["Double-click the canvas", "Add an agent"],
-          ["Click a dot beside an element", "Add a connected agent on that side"],
-          ["Drag a dot", "Connect to another element, or to a new one"],
-          ["C", "Connect tool"],
-        ],
-      ],
-      [
-        "Select and change",
-        [
-          ["Click, Shift-click, drag a frame", "Select"],
-          ["Double-click, Enter or F2", "Name an element or label a connection"],
-          ["Drag an end of a connection", "Attach it to another element"],
-          ["Right-click", "Menu: put in a box, change a connection, …"],
-          ["Ctrl+G, Ctrl+Shift+G", "Put the selection in an agent, in a group"],
-          ["Delete", "Remove"],
-        ],
-      ],
-      [
-        "Move and arrange",
-        [
-          ["Drag", "Move; into a container to put it inside"],
-          ["Shift-drag", "Keep to one axis"],
-          ["Ctrl-drag", "Drag a copy away"],
-          ["Alt-drag", "No snapping"],
-          ["Arrow keys, with Shift", "Move by 10, by 1"],
-          ["Ctrl+D, Ctrl+C/X/V", "Duplicate, copy, cut, paste"],
-          ["Ctrl+Z, Ctrl+Shift+Z", "Undo, redo"],
-        ],
-      ],
-      [
-        "View",
-        [
-          ["Wheel, Space-drag, middle button", "Move the view"],
-          ["Ctrl + wheel, + and −", "Zoom"],
-          ["1, 2, Ctrl+0", "Fit the diagram, fit the selection, 100%"],
-          ["V, H", "Select tool, pan tool"],
-        ],
-      ],
-    ];
-    const dialog = h(
-      "dialog",
-      { class: "help" },
-      h("h1", {}, "Keyboard and mouse"),
-      h(
-        "div",
-        { class: "columns" },
-        ...groups.map(([title, rows]) =>
-          h(
-            "section",
-            {},
-            h("h2", {}, title),
-            ...rows.map(([keys, does]) => h("p", {}, h("kbd", {}, keys), h("span", {}, does))),
-          ),
-        ),
+  /** Lays the window out as its state says: which panels show, how wide, and what the rail marks. */
+  private arrange() {
+    const { root } = this,
+      left = !!this.left,
+      // The canvas keeps a part of the window, whatever the panels were dragged to.
+      room = Math.max(
+        RIGHT.least,
+        window.innerWidth - 44 - (left && !this.narrow ? this.widths.left : 0) - 240,
       ),
-      h("button", { class: "button", type: "button", onClick: () => dialog.close() }, "Close"),
-    ) as HTMLDialogElement;
-    dialog.addEventListener("close", () => dialog.remove());
-    dialog.addEventListener("click", (event) => {
-      if (event.target === dialog) dialog.close();
-    });
-    document.body.append(dialog);
-    dialog.showModal();
+      right = Math.min(this.widths.right, this.tiny ? window.innerWidth - 44 : room);
+    root.classList.toggle("left-over", this.narrow);
+    root.classList.toggle("side-over", this.tiny);
+    root.style.setProperty("--left", left && !this.narrow ? `${this.widths.left}px` : "0px");
+    root.style.setProperty("--right", this.side && !this.tiny ? `${right}px` : "0px");
+    this.leftPanel.style.width = `${this.widths.left}px`;
+    this.sidePanel.style.width = `${right}px`;
+    this.leftPanel.hidden = !left;
+    this.sidePanel.hidden = !this.side;
+    for (const [which, control] of this.tabs)
+      control.setAttribute("aria-selected", String(this.left === which));
+    this.palette.element.hidden = this.left !== "shapes";
+    this.outline.element.hidden = this.left !== "outline";
+    this.toggles.get("shapes")!.setAttribute("aria-pressed", String(this.left === "shapes"));
+    this.toggles.get("outline")!.setAttribute("aria-pressed", String(this.left === "outline"));
+    this.toggles.get("side")!.setAttribute("aria-pressed", String(this.side));
+    // Properties keeps its height above the source; alone, either takes the panel.
+    const properties = this.sections.get("properties")!,
+      source = this.sections.get("source")!;
+    properties.classList.toggle("closed", !this.open.properties);
+    source.classList.toggle("closed", !this.open.source);
+    properties.style.flex = this.open.properties && this.open.source ? `0 0 ${this.split}px` : "";
+    this.sidePanel.classList.toggle("split", this.open.properties && this.open.source);
+    for (const [which, made] of this.sections)
+      made.querySelector(".fold")!.setAttribute("aria-expanded", String(this.open[which]));
   }
 
-  /** Says something for a few seconds. */
-  toast(message: string) {
-    const note = h("div", { class: "toast" }, message);
+  /** Shows a tab of the left panel, or closes the panel. */
+  private show(which: "shapes" | "outline" | "") {
+    this.left = which;
+    if (!this.narrow) this.shell.remember("left", which || "none");
+    this.arrange();
+  }
+
+  private toggleSide() {
+    this.side = !this.side;
+    if (!this.tiny) this.shell.remember("side", this.side ? "open" : "closed");
+    this.arrange();
+  }
+
+  private shows(panel: PanelName): boolean {
+    return panel === "shapes" || panel === "outline"
+      ? this.left === panel
+      : this.side && this.open[panel];
+  }
+
+  /** Shows or hides a part of the window: a tab of the left panel, or a section of the right one. */
+  private toggle(panel: PanelName) {
+    if (panel === "shapes" || panel === "outline")
+      return this.show(this.left === panel ? "" : panel);
+    if (!this.side) {
+      this.open[panel] = true;
+      this.toggleSide();
+    } else this.open[panel] = !this.open[panel];
+    if (panel === "properties")
+      this.shell.remember(
+        this.text ? "properties-text" : "properties",
+        this.open[panel] ? "open" : "closed",
+      );
+    else this.shell.remember("source-open", this.open[panel] ? "open" : "closed");
+    this.arrange();
+  }
+
+  private toggleSnap() {
+    const { editor } = this;
+    editor.snapping = !editor.snapping;
+    this.shell.remember("snap", editor.snapping ? "on" : "off");
+    this.update();
+  }
+
+  private toggleGrid() {
+    const { view } = this.editor;
+    view.grid = !view.grid;
+    this.shell.remember("grid", view.grid ? "on" : "off");
+    view.invalidate();
+  }
+
+  private setWrap(on: boolean) {
+    this.source.setWrap(on);
+    this.wrap.setAttribute("aria-pressed", String(on));
+    this.shell.remember("wrap", on ? "on" : "off");
+  }
+
+  /** The title field is as wide as its text: the box around it takes the text's width. */
+  private sizeTitle() {
+    this.titleBox.dataset.value = this.title.value || this.title.placeholder;
+  }
+
+  // Commands of the window.
+
+  /** Opens the chooser of diagram types, for a new diagram. */
+  chooser() {
+    const { editor, shell } = this;
+    chooser({
+      current: editor.type,
+      unsaved: shell.unsaved,
+      sketch: (source) => editor.doc.sketch(source, editor.colors),
+      create: (source) => shell.replace(source, true),
+    });
+  }
+
+  /** Lays the whole diagram out automatically, and says so with a way back. */
+  private async autoLayout() {
+    const { editor } = this,
+      before = editor.doc.source;
+    await editor.autoLayout();
+    if (editor.doc.source !== before)
+      this.toast("Positions cleared. The layout is automatic.", {
+        name: "Undo",
+        run: () => editor.doc.undo(),
+      });
+  }
+
+  /** Adds a snippet to the source where its cursor is, with the source on show. */
+  private insert(text: string) {
+    if (!this.shows("source")) this.toggle("source");
+    this.source.insert(text);
+  }
+
+  /** Shows where the problem is: the line of an error in the source, or the elements that lie on each other. */
+  private showProblem() {
+    const { editor } = this,
+      { doc } = editor;
+    if (doc.problem) {
+      if (!this.shows("source")) this.toggle("source");
+      this.source.focusLine(doc.problem.line || 1);
+      return;
+    }
+    const ids = [...new Set(doc.picture?.overlaps.flat() ?? [])].filter((id) =>
+      doc.picture!.diagram.nodes.has(id),
+    );
+    if (!ids.length) return;
+    editor.select(ids.map((id) => ({ type: "element", id })));
+    editor.fitSelection();
+  }
+
+  /** Says something for a few seconds, with a step to take when one is offered. */
+  toast(message: string, action?: ToastAction) {
+    const note = h(
+      "div",
+      { class: "toast" },
+      h("span", {}, message),
+      action &&
+        h(
+          "button",
+          {
+            type: "button",
+            onClick: () => {
+              note.remove();
+              action.run();
+            },
+          },
+          action.name,
+        ),
+    );
     this.toasts.replaceChildren(note);
-    window.setTimeout(() => note.remove(), 5000);
+    window.setTimeout(() => note.remove(), action ? 8000 : 5000);
   }
 
   /** A text field over a box of the diagram: Enter takes the text, Escape leaves it. */
@@ -895,6 +679,7 @@ export class Panels {
     };
     field.addEventListener("input", fit);
     field.addEventListener("blur", () => close(field.value));
+    field.addEventListener("pointerdown", (event) => event.stopPropagation());
     field.addEventListener("keydown", (event) => {
       event.stopPropagation();
       if (event.key === "Enter" && !event.shiftKey) {
@@ -909,26 +694,39 @@ export class Panels {
 
   /** Shows the editor's state: called whenever it changed. */
   update() {
-    const { editor } = this,
-      { doc } = editor;
-    // Only the shapes the diagram takes are offered: a conceptual one has no components.
-    for (const group of this.groups) {
-      let any = false;
-      for (const entry of group.items) {
-        const allowed = !!doc.problem || editor.allowsKind(entry.tool as ElementKind);
-        this.tools.get(entry.tool)!.hidden = !allowed;
-        any ||= allowed;
-        if (!allowed && editor.tool === entry.tool) editor.tool = "select";
-      }
-      group.title.hidden = group.shapes.hidden = !any;
+    const { editor, shell } = this,
+      { doc } = editor,
+      info = typeInfo(editor.type),
+      text = info.mode === "text";
+    if (text !== this.text) {
+      // Text needs room to be read, and has no properties to show: the right panel starts wider, the source alone.
+      const first = this.text === undefined;
+      this.text = text;
+      this.widths.right =
+        Number(shell.recall(text ? "right-width-text" : "right-width")) ||
+        (text ? RIGHT.text : RIGHT.start);
+      this.open.properties =
+        (shell.recall(text ? "properties-text" : "properties") ?? (text ? "closed" : "open")) ===
+        "open";
+      this.arrange();
+      if (!first) void editor.fitSoon();
     }
-    for (const [tool, control] of this.tools)
+    for (const [tool, control] of this.tools) {
       control.setAttribute("aria-pressed", String(tool === editor.tool));
-    this.snap.setAttribute("aria-pressed", String(editor.snapping));
-    this.undo.disabled = !doc.canUndo;
-    this.redo.disabled = !doc.canRedo;
-    if ((!this.source.focused || !this.typing) && this.source.setText(doc.source))
-      this.lines = "replaced";
+      setOff(control, text && tool !== "pan" && `${info.plural} are edited as text`);
+    }
+    setOff(this.undo, !doc.canUndo);
+    setOff(this.redo, !doc.canRedo);
+    this.arrangeTitle.hidden = text;
+    if (document.activeElement !== this.title) this.title.value = doc.picture?.title ?? "";
+    this.sizeTitle();
+    this.chip.replaceChildren(icon(info.icon), h("span", {}, info.name), icon("chevron"));
+    Object.assign(this.chip.dataset, { tip: `${info.about}. Click for a new diagram.` });
+    this.dot.hidden = !shell.unsaved;
+    this.tabs.get("shapes")!.textContent = text ? "Snippets" : "Shapes";
+    this.toggles.get("shapes")!.dataset.tip = text ? "Snippets" : "Shapes";
+
+    if (!this.typing && this.source.setText(doc.source)) this.lines = "replaced";
     this.source.setProblem(doc.problem);
     // The lines of what is selected on the canvas are marked in the source.
     const lines = doc.problem
@@ -938,7 +736,7 @@ export class Panels {
       this.lines = lines.join();
       this.source.setSelectedLines(lines);
     }
-    this.problem.textContent = doc.problem?.message ?? "";
+    this.problem.replaceChildren(...prose(doc.problem?.message ?? ""));
     this.problem.hidden = !doc.problem;
     // Not an error of the source, but not TAM either: elements that lie on each other.
     const [pair] = doc.picture?.overlaps ?? [],
@@ -950,508 +748,39 @@ export class Panels {
       ? `“${names[0]}” and “${names[1]}” overlap. TAM places all elements apart.`
       : "";
     this.warning.hidden = !names || !!doc.problem;
-    const placed = doc.picture?.placed && doc.picture.diagram.nodes.size > 0;
-    this.mode.textContent = placed ? "Placed by hand" : "Automatic layout";
-    this.mode.title = placed
-      ? "Elements stand where the source places them (@x,y)"
-      : "No element is placed: the layout is automatic until one is moved";
-    this.status.textContent =
-      HINTS[editor.tool] ?? "Click to place the element · inside another element to put it there";
-    this.empty.hidden = !!doc.problem || !doc.picture || doc.picture.diagram.nodes.size > 0;
-    this.showTree();
-    this.inspect();
-  }
+    this.problems.textContent = doc.problem ? "1 problem" : "";
+    this.problems.hidden = !doc.problem;
 
-  // The inspector: what is selected, with its properties.
-
-  private inspect() {
-    const { editor } = this,
-      elements = editor.selectedElements,
-      wires = editor.selectedWires;
-    const key = editor.selection.map((part) => `${part.type}:${part.id}`).join(" ");
-    if (key !== this.inspected || !this.inspector.childElementCount) {
-      this.inspected = key;
-      this.sync = [];
-      this.inspector.replaceChildren(
-        ...(wires.length === 1 && !elements.length
-          ? this.wirePane(wires[0])
-          : elements.length
-            ? this.elementPane(elements)
-            : editor.selection.length
-              ? this.manyPane()
-              : this.diagramPane()),
+    // An error leaves the last good picture on show, dimmed, with a banner that says so.
+    this.stage.classList.toggle("stale", !!doc.problem);
+    this.banner.hidden = !doc.problem;
+    this.banner.textContent = doc.problem
+      ? `The source has an error${doc.problem.line ? ` on line ${doc.problem.line}` : ""}. Showing the last valid diagram.`
+      : "";
+    this.preview.hidden = !text;
+    const none = !doc.problem && !!doc.picture && !doc.picture.scene.shapes.length;
+    if (this.empty.hidden !== !none || !this.empty.childElementCount)
+      this.empty.replaceChildren(
+        h("strong", {}, "An empty diagram"),
+        ...(text
+          ? [h("span", {}, "Type in the source, or add a snippet from the left.")]
+          : [
+              h("span", {}, "Drag a shape here from the left, or double-click for an agent."),
+              h(
+                "span",
+                { class: "note" },
+                "Positions are written into the source as ",
+                h("code", {}, "@x,y"),
+                "; without them the layout is automatic.",
+              ),
+            ]),
       );
-    }
-    for (const sync of this.sync) sync();
-  }
+    this.empty.hidden = !none;
 
-  /** A labelled row of the inspector. */
-  private row(label: string, control: HTMLElement) {
-    return h("label", { class: "row" }, h("span", {}, label), control);
-  }
-
-  /** A text field that takes its value when it loses focus or on Enter, and shows `read()` otherwise. */
-  private text(
-    read: () => string,
-    write: (value: string) => void,
-    placeholder = "",
-    multiline = false,
-  ) {
-    const field = multiline
-      ? h("textarea", { class: "field", rows: "2", placeholder, spellcheck: "false" })
-      : h("input", { class: "field", type: "text", placeholder, spellcheck: "false" });
-    const commit = () => {
-      if (field.value !== read()) write(field.value);
-    };
-    field.addEventListener("change", commit);
-    field.addEventListener("keydown", (event) => {
-      const key = (event as KeyboardEvent).key;
-      if (key === "Enter" && !(multiline && (event as KeyboardEvent).shiftKey)) {
-        event.preventDefault();
-        field.blur();
-      } else if (key === "Escape") {
-        field.value = read();
-        field.blur();
-      }
-    });
-    this.sync.push(() => {
-      if (document.activeElement !== field) field.value = read();
-    });
-    return field;
-  }
-
-  private choice<T extends string>(
-    options: { value: T; name: string }[],
-    read: () => T | "",
-    write: (value: T) => void,
-    allowed: (value: T) => boolean = () => true,
-  ) {
-    const items = options.map((option) => h("option", { value: option.value }, option.name));
-    const select = h(
-      "select",
-      { class: "field", onChange: () => write(select.value as T) },
-      ...items,
-    ) as HTMLSelectElement;
-    this.sync.push(() => {
-      // Only what the notation allows here is offered, and what is set.
-      const current = read();
-      select.replaceChildren(
-        ...items.filter((item) => item.value === current || allowed(item.value as T)),
-      );
-      select.value = current;
-    });
-    return select;
-  }
-
-  /** Buttons of which one is on. */
-  private segments<T extends string>(
-    options: { value: T; name: string; title?: string }[],
-    read: () => T | undefined,
-    write: (value: T) => void,
-    allowed: (value: T) => boolean = () => true,
-  ) {
-    const controls = options.map((option) =>
-      h(
-        "button",
-        {
-          class: "segment",
-          type: "button",
-          title: option.title,
-          onClick: () => write(option.value),
-        },
-        option.name,
-      ),
-    );
-    this.sync.push(() =>
-      controls.forEach((control, index) => {
-        const on = options[index].value === read();
-        control.setAttribute("aria-pressed", String(on));
-        control.disabled = !on && !allowed(options[index].value);
-      }),
-    );
-    return h("div", { class: "segments" }, ...controls);
-  }
-
-  private elementPane(ids: string[]): HTMLElement[] {
-    const { editor } = this;
-    const nodes = () =>
-      ids.flatMap((id) => {
-        const node = editor.doc.picture?.diagram.nodes.get(id);
-        return node ? [node] : [];
-      });
-    const shared = <T>(read: (node: ReturnType<typeof nodes>[number]) => T): T | undefined => {
-      const values = new Set(nodes().map(read));
-      return values.size === 1 ? [...values][0] : undefined;
-    };
-    const [id] = ids,
-      single = ids.length === 1;
-    const colors = ["", ...COLORS].map((color) => {
-      const swatch = h("button", {
-        class: `swatch ${color || "none"}`,
-        type: "button",
-        title: color || "No color",
-        "aria-label": color || "No color",
-        onClick: () => editor.setElements({ color: color || null }),
-      });
-      this.sync.push(() =>
-        swatch.setAttribute(
-          "aria-pressed",
-          String((shared((node) => node.color ?? "") ?? "?") === color),
-        ),
-      );
-      return swatch;
-    });
-    const multiple = (node: ReturnType<typeof nodes>[number]) =>
-      node.stack
-        ? "stack"
-        : editor.doc.picture?.diagram.nodes.has(`${node.id}#2`)
-          ? "several"
-          : "one";
-    const name = h("input", { class: "field", type: "text", placeholder: "IName" });
-    const offer = (offers: "provides" | "requires") =>
-      h(
-        "button",
-        {
-          class: "button small",
-          type: "button",
-          onClick: () => {
-            if (!name.value.trim()) return name.focus();
-            editor.addInterface(id, offers, name.value);
-            name.value = "";
-          },
-        },
-        offers,
-      );
-    const interfaces = h(
-      "div",
-      { class: "row" },
-      h("span", {}, "Interface"),
-      h("div", { class: "inline" }, name, offer("provides"), offer("requires")),
-    );
-    // Only elements that act offer interfaces.
-    this.sync.push(() => {
-      interfaces.hidden = !editor.allowsInterface(id);
-    });
-    // Where the element stands and how large it is, to the pixel.
-    const number = (name: "x" | "y" | "width" | "height", label: string) => {
-      const field = this.text(
-        () => {
-          const box = editor.selectedBox;
-          return box ? String(Math.round(box[name] * 10) / 10) : "";
-        },
-        (value) => {
-          const next = Number(value);
-          if (value.trim() && Number.isFinite(next)) editor.setBox({ [name]: next });
-        },
-      );
-      field.setAttribute("inputmode", "decimal");
-      field.setAttribute("aria-label", label);
-      return h("label", { class: "number" }, h("span", {}, label), field);
-    };
-    const position = h(
-      "div",
-      { class: "row top" },
-      h("span", {}, "Position"),
-      h(
-        "div",
-        { class: "numbers" },
-        number("x", "X"),
-        number("y", "Y"),
-        number("width", "W"),
-        number("height", "H"),
-      ),
-    );
-    // Aligning and spreading need several elements; sizes can be made one, or left to the contents.
-    const act = (name: keyof typeof ICONS, title: string, run: () => void, least = 2) => {
-      const control = h(
-        "button",
-        { class: "tool mini", type: "button", title, "aria-label": title, onClick: run },
-        icon(name),
-      );
-      control.hidden = ids.length < least;
-      return control;
-    };
-    // Only what is selected is laid out: the parts of a container, or several elements among themselves.
-    const layoutThese = h(
-      "button",
-      {
-        class: "tool mini",
-        type: "button",
-        title: single ? "Auto layout inside this element" : "Auto layout the selected elements",
-        "aria-label": single
-          ? "Auto layout inside this element"
-          : "Auto layout the selected elements",
-        onClick: () => void editor.layoutSelection(),
-      },
-      icon("layout"),
-    );
-    this.sync.push(() => {
-      layoutThese.hidden = !editor.canLayoutSelection;
-    });
-    const arrangement = h(
-      "div",
-      { class: "arrange" },
-      act("align-left", "Align left edges", () => editor.arrange("left")),
-      act("align-center", "Align centers", () => editor.arrange("center")),
-      act("align-right", "Align right edges", () => editor.arrange("right")),
-      act("align-top", "Align top edges", () => editor.arrange("top")),
-      act("align-middle", "Align middles", () => editor.arrange("middle")),
-      act("align-bottom", "Align bottom edges", () => editor.arrange("bottom")),
-      act("spread-x", "Spread evenly, left to right", () => editor.arrange("spread-x"), 3),
-      act("spread-y", "Spread evenly, top to bottom", () => editor.arrange("spread-y"), 3),
-      act("same-width", "Make as wide as the widest", () => editor.sameSize("width")),
-      act("same-height", "Make as high as the highest", () => editor.sameSize("height")),
-      act("fit-size", "Fit the size to the name, or to what is inside", () => editor.fitSize(), 1),
-      layoutThese,
-    );
-    // Shown as two with dots between, the copy stands beside or below; dragging it puts it anywhere.
-    const copyRow = h(
-      "div",
-      { class: "row" },
-      h("span", {}, "Copy"),
-      this.segments<"beside" | "below">(
-        [
-          { value: "beside", name: "Beside", title: "A … B, side by side" },
-          { value: "below", name: "Below", title: "A … B, one above the other" },
-        ],
-        () => editor.copySide(id),
-        (side) => editor.placeCopy(id, side),
-      ),
-    );
-    this.sync.push(() => {
-      copyRow.hidden = !editor.doc.picture?.diagram.nodes.has(`${id}#2`);
-    });
-    const rows: (HTMLElement | false)[] = [
-      h("h2", {}, single ? "Element" : `${ids.length} elements`),
-      single &&
-        this.row(
-          "Name",
-          this.text(
-            () => (nodes()[0]?.label ?? "").replace(/<br\s*\/?>/gi, "\n"),
-            (label) => editor.setElements({ label }),
-            "Name",
-            true,
-          ),
-        ),
-      this.row(
-        "Kind",
-        this.choice(
-          ELEMENT_KINDS.map((kind) => ({ value: kind, name: kind })),
-          () => (shared((node) => node.kind) ?? "") as ElementKind | "",
-          (kind) => editor.setElements({ kind }),
-          (kind) => editor.allowsElements({ kind }),
-        ),
-      ),
-      h(
-        "div",
-        { class: "row" },
-        h("span", {}, "Color"),
-        h("div", { class: "swatches" }, ...colors),
-      ),
-      h(
-        "div",
-        { class: "row" },
-        h("span", {}, "Count"),
-        this.segments(
-          [
-            { value: "one", name: "One" },
-            { value: "stack", name: "Stack", title: "Several, drawn as a stack" },
-            { value: "several", name: "A … B", title: "Several, drawn as two with dots between" },
-          ],
-          () => shared(multiple),
-          (value) =>
-            editor.setElements({ stack: value === "stack", multiple: value === "several" }),
-          (value) =>
-            editor.allowsElements({ stack: value === "stack", multiple: value === "several" }),
-        ),
-      ),
-      single && position,
-      h("div", { class: "row top" }, h("span", {}, "Arrange"), arrangement),
-      single && copyRow,
-      single && interfaces,
-      single && h("div", { class: "row quiet" }, h("span", {}, "Id"), h("code", {}, id)),
-      h(
-        "div",
-        { class: "actions" },
-        h(
-          "button",
-          { class: "button", type: "button", onClick: () => editor.duplicateSelection() },
-          "Duplicate",
-        ),
-        h(
-          "button",
-          { class: "button danger", type: "button", onClick: () => editor.deleteSelection() },
-          "Delete",
-        ),
-      ),
-    ];
-    return rows.filter((item) => item !== false);
-  }
-
-  private wirePane(id: string): HTMLElement[] {
-    const { editor } = this,
-      read = () => editor.connection(id);
-    const remove = h(
-      "div",
-      { class: "actions" },
-      h(
-        "button",
-        { class: "button danger", type: "button", onClick: () => editor.deleteSelection() },
-        "Delete",
-      ),
-    );
-    if (!read())
-      return [
-        h("h2", {}, "Interface"),
-        h(
-          "p",
-          { class: "note" },
-          "An interface an element provides or requires. Its name is set in the source.",
-        ),
-        remove,
-      ];
-    const channel = () => ["calls", "sends data", "---", "requires"].includes(read()?.word ?? "");
-    const both = h("input", {
-      type: "checkbox",
-      onChange: () => editor.setWire(id, { both: both.checked }),
-    }) as HTMLInputElement;
-    const bothRow = h("label", { class: "row check" }, h("span", {}, "Both ways"), both);
-    const label = this.row(
-      "Label",
-      this.text(
-        () => (read()?.word === "dependency" ? "" : (read()?.label ?? "")),
-        (text) => editor.setWire(id, { label: text }),
-        "What is sent or asked",
-      ),
-    );
-    const protocol = this.row(
-      "Protocol",
-      this.text(
-        () => read()?.protocol ?? "",
-        (text) => editor.setWire(id, { protocol: text }),
-        "HTTPS, RFC, …",
-      ),
-    );
-    const ends = h("p", { class: "note" });
-    const reverse = h(
-      "button",
-      { class: "button", type: "button", onClick: () => editor.setWire(id, { reverse: true }) },
-      "Reverse",
-    );
-    this.sync.push(() => {
-      const connection = read();
-      both.checked = !!connection?.both;
-      bothRow.hidden = !connection?.both && !editor.allowsWire(id, { both: true });
-      reverse.disabled = !editor.allowsWire(id, { reverse: true });
-      label.hidden = connection?.word === "dependency";
-      protocol.hidden = !channel();
-      ends.textContent = connection ? `${connection.from} → ${connection.to}` : "";
-    });
-    return [
-      h("h2", {}, "Connection"),
-      ends,
-      this.row(
-        "Kind",
-        this.choice(
-          WIRES,
-          () => {
-            const connection = read();
-            return connection ? wireValue(connection) : "";
-          },
-          (value) => {
-            const kind = WIRES.find((item) => item.value === value)!;
-            editor.setWire(id, wireChange(kind));
-          },
-          (value) => editor.allowsWire(id, wireChange(WIRES.find((item) => item.value === value)!)),
-        ),
-      ),
-      bothRow,
-      label,
-      protocol,
-      h(
-        "div",
-        { class: "actions" },
-        reverse,
-        h(
-          "button",
-          { class: "button danger", type: "button", onClick: () => editor.deleteSelection() },
-          "Delete",
-        ),
-      ),
-    ];
-  }
-
-  private manyPane(): HTMLElement[] {
-    const { editor } = this;
-    return [
-      h("h2", {}, `${editor.selection.length} selected`),
-      h(
-        "div",
-        { class: "actions" },
-        h(
-          "button",
-          { class: "button danger", type: "button", onClick: () => editor.deleteSelection() },
-          "Delete",
-        ),
-      ),
-    ];
-  }
-
-  private diagramPane(): HTMLElement[] {
-    const { editor } = this,
-      diagram = () => editor.doc.picture?.diagram;
-    return [
-      h("h2", {}, "Diagram"),
-      this.row(
-        "Title",
-        this.text(
-          () => diagram()?.title ?? "",
-          (title) => editor.setHeader({ title }),
-          "Untitled",
-        ),
-      ),
-      h(
-        "div",
-        { class: "row" },
-        h("span", {}, "Direction"),
-        this.segments<Direction>(
-          [
-            { value: "TB", name: "↓", title: "Top to bottom" },
-            { value: "LR", name: "→", title: "Left to right" },
-            { value: "BT", name: "↑", title: "Bottom to top" },
-            { value: "RL", name: "←", title: "Right to left" },
-          ],
-          () => diagram()?.direction,
-          (direction) => editor.setHeader({ direction }),
-        ),
-      ),
-      h(
-        "div",
-        { class: "row" },
-        h("span", {}, "Level"),
-        this.segments<"" | "conceptual" | "design">(
-          [
-            { value: "", name: "Any", title: "Agents and components side by side" },
-            {
-              value: "conceptual",
-              name: "Conceptual",
-              title: "Agents, storages and channels only",
-            },
-            { value: "design", name: "Design", title: "Components, interfaces and connectors" },
-          ],
-          () => diagram()?.level ?? "",
-          (level) => editor.setHeader({ level }),
-          (level) => editor.allowsHeader({ level }),
-        ),
-      ),
-      h(
-        "p",
-        { class: "note" },
-        "Pick a tool on the left and click the canvas, or double-click it for an agent. ",
-        "Positions are written into the source as ",
-        h("code", {}, "@x,y"),
-        "; without them the layout is automatic.",
-      ),
-    ];
+    this.palette.update();
+    this.outline.update();
+    this.inspector.update();
+    this.status.update();
+    this.minimap.draw();
   }
 }

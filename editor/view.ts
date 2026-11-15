@@ -3,10 +3,10 @@
 import type { Box, Point } from "../src/scene.ts";
 import { svgUrl } from "../src/index.ts";
 
-/** The zoom range, and the grid dots' distance in diagram coordinates. */
 /** Fitting a small diagram enlarges it no further than FIT_ZOOM. */
-const FIT_ZOOM = 2;
+const FIT_ZOOM = 1.5;
 
+/** The zoom range, and the grid dots' distance in diagram coordinates. */
 const MIN_ZOOM = 0.1,
   MAX_ZOOM = 8,
   DOTS = 20;

@@ -3,7 +3,18 @@
  * diagrams the library draws from Mermaid sources, edited as text with a live picture.
  */
 
+import { TAM_EXAMPLES } from "../src/samples/tam-examples.ts";
+import {
+  CLASS_EXAMPLES,
+  FLOWCHART_EXAMPLES,
+  SEQUENCE_EXAMPLES,
+  STATE_EXAMPLES,
+  SWIMLANE_EXAMPLES,
+  USECASE_EXAMPLES,
+} from "../src/samples/uml-examples.ts";
+import type { ElementKind } from "../src/tam-edit.ts";
 import { detectUml, type UmlKind } from "../src/uml.ts";
+import type { IconName } from "./icons.ts";
 
 export type DiagramType = "tam" | UmlKind;
 
@@ -13,9 +24,54 @@ export interface Snippet {
   text: string;
 }
 
+/** A shape of the palette: an element kind to drag onto the canvas. */
+export interface Shape {
+  kind: ElementKind;
+  icon: IconName;
+  name: string;
+  /** The key that picks it as the tool. */
+  key?: string;
+  /** What the element stands for, for its tooltip. */
+  hint: string;
+}
+
+/** Shapes that belong together in the palette: a level of the notation. */
+export interface ShapeGroup {
+  title: string;
+  items: Shape[];
+}
+
+/** A diagram to start from: its name and its source. */
+export type Example = [name: string, source: string];
+
+/**
+ * The examples to offer of a list of samples: without the ones that are test fixtures, and named
+ * without the prefix that sorts them.
+ */
+function examples(samples: [string, string][]): Example[] {
+  return samples
+    .filter(([name]) => !/^(variant|challenge|stress|error):/.test(name))
+    .map(([name, source]) => {
+      const plain = name.replace(
+        /^(reference|class|state|flowchart|swimlane|sequence|usecase):\s*/,
+        "",
+      );
+      return [plain[0].toUpperCase() + plain.slice(1), source];
+    });
+}
+
 export interface TypeInfo {
   type: DiagramType;
   name: string;
+  /** The name for several, as in "Class diagrams are edited as text". */
+  plural: string;
+  icon: IconName;
+  /** Whether the diagram is edited on the canvas, or as text with the picture as a preview. */
+  mode: "canvas" | "text";
+  /** The shapes to drag onto the canvas; none for a type edited as text. */
+  palette: ShapeGroup[];
+  /** Diagrams of the type to open and learn from. */
+  examples: Example[];
   /** What the type shows, for the chooser. */
   about: string;
   /** The source a new diagram of the type starts with. */
@@ -28,6 +84,64 @@ export const TYPES: TypeInfo[] = [
   {
     type: "tam",
     name: "Block diagram",
+    plural: "Block diagrams",
+    icon: "logo",
+    mode: "canvas",
+    palette: [
+      {
+        title: "Block diagram",
+        items: [
+          {
+            kind: "agent",
+            icon: "agent",
+            name: "Agent",
+            key: "A",
+            hint: "Does something: a service, a process",
+          },
+          {
+            kind: "human",
+            icon: "human",
+            name: "Human",
+            key: "U",
+            hint: "A person who uses the system",
+          },
+          {
+            kind: "storage",
+            icon: "storage",
+            name: "Storage",
+            key: "S",
+            hint: "Keeps information: a database, a file",
+          },
+          {
+            kind: "group",
+            icon: "group",
+            name: "Group",
+            key: "G",
+            hint: "A frame around elements",
+          },
+        ],
+      },
+      {
+        title: "Design level",
+        items: [
+          {
+            kind: "component",
+            icon: "component",
+            name: "Component",
+            hint: "A replaceable part with interfaces",
+          },
+          {
+            kind: "subsystem",
+            icon: "subsystem",
+            name: "Subsystem",
+            hint: "A part of the system made of components",
+          },
+          { kind: "class", icon: "class", name: "Class", hint: "A class of the implementation" },
+          { kind: "package", icon: "package", name: "Package", hint: "A unit of the source code" },
+        ],
+      },
+    ],
+    examples: examples(TAM_EXAMPLES),
     about: "Agents, storages and the channels between them (SAP TAM, FMC)",
     starter: "",
     snippets: [],
@@ -35,6 +149,11 @@ export const TYPES: TypeInfo[] = [
   {
     type: "class",
     name: "Class diagram",
+    plural: "Class diagrams",
+    icon: "class",
+    mode: "text",
+    palette: [],
+    examples: examples(CLASS_EXAMPLES),
     about: "Classes with members, inheritance and associations",
     starter: `classDiagram
   class Order {
@@ -59,6 +178,11 @@ export const TYPES: TypeInfo[] = [
   {
     type: "usecase",
     name: "Use case diagram",
+    plural: "Use case diagrams",
+    icon: "usecase",
+    mode: "text",
+    palette: [],
+    examples: examples(USECASE_EXAMPLES),
     about: "Actors and what they do with a system",
     starter: `usecase-beta
   direction LR
@@ -83,6 +207,11 @@ export const TYPES: TypeInfo[] = [
   {
     type: "flowchart",
     name: "Activity diagram",
+    plural: "Activity diagrams",
+    icon: "flowchart",
+    mode: "text",
+    palette: [],
+    examples: examples(FLOWCHART_EXAMPLES),
     about: "Steps and decisions of a flow",
     starter: `flowchart TB
   start((Start)) --> check{In stock?}
@@ -104,6 +233,11 @@ export const TYPES: TypeInfo[] = [
   {
     type: "swimlane",
     name: "Activity with lanes",
+    plural: "Activities with lanes",
+    icon: "swimlane",
+    mode: "text",
+    palette: [],
+    examples: examples(SWIMLANE_EXAMPLES),
     about: "A flow across the agents that carry it out",
     starter: `swimlane-beta TB
   subgraph Customer
@@ -124,6 +258,11 @@ export const TYPES: TypeInfo[] = [
   {
     type: "state",
     name: "State machine",
+    plural: "State machines",
+    icon: "state",
+    mode: "text",
+    palette: [],
+    examples: examples(STATE_EXAMPLES),
     about: "The states of a thing and what moves it between them",
     starter: `stateDiagram-v2
   [*] --> Draft
@@ -143,6 +282,11 @@ export const TYPES: TypeInfo[] = [
   {
     type: "sequence",
     name: "Sequence diagram",
+    plural: "Sequence diagrams",
+    icon: "sequence",
+    mode: "text",
+    palette: [],
+    examples: examples(SEQUENCE_EXAMPLES),
     about: "Messages between participants over time",
     starter: `sequenceDiagram
   participant U as User
@@ -172,3 +316,22 @@ export const typeInfo = (type: DiagramType): TypeInfo =>
 
 /** The type of a source: a Mermaid header names a UML type, anything else is a block diagram. */
 export const typeOf = (source: string): DiagramType => detectUml(source) ?? "tam";
+
+/** The name of an element kind as the palette says it. */
+export function kindName(kind: string): string {
+  const shape = TYPES[0].palette.flatMap((group) => group.items).find((item) => item.kind === kind);
+  return shape?.name ?? kind[0].toUpperCase() + kind.slice(1);
+}
+
+/**
+ * A source with another title. A block diagram says it on a `title` line, which the library's edits
+ * write; the other types say it in a frontmatter block before the diagram, which this writes.
+ */
+export function withUmlTitle(source: string, title: string): string {
+  const name = title.trim().replace(/\s+/g, " "),
+    front = source.match(/^\s*---[ \t]*\n([\s\S]*?)\n---[ \t]*\n?/),
+    kept = (front?.[1].split("\n") ?? []).filter((line) => !/^title:/.test(line)),
+    lines = name ? [`title: ${name}`, ...kept] : kept,
+    body = front ? source.slice(front[0].length) : source;
+  return lines.length ? `---\n${lines.join("\n")}\n---\n${body}` : body;
+}

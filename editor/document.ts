@@ -220,6 +220,27 @@ export class Doc {
     return layoutWithin(source, ids, this.measure, this.elk);
   }
 
+  /**
+   * A source drawn as a standalone SVG without becoming the document: the small pictures the
+   * chooser of diagram types shows. Undefined when the source does not parse.
+   */
+  async sketch(source: string, colors: DiagramColors): Promise<string | undefined> {
+    try {
+      const type = typeOf(source);
+      if (type !== "tam") {
+        const scene = await parseUml(source).layout(this.measure, this.elk);
+        return drawScene(scene, colors, typeInfo(type).name, `${type} diagram`);
+      }
+      const diagram = parseTam(source);
+      const scene = isPlaced(diagram)
+        ? layoutPlaced(diagram, this.measure)
+        : await bestLayout(diagram, this.measure, this.elk);
+      return drawScene(scene, colors, typeInfo(type).name, "tam");
+    } catch {
+      return undefined;
+    }
+  }
+
   /** The picture as a standalone SVG. */
   svg(colors: DiagramColors): string | undefined {
     const { picture } = this;

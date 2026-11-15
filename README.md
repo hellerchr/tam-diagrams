@@ -66,19 +66,33 @@ package needs one of the others, or the command line, which runs from the bundle
 
 ## Editor
 
-`npm run editor` serves a canvas editor for TAM block diagrams (`npm run build:editor` writes it as a
-static page to `dist/editor`). Shapes are dragged from the palette onto the canvas, moved, resized,
-nested by dropping them into a container, and connected by dragging from the dots beside an
-element; the inspector offers only the kinds and connections the notation allows there. The tree
-lists the elements and takes drops too. Copy, cut, paste, duplicate, undo and redo work as usual.
-A moved element lines up with the edges and middles of others and with the gaps between them, a
-selection is aligned, spread evenly or made one size from the inspector, and a right click puts it in
-a box or changes what a connection is.
+`npm run editor` serves a diagram editor (`npm run build:editor` writes it as a static page to
+`dist/editor`). It edits TAM block diagrams on a canvas, and the UML types (class, use case,
+activity with and without lanes, state machine, sequence) as text beside a live preview.
+*File ▸ New* opens a chooser with a card for each type and its examples; the chip beside the title
+says which type is on show.
+
+In a block diagram, shapes are dragged from the Shapes tab onto the canvas, moved, resized, nested by
+dropping them into a container, and connected by dragging from the dots beside an element; the
+Properties section offers only the kinds and connections the notation allows there. The Outline tab
+lists the elements as a tree and takes drops too. Copy, cut, paste, duplicate, undo and redo work as
+usual. A moved element lines up with the edges and middles of others and with the gaps between them.
+A selection is aligned, distributed, made one size, put in a box or laid out on its own from the
+Arrange menu, the Properties section or a right click, which also changes what a connection is. In
+the other types the Shapes tab holds snippets instead: a click adds a statement to the source.
+
+The window has a menu bar (File, Edit, View, Arrange, Help) with the document's title, a rail with
+the pointer tools, a left panel (Shapes and Outline), a right panel (Properties above Source, with a
+splitter between) and a status bar with a hint, the problems of the source, the selection, the
+layout mode, snapping and the zoom. The panels are resized by their inner edges and lie over the
+canvas in a small window. A source with an error keeps the last valid picture on show, dimmed,
+under a banner that leads to the line. Replacing the diagram (new, open, an example) is a step Undo
+takes back, and asks first when there are unsaved changes.
 
 The document is the TAM source, shown beside the canvas and editable there: every gesture is an edit
 of that text, and every other line stays as its author wrote it. A source without positions is laid
 out automatically, as everywhere else; moving an element writes a position for every element
-(`@x,y`, see [Positions](#positions)), and *Auto layout* removes them again.
+(`@x,y`, see [Positions](#positions)), and *Arrange ▸ Auto layout* removes them again.
 
 ## Command line
 
@@ -270,7 +284,20 @@ api -- reads/writes --> cart
 | `editor/hit.ts`              | What of a picture lies at a point, in a frame, or under a dragged element            |
 | `editor/guides.ts`           | Alignment help: snapping to edges, middles and gaps; align, spread, same size        |
 | `editor/view.ts`             | The canvas: viewport, grid, the picture as an image, and the overlay                 |
-| `editor/ui.ts`               | Toolbar, palette, element tree, inspector and source pane                            |
+| `editor/ui.ts`               | The window: bar, tool rail, the two panels and what lies over the canvas             |
+| `editor/menus.ts`            | The commands as menus: File, Edit, View, Arrange, Help and the right click           |
+| `editor/menu.ts`             | Popup menus with submenus, ticks, keys and arrow-key movement                        |
+| `editor/palette.ts`          | The Shapes tab: shapes to drag onto the canvas, or snippets for a text diagram       |
+| `editor/outline.ts`          | The Outline tab: the elements as a tree that selects, names and nests                |
+| `editor/inspector.ts`        | The Properties section: what is selected, in groups that keep their order            |
+| `editor/statusbar.ts`        | The status bar: hint, problems, selection, pointer, layout mode, snap, zoom          |
+| `editor/dialogs.ts`          | The chooser of diagram types, the question before a replace, the help sheets         |
+| `editor/minimap.ts`          | The minimap: the whole diagram small, with the part on show framed                   |
+| `editor/tooltip.ts`          | Tooltips with the keys of a control, and why a control is off                        |
+| `editor/dom.ts`              | Elements, icons and icon buttons the panels are built from                           |
+| `editor/types.ts`            | The diagram types: mode, shapes or snippets, starter and examples of each            |
+| `editor/source.ts`           | The source pane: a code editor with the notation's colors and completions            |
+| `editor/icons.ts`            | The editor's icons as SVG                                                            |
 | `editor/main.ts`             | The page: theme, files, export, autosave                                             |
 | `rolldown.config.mjs`        | The build: bundles `cli/bin.ts` into `dist/cli.js`, the package's `bin`              |
 | `test/`                      | Tests; `tam.fuzz.test.ts` is a stress run gated by `HARNESS=1`                       |

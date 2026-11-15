@@ -57,7 +57,7 @@ import {
   snapEdge,
   snapMove,
 } from "./guides.ts";
-import { type DiagramType, typeInfo, typeOf } from "./types.ts";
+import { type DiagramType, typeInfo, typeOf, withUmlTitle } from "./types.ts";
 import type { View } from "./view.ts";
 
 /** An element in the tree of the diagram. */
@@ -82,7 +82,7 @@ const SLOP = 4;
 
 /** Handles are this large on screen, and connection handles this far from their element. */
 const HANDLE = 8,
-  REACH = 16;
+  REACH = 22;
 
 /** The handles of a selected element: which edges each moves. */
 const HANDLES = [
@@ -144,6 +144,8 @@ type Gesture =
       /** Pressed on a connection dot: the side it is on, and where, to tell a click from a drag. */
       dot?: { side: number; screen: Point };
     }
+  /** A shape tool pressed on the canvas: the element is placed where the pointer is released. */
+  | { type: "place"; kind: ElementKind; free: boolean; keep: boolean }
   /** An end of a connection dragged to another element. */
   | { type: "attach"; id: string; end: "from" | "to"; current: Point; target?: string };
 
@@ -183,10 +185,14 @@ export class Editor {
   accent = "#2a78d6";
   selection: Part[] = [];
   tool: Tool = "select";
+  /** Whether a shape tool stays after it placed an element, to place several; Escape ends it. */
+  sticky = false;
   /** Called when the selection, the tool or the document changed: the panels show them. */
   onState: () => void = () => {};
   /** Says something to the user in passing: why an edit was not made. */
   notify: (message: string) => void = () => {};
+  /** Called when the pointer moved over the canvas, with its place in the diagram, and when it left. */
+  onPointer: (point: Point | undefined) => void = () => {};
   /** Opens a text field over the canvas; the panels provide it. */
   editText: (
     box: Box,
@@ -206,6 +212,8 @@ export class Editor {
   /** Whether the pointer is on the canvas. */
   private over = false;
   private pointer: Point = { x: 0, y: 0 };
+  /** Whether the diagram on show is one edited as text: the tool follows when that changes. */
+  private textOnly = false;
 
   constructor(doc: Doc, view: View, colors: DiagramColors) {
     this.doc = doc;
@@ -221,7 +229,10 @@ export class Editor {
     canvas.addEventListener("wheel", (event) => this.wheel(event), { passive: false });
     canvas.addEventListener("contextmenu", (event) => event.preventDefault());
     canvas.addEventListener("pointerenter", () => (this.over = true));
-    canvas.addEventListener("pointerleave", () => (this.over = false));
+    canvas.addEventListener("pointerleave", () => {
+      this.over = false;
+      this.onPointer(undefined);
+    });
     // Copy, cut and paste work on the selection unless a text field has the focus.
     const typing = (event: Event) => {
       const target = event.target as HTMLElement | null;
@@ -262,6 +273,14 @@ export class Editor {
   /** The picture changed: selections of what is gone go with it. */
   refresh() {
     const { picture } = this;
+    if (this.editable === this.textOnly) {
+      // A picture edited as text is moved about; one edited on the canvas starts with the select tool.
+      this.textOnly = !this.editable;
+      this.tool = this.textOnly ? "pan" : "select";
+      this.sticky = false;
+      this.ghost = undefined;
+      this.cursor();
+    }
     if (picture && !this.gesture && picture.source === this.doc.source) {
       const { diagram } = picture;
       this.selection = this.selection.filter((part) =>
@@ -298,8 +317,11 @@ export class Editor {
     return this.selection.filter((part) => part.type === "wire").map((part) => part.id);
   }
 
-  setTool(tool: Tool) {
+  /** Picks the tool. A diagram edited as text is only moved about; a sticky shape tool places several. */
+  setTool(tool: Tool, sticky = false) {
+    if (!this.editable && tool !== "pan") return;
     this.tool = tool;
+    this.sticky = sticky && tool !== "select" && tool !== "pan" && tool !== "connect";
     this.ghost = undefined;
     this.view.invalidate();
     this.cursor();
@@ -313,7 +335,7 @@ export class Editor {
     if (source === undefined) {
       this.notify(
         !this.editable
-          ? `A ${typeInfo(this.type).name.toLowerCase()} is edited as text, in the source.`
+          ? `${typeInfo(this.type).plural} are edited as text, in the source.`
           : this.doc.problem
             ? "Fix the source first: it does not parse."
             : "The layout is not ready yet.",
@@ -353,13 +375,30 @@ export class Editor {
 
   /** Whether an edit leaves a source the notation allows: the panels offer only such choices. */
   private allows(make: (source: string) => string): boolean {
-    if (this.doc.problem || !this.editable) return false;
+    return this.refusal(make) === undefined;
+  }
+
+  /** Why an edit is not allowed, in the words of the notation's rule; undefined when it is. */
+  private refusal(make: (source: string) => string): string | undefined {
+    if (!this.editable) return `${typeInfo(this.type).plural} are edited as text.`;
+    if (this.doc.problem) return "The source has an error.";
     try {
       parseTam(make(this.doc.source));
-      return true;
-    } catch {
-      return false;
+      return undefined;
+    } catch (reason) {
+      return (reason instanceof Error ? reason.message : String(reason)).replace(/^Line \d+: /, "");
     }
+  }
+
+  /** Why the diagram's header may not change this way; undefined when it may. */
+  headerRefusal(header: Parameters<typeof setHeader>[1]) {
+    return this.refusal((source) => setHeader(source, header));
+  }
+
+  /** Why the selected elements may not change this way; undefined when they may. */
+  elementsRefusal(change: ElementChange) {
+    const ids = this.selectedElements;
+    return this.refusal((source) => ids.reduce((next, id) => setElement(next, id, change), source));
   }
 
   /** Whether a connection may change this way, between the elements it joins. */
@@ -684,6 +723,12 @@ export class Editor {
     this.edit((source) => setHeader(source, header));
   }
 
+  /** Gives the diagram another title, in the way its type writes one. */
+  setTitle(title: string) {
+    if (this.editable) this.setHeader({ title: title.trim() });
+    else void this.doc.apply(withUmlTitle(this.doc.source, title));
+  }
+
   allowsHeader(header: Parameters<typeof setHeader>[1]) {
     return this.allows((source) => setHeader(source, header));
   }
@@ -737,7 +782,12 @@ export class Editor {
 
   /** Fits the picture once the layout under way is shown. */
   async fitSoon() {
-    for (let tries = 0; tries < 200 && this.picture?.source !== this.doc.source; tries++)
+    // A source with an error gets no picture to wait for.
+    for (
+      let tries = 0;
+      tries < 200 && !this.doc.problem && this.picture?.source !== this.doc.source;
+      tries++
+    )
       await new Promise((resolve) => setTimeout(resolve, 25));
     // The page may still be finding its size.
     await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
@@ -783,9 +833,10 @@ export class Editor {
     this.change(source);
   }
 
+  /** Shows the whole diagram as large as the canvas allows; an empty one at its natural size. */
   fit() {
-    const bounds = this.picture?.scene.bounds;
-    if (bounds && bounds.width) this.view.fit(bounds);
+    const scene = this.picture?.scene;
+    if (scene?.shapes.length && scene.bounds.width) this.view.fit(scene.bounds);
     else {
       this.view.zoom = 1;
       this.view.origin = { x: 80, y: 80 };
@@ -826,8 +877,11 @@ export class Editor {
     return { outer, places, all };
   }
 
-  /** Places a new element at a point of the diagram, inside the element there, and opens its name. */
-  create(kind: ElementKind, at: Point, free = false) {
+  /**
+   * Places a new element at a point of the diagram, inside the element there, and opens its name.
+   * With `keep` the shape tool stays, to place another.
+   */
+  create(kind: ElementKind, at: Point, free = false, keep = false) {
     const base = this.doc.placedSource(),
       { picture } = this;
     if (base === undefined) return this.change(undefined);
@@ -850,7 +904,7 @@ export class Editor {
       this.notify(problem.message.replace(/^Line \d+: /, ""));
       return false;
     }
-    this.tool = "select";
+    if (!keep) this.setTool("select");
     this.select([{ type: "element", id: made }]);
     if (kind !== "group") this.rename(made);
     return true;
@@ -936,7 +990,13 @@ export class Editor {
     const { picture } = this,
       part = picture && partAt(picture, point, 6 / view.zoom);
     if (this.tool !== "select" && this.tool !== "connect") {
-      this.create(this.tool, point, event.altKey);
+      // Placed on release, so the name that opens then keeps the focus.
+      this.gesture = {
+        type: "place",
+        kind: this.tool,
+        free: event.altKey,
+        keep: this.sticky || event.shiftKey,
+      };
       return;
     }
     if (this.tool === "connect") {
@@ -986,6 +1046,7 @@ export class Editor {
       screen = view.pointOf(event),
       point = view.toScene(screen);
     this.pointer = point;
+    this.onPointer(point);
     if (!gesture) {
       const { picture } = this;
       const hover =
@@ -1059,6 +1120,9 @@ export class Editor {
         return;
       case "resize":
         this.resize(gesture, point, this.free(event));
+        return;
+      case "place":
+        this.showGhost(gesture.kind, point, event.altKey);
         return;
     }
   }
@@ -1243,12 +1307,19 @@ export class Editor {
         else this.connectNew(gesture.from, gesture.current);
         break;
       }
+      case "place":
+        this.create(gesture.kind, view.toScene(view.pointOf(event)), gesture.free, gesture.keep);
+        break;
       case "frame":
+        // The selection the frame made shows in the panels once it is done.
+        this.onState();
+        break;
       case "pan":
         break;
     }
     view.invalidate();
     this.cursor(view.pointOf(event));
+    if (gesture.type !== "frame" && gesture.type !== "pan") this.onState();
   }
 
   /** Connects two elements with the word that fits them and selects the connection. */
@@ -1407,6 +1478,8 @@ export class Editor {
     const target = event.target as HTMLElement | null;
     if (target && (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName)))
       return;
+    // In a dialog the keys are the dialog's.
+    if (target?.closest?.("dialog")) return;
     const command = event.ctrlKey || event.metaKey,
       key = event.key.length === 1 ? event.key.toLowerCase() : event.key;
     const done = () => event.preventDefault();
@@ -1478,6 +1551,11 @@ export class Editor {
   }
 
   // What lies over the picture.
+
+  /** What the pointer is doing on the canvas between its press and its release, for the hint in the status bar. */
+  get doing(): Gesture["type"] | undefined {
+    return this.gesture?.type;
+  }
 
   /** The one selected element with its box, when handles show. */
   private get single(): { id: string; box: Box } | undefined {
@@ -1657,7 +1735,7 @@ export class Editor {
       context.strokeStyle = accent;
     }
     const { ghost } = this;
-    if (ghost && !gesture) {
+    if (ghost && (!gesture || gesture.type === "place")) {
       // The new element where it would stand, and the element it would stand in.
       const on = view.boxOnScreen({ ...ghost.at, ...sizeOf(ghost.kind) });
       context.lineWidth = 1.5;

@@ -43,7 +43,10 @@ export const ICONS = {
   fit: svg('<path d="M3 7V3h4M13 3h4v4M17 13v4h-4M7 17H3v-4"/>'),
   file: svg('<path d="M5 2.500h6.500L15 6v11.500H5z"/><path d="M11.500 2.500V6H15"/>'),
   open: svg('<path d="M2.500 15.500v-11h5l1.500 2h8.500v9z"/>'),
-  save: svg('<path d="M10 3v9.500M6 9l4 4 4-4M3.500 16.500h13"/>'),
+  save: svg(
+    '<path d="M3.500 3.500h10.500l2.500 2.500v10.500h-13z"/><path d="M6.500 3.500v4h6v-4M6.500 16.500v-5h7v5"/>',
+  ),
+  export: svg('<path d="M10 12.500V3M6.500 6.500L10 3l3.500 3.500M3.500 11v5.500h13V11"/>'),
   image: svg(
     '<rect x="2.500" y="3.500" width="15" height="13" rx="1.500"/><path d="M2.500 13.500l4-4 3.500 3.500 2.500-2.500 5 5"/><circle cx="13" cy="7.500" r="1.300"/>',
   ),
@@ -96,4 +99,38 @@ export const ICONS = {
   layout: svg(
     '<rect x="7" y="2.500" width="6" height="4"/><rect x="2" y="13.500" width="6" height="4"/><rect x="12" y="13.500" width="6" height="4"/><path d="M10 6.500v3.500M5 13.500V10h10v3.500"/>',
   ),
+  "chevron-right": svg('<path d="M8 6l4 4-4 4"/>'),
+  check: svg('<path d="M4.500 10.500l3.500 3.500 7.500-8"/>'),
+  close: svg('<path d="M5 5l10 10M15 5L5 15"/>'),
+  shapes: svg(
+    '<rect x="2.500" y="2.500" width="6.500" height="6.500"/><circle cx="14.200" cy="5.800" r="3.300"/><rect x="2.500" y="12" width="15" height="5.500" rx="2.750"/>',
+  ),
+  outline: svg('<path d="M3 4.500h8M6 10h9M6 15.500h9M3.500 7v8.500h.500M3.500 10h.500"/>'),
+  panel: svg(
+    '<rect x="2.500" y="3.500" width="15" height="13" rx="1.500"/><path d="M12.500 3.500v13"/>',
+  ),
+  wrap: svg('<path d="M3 5h14M3 10h11a2.500 2.500 0 0 1 0 5h-3M3 15h4M12.500 13l-2 2 2 2"/>'),
+  warning: svg('<path d="M10 3l7.500 13.500h-15z"/><path d="M10 8.500v3.500M10 14.300v.100"/>'),
+  "arrow-down": svg('<path d="M10 3.500v13M5 11.500l5 5 5-5"/>'),
+  "arrow-right": svg('<path d="M3.500 10h13M11.500 5l5 5-5 5"/>'),
+  "arrow-up": svg('<path d="M10 16.500v-13M5 8.500l5-5 5 5"/>'),
+  "arrow-left": svg('<path d="M16.500 10h-13M8.500 5l-5 5 5 5"/>'),
+  usecase: svg(
+    '<ellipse cx="12.500" cy="10" rx="5.500" ry="3.500"/><circle cx="3.500" cy="6.500" r="1.300"/><path d="M3.500 7.800v4M1.500 9.500h4M2 14.500l1.500-2.700L5 14.500"/>',
+  ),
+  flowchart: svg(
+    '<rect x="6.500" y="2" width="7" height="4" rx="2"/><path d="M10 9l3.500 2.500L10 14l-3.500-2.500z"/><path d="M10 6v3M10 14v3.500"/>',
+  ),
+  swimlane: svg(
+    '<rect x="2.500" y="3" width="15" height="14"/><path d="M10 3v14M2.500 6.500h15"/><rect x="4.500" y="9" width="3.500" height="2.500"/><rect x="12" y="13" width="3.500" height="2.500"/>',
+  ),
+  state: svg(
+    '<circle cx="3.500" cy="10" r="1.500" fill="currentColor"/><rect x="8.500" y="6.500" width="9" height="7" rx="2.500"/><path d="M5 10h3.500"/>',
+  ),
+  sequence: svg(
+    '<rect x="2.500" y="2.500" width="5" height="3"/><rect x="12.500" y="2.500" width="5" height="3"/><path d="M5 5.500v12M15 5.500v12M5 9h10M12.500 7l2.500 2-2.500 2M15 14H5"/>',
+  ),
 } as const;
+
+/** The name of an icon. */
+export type IconName = keyof typeof ICONS;
