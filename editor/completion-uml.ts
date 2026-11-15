@@ -12,10 +12,17 @@ import {
   type CompletionResult,
   pickedCompletion,
   snippet,
-  snippetCompletion,
 } from "@codemirror/autocomplete";
 import type { EditorView } from "@codemirror/view";
-import { completeTam, DIRECTIONS, type Known, option } from "./completion.ts";
+import {
+  completeTam,
+  DIRECTIONS,
+  filled,
+  inOrder,
+  type Known,
+  option,
+  ranked,
+} from "./completion.ts";
 import { scanSource, type SyntaxState, type Token } from "./syntax.ts";
 import type { DiagramType } from "./types.ts";
 
@@ -59,24 +66,21 @@ const WORD = /^[\p{L}\p{N}_]*$/u;
 const result = (from: number, options: Completion[], validFor = WORD): CompletionResult | null =>
   options.length ? { from, options, validFor } : null;
 
-/** Options in the order given, not of the alphabet. */
-const ranked = (options: Completion[], top: number): Completion[] =>
-  options.map((item, index) => ({ ...item, boost: top - index }));
-
 /** A statement to fill in: its keyword, the text with its fields, its drawing and what it is. */
 const statements = (list: [label: string, template: string, type: string, detail: string][]) =>
-  list.map(([label, template, type, detail]) =>
-    snippetCompletion(template, { label, type, detail }),
-  );
+  list.map(([label, template, type, detail]) => filled(template, { label, type, detail }));
 
 /** The connections of a syntax: what is typed, what it means, and the text with fields when it has some. */
 const arrows = (list: [text: string, detail: string, template?: string][]) =>
   ranked(
     list.map(([text, detail, template]) =>
-      snippetCompletion(template ?? `${text} `, { label: text, type: "connection", detail }),
+      filled(template ?? `${text} `, { label: text, type: "connection", detail }),
     ),
     50,
   );
+
+/** The elements as options, in the order the source names them. */
+const elements = (items: Known[]): Completion[] => inOrder(items.map(element));
 
 const element = (item: Known): Completion =>
   option(
@@ -113,7 +117,7 @@ function startWord(cursor: Cursor): string | null | undefined {
 
 /** The statements and the ids a line can start with. */
 const lineStart = (cursor: Cursor, word: string, list: Completion[], ids = cursor.ids()) =>
-  result(cursor.at(word.length), [...ranked(list, 30), ...ids.map(element)]);
+  result(cursor.at(word.length), [...ranked(list, 30), ...elements(ids)]);
 
 /** The directions after `direction`. */
 function direction(cursor: Cursor): CompletionResult | null | undefined {
@@ -131,22 +135,29 @@ const unwrap = (label: string) =>
     .trim()
     .replace(/^"(.*)"$/, "$1");
 
-/**
- * The elements a source names, in the order it names them: the classes, the actors and use cases,
- * the nodes, the states or the participants, each with its kind and its label where the source
- * says one. Read from the tokens of the text, so a source that does not parse has them too.
- */
-export function idsOf(type: DiagramType, source: string): Known[] {
-  const found = new Map<string, Known>();
-  const add = (id: string, kind: string, label = "", declared = false) => {
+/** An element a source names, and the line that says what it is. */
+interface Named extends Known {
+  /** The line that declares the element, or gives it its text; its first mention where none does. From 1. */
+  line: number;
+  /** Whether that line declares it. */
+  declared: boolean;
+}
+
+/** The elements a source names, read from the tokens of the text, so a source that does not parse has them too. */
+function namedIn(type: DiagramType, source: string): Named[] {
+  const found = new Map<string, Named>();
+  let line = 0;
+  const add = (id: string, kind: string, label = "", declared = false, declares = declared) => {
     const known = found.get(id);
-    if (!known) found.set(id, { id, kind, label });
+    if (!known) found.set(id, { id, kind, label, line, declared: declares || !!label });
     else {
       if (declared || (label && !known.label)) known.kind = kind;
       if (label) known.label = label;
+      if ((declares || label) && !known.declared) Object.assign(known, { line, declared: true });
     }
   };
   for (const tokens of scanSource(type, source).lines) {
+    line++;
     const lead = tokens[0]?.tag === "keyword" ? tokens[0].text : "";
     tokens.forEach((token, index) => {
       if (!token.tag.startsWith("variableName")) return;
@@ -155,7 +166,8 @@ export function idsOf(type: DiagramType, source: string): Known[] {
         defined = token.tag.endsWith("definition");
       if (type === "class") {
         if (lead === "namespace") return;
-        add(text(token).replace(/^`|`$/g, "").replace(/~.*$/, ""), "uml-class", unwrap(label));
+        const name = text(token).replace(/^`|`$/g, "").replace(/~.*$/, "");
+        add(name, "uml-class", unwrap(label), false, defined);
       } else if (type === "usecase") {
         if (lead === "systemBoundary" && defined) return;
         const actor = lead === "actor" && defined;
@@ -189,6 +201,7 @@ export function idsOf(type: DiagramType, source: string): Known[] {
               : "uml-state",
           unwrap(quoted),
           !!special,
+          !!special || defined,
         );
       } else if (type === "sequence") {
         const alias = tokens[index + 2]?.tag === "string" ? text(tokens[index + 2]) : "";
@@ -202,6 +215,24 @@ export function idsOf(type: DiagramType, source: string): Known[] {
     });
   }
   return [...found.values()];
+}
+
+/**
+ * The elements a source names, in the order it names them: the classes, the actors and use cases,
+ * the nodes, the states or the participants, each with its kind and its label where the source
+ * says one. Read from the tokens of the text, so a source that does not parse has them too.
+ */
+export function idsOf(type: DiagramType, source: string): Known[] {
+  return namedIn(type, source).map(({ id, kind, label }) => ({ id, kind, label }));
+}
+
+/**
+ * The line of each element of a source, by its id: the line that declares the element or gives it
+ * its text and shape, which is the one to show for it; the line of its first mention where the
+ * source only mentions it. Lines count from 1.
+ */
+export function declarationLines(type: DiagramType, source: string): Map<string, number> {
+  return new Map(namedIn(type, source).map((item) => [item.id, item.line]));
 }
 
 const ANNOTATIONS = ["interface", "abstract", "enumeration", "service"].map((name) =>
@@ -272,7 +303,7 @@ function completeClass(cursor: Cursor): CompletionResult | null {
       option("for", "keyword", "the note belongs to a class", "for "),
     ]);
   if ((match = before.match(/^note\s+for\s+([\p{L}\p{N}_.]*)$/u)))
-    return result(cursor.at(match[1].length), cursor.ids().map(element));
+    return result(cursor.at(match[1].length), elements(cursor.ids()));
   const word = startWord(cursor);
   if (word === null) return null;
   if (word !== undefined) {
@@ -303,7 +334,8 @@ function completeClass(cursor: Cursor): CompletionResult | null {
     !CLASS_KEYWORDS.test(match[1]) &&
     (match[3] || /^[^o]/.test(match[4]))
   )
-    return result(cursor.at(match[4].length), CLASS_RELATIONS, /^[-.<|>*o():"1 ]*$/);
+    // Behind a whole relation and a space the classes are offered instead.
+    return result(cursor.at(match[4].length), CLASS_RELATIONS, /^[-.<|>*o():]*$/);
   // After a relation: the classes.
   if (
     (match = before.match(
@@ -311,7 +343,7 @@ function completeClass(cursor: Cursor): CompletionResult | null {
     )) &&
     !before.includes(":")
   )
-    return result(cursor.at(match[1].length), cursor.ids().map(element), /^[\p{L}\p{N}_.]*$/u);
+    return result(cursor.at(match[1].length), elements(cursor.ids()), /^[\p{L}\p{N}_.]*$/u);
   return null;
 }
 
@@ -335,7 +367,7 @@ function completeUsecase(cursor: Cursor): CompletionResult | null {
       option("for", "keyword", "the note belongs to an element", "for "),
     ]);
   if ((match = before.match(/^note\s+for\s+(\w*)$/)))
-    return result(cursor.at(match[1].length), cursor.ids().map(element));
+    return result(cursor.at(match[1].length), elements(cursor.ids()));
   const word = startWord(cursor);
   if (word === null) return null;
   if (word !== undefined) {
@@ -376,13 +408,10 @@ function completeUsecase(cursor: Cursor): CompletionResult | null {
   if ((match = before.match(/\.\.>\s*:\s*(?:include|extend)\s+(\w*)$/)))
     return result(
       cursor.at(match[1].length),
-      cursor
-        .ids()
-        .filter((item) => item.kind === "uml-usecase")
-        .map(element),
+      elements(cursor.ids().filter((item) => item.kind === "uml-usecase")),
     );
   if ((match = before.match(/(?:--+\|?>\s*|(?:<--+|--+[ox]?)\s+)(\w*)$/)))
-    return result(cursor.at(match[1].length), cursor.ids().map(element));
+    return result(cursor.at(match[1].length), elements(cursor.ids()));
   // After an element: the relations of the syntax. Behind a label only when asked or begun.
   if (
     (match = before.match(/^\w+(\s*(?:\([^)]*\)|\[[^\]]*\]))?\s+([-.<>|ox]*)$/)) &&
@@ -507,7 +536,7 @@ function completeFlow(cursor: Cursor): CompletionResult | null {
     last.tag === "operator" ||
     (last.tag === "string" && /^\|.*\|$/.test(last.text)) ||
     (last.tag === "punctuation" && last.text === "&");
-  if (edge && !symbols) return result(cursor.at(letters.length), cursor.ids().map(element));
+  if (edge && !symbols) return result(cursor.at(letters.length), elements(cursor.ids()));
   return null;
 }
 
@@ -522,7 +551,7 @@ function completeState(cursor: Cursor): CompletionResult | null {
   const found = direction(cursor);
   if (found !== undefined) return found;
   if ((match = before.match(/^note\s+(?:left|right)\s+of\s+([^\s:\-{}"]*)$/i)))
-    return result(cursor.at(match[1].length), cursor.ids().map(element), /^[^\s:\-{}"]*$/);
+    return result(cursor.at(match[1].length), elements(cursor.ids()), /^[^\s:\-{}"]*$/);
   if ((match = before.match(/^note\s+([\w ]*)$/i)))
     return result(
       cursor.at(match[1].length),
@@ -590,7 +619,7 @@ function completeState(cursor: Cursor): CompletionResult | null {
           ],
           30,
         ),
-        ...cursor.ids().map(element),
+        ...elements(cursor.ids()),
       ],
       STATE_WORD,
     );
@@ -609,8 +638,8 @@ function completeState(cursor: Cursor): CompletionResult | null {
     return result(
       cursor.at(match[1].length),
       [
-        ...cursor.ids().map(element),
-        over("[*]", "uml-final", "the final state: where it ends", "[*]", "]"),
+        ...elements(cursor.ids()),
+        { ...over("[*]", "uml-final", "the final state: where it ends", "[*]", "]"), boost: -61 },
       ],
       /^[^:\s\-{}"]*$/,
     );
@@ -662,7 +691,7 @@ const BRANCHES: Record<string, Completion> = {
 function completeSequence(cursor: Cursor): CompletionResult | null {
   const { before, start } = cursor;
   let match: RegExpMatchArray | null;
-  const ids = () => cursor.ids().map(element);
+  const ids = () => elements(cursor.ids());
   if ((match = before.match(/^note\s+(?:left\s+of|right\s+of|over)\s+(?:[^:,]+,\s*)?([^:,\s]*)$/i)))
     return result(cursor.at(match[1].length), ids(), /^[^:,\s]*$/);
   if ((match = before.match(/^note\s+([\w ]*)$/i)))
@@ -730,8 +759,11 @@ function completeSequence(cursor: Cursor): CompletionResult | null {
     ]);
   }
   if (SEQUENCE_KEYWORDS.test(before) || before.includes(":")) return null;
-  // After a participant: the messages it can send.
-  if ((match = before.match(/^[^-<>:]+?\s*((?:<<|-)[-<>x)+]*)$/)))
+  // After a participant: the messages it can send. Behind a whole arrow the participants come next.
+  if (
+    (match = before.match(/^[^-<>:]+?\s*((?:<<|-)[-<>x)+]*)$/)) &&
+    (cursor.explicit || !SEQUENCE_ARROWS.some((item) => item.label === match![1]))
+  )
     return result(cursor.at(match[1].length), SEQUENCE_ARROWS, /^[-<>x)+]*$/);
   if (
     (match = before.match(/^(\S+)\s+$/)) &&
@@ -760,9 +792,10 @@ export function completeUml(
     at: (length) => pos - length,
     start,
     ids() {
-      // Without the word being typed, which names nothing yet.
-      const typed = before.match(/[\p{L}\p{N}_.]*$/u)![0].length,
-        rest = line.text.slice(pos - line.from).match(/^[\p{L}\p{N}_.]*/u)![0].length;
+      // Without the word being typed, which names nothing yet; the id of a state may hold signs too.
+      const word = type === "state" ? '[^:\\s\\-{}"]*' : "[\\p{L}\\p{N}_.]*",
+        typed = before.match(new RegExp(`${word}$`, "u"))![0].length,
+        rest = line.text.slice(pos - line.from).match(new RegExp(`^${word}`, "u"))![0].length;
       return idsOf(type, state.sliceDoc(0, pos - typed) + state.sliceDoc(pos + rest));
     },
     elsewhere: () => idsOf(type, state.sliceDoc(0, line.from) + state.sliceDoc(line.to)),
@@ -810,12 +843,8 @@ const HEADERS: [header: string, template: string, type: string, detail: string][
   ["sequenceDiagram", "sequenceDiagram", "declare-uml-participant", "Sequence diagram"],
 ];
 
-/**
- * The completions at the cursor of a source of any type. A block diagram is completed from its
- * elements, the other types from their text. On the first statement line, where the type is still
- * to say, the headers of all types are offered too.
- */
-export function completeSource(
+/** What a source of a type offers at the cursor, whatever is typed there. */
+function optionsAt(
   context: CompletionContext,
   type: DiagramType,
   known: Known[],
@@ -834,14 +863,10 @@ export function completeSource(
   if (!first) return own();
   // The header of a source that ends here brings the first line of its statements with it.
   const last = !state.sliceDoc(line.to).trim();
-  const headers = HEADERS.map(([label, template, kind, detail]) =>
-    snippetCompletion(last ? `${template}\n\t\${}` : template, {
-      label,
-      type: kind,
-      detail,
-      boost: 1,
-    }),
-  );
+  const headers = HEADERS.map(([label, template, kind, detail]) => ({
+    ...filled(last ? `${template}\n\t\${}` : template, { label, type: kind, detail }),
+    boost: 1,
+  }));
   const title =
     type !== "tam" && above.front === "before"
       ? statements([
@@ -859,3 +884,43 @@ export function completeSource(
     /^[\w-]*$/,
   );
 }
+
+/**
+ * The completions at the cursor of a source of any type. A block diagram is completed from its
+ * elements, the other types from their text. On the first statement line, where the type is still
+ * to say, the headers of all types are offered too.
+ *
+ * Nothing is offered where the text before the cursor is already an option that would write just
+ * that text: the list closes, and Enter starts a new line. Asked for, the list shows there too.
+ */
+export function completeSource(
+  context: CompletionContext,
+  type: DiagramType,
+  known: Known[],
+): CompletionResult | null {
+  const found = optionsAt(context, type, known);
+  if (!found) return null;
+  const written = new Set(
+    found.options
+      .filter((item) => item.apply === undefined || item.apply === item.label)
+      .map((item) => item.label),
+  );
+  if (!context.explicit && written.has(context.state.sliceDoc(found.from, context.pos)))
+    return null;
+  const { validFor } = found;
+  return {
+    ...found,
+    validFor: (typed, from, to, state) =>
+      !written.has(typed) &&
+      (validFor instanceof RegExp ? validFor.test(typed) : !!validFor?.(typed, from, to, state)),
+  };
+}
+
+/**
+ * Whether the list opens again right after an option was taken: after a connection, whose other
+ * end comes next, and after a keyword that is followed by a name or a value.
+ */
+export const continues = (completion: Completion): boolean =>
+  completion.type === "connection" ||
+  completion.label === "[*]" ||
+  (typeof completion.apply === "string" && completion.apply.endsWith(" "));

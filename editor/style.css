@@ -61,10 +61,14 @@
   box-sizing: border-box;
 }
 
+/* The page is the window: it does not scroll, and its labels are not text to select. */
+
 html,
 body {
   height: 100%;
   margin: 0;
+  overflow: hidden;
+  overscroll-behavior: none;
 }
 
 body {
@@ -73,7 +77,20 @@ body {
   font:
     12px/16px system-ui,
     sans-serif;
-  overflow: hidden;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* What is typed or read as a reference is. */
+
+input,
+textarea,
+[contenteditable],
+.source,
+.sheet,
+.problem {
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 [hidden] {
@@ -101,6 +118,14 @@ kbd {
   font-size: 11px;
 }
 
+/* Code shows the characters to type: no font joins --> into an arrow. */
+
+code,
+kbd,
+.source {
+  font-variant-ligatures: none;
+}
+
 hr {
   margin: 0;
   border: 0;
@@ -122,8 +147,8 @@ hr {
 .inspector,
 .starts,
 .menu,
-.dialog,
-.sheet {
+.dialog-body,
+.command-list {
   scrollbar-width: thin;
   scrollbar-color: var(--line-strong) transparent;
 }
@@ -229,6 +254,15 @@ hr {
   color: var(--danger);
 }
 
+.button.primary.danger {
+  background: var(--danger);
+  color: var(--on-accent);
+}
+
+.button.primary.danger:hover {
+  background: color-mix(in srgb, var(--danger) 88%, var(--text));
+}
+
 [aria-pressed="true"]:is(.button, .rail-button, .segment, .status-button, .tile),
 .menu-title[aria-expanded="true"],
 .chip[aria-expanded="true"],
@@ -237,8 +271,8 @@ hr {
   color: var(--accent-text);
 }
 
-[aria-disabled="true"]:is(.button, .rail-button, .segment, .status-button),
-[aria-disabled="true"]:is(.button, .rail-button, .segment, .status-button):hover {
+[aria-disabled="true"]:is(.button, .rail-button, .segment, .status-button, .menu-title),
+[aria-disabled="true"]:is(.button, .rail-button, .segment, .status-button, .menu-title):hover {
   color: var(--text-3);
   background: none;
   cursor: default;
@@ -251,23 +285,24 @@ hr {
 }
 
 :is(
-    .button,
-    .rail-button,
-    .menu-title,
-    .chip,
-    .segment,
-    .status-button,
-    .tab,
-    .tile,
-    .snippet,
-    .fold,
-    .group-header,
-    .swatch,
-    .card,
-    .start,
-    .banner,
-    .problem
-  ):focus-visible {
+  .button,
+  .rail-button,
+  .menu-title,
+  .chip,
+  .segment,
+  .status-button,
+  .tab,
+  .tile,
+  .snippet,
+  .fold,
+  .group-header,
+  .swatch,
+  .card,
+  .start,
+  .banner,
+  .away,
+  .problem
+):focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
 }
@@ -589,19 +624,24 @@ select.field {
 
 .tiles {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 4px;
-  padding: 4px 8px 8px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  align-items: start;
+  gap: 2px;
+  padding: 4px 6px 8px;
 }
+
+/* The icon stands at one height in every tile; a name of two lines grows the tile downwards. */
 
 .tile {
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-start;
   gap: 4px;
-  height: 56px;
-  padding: 0;
+  min-height: 56px;
+  padding: 8px 2px 6px;
+  line-height: 13px;
+  text-align: center;
   border: 0;
   border-radius: var(--radius);
   background: none;
@@ -724,28 +764,31 @@ select.field {
 
 /* The handles that make a panel wider, and the one between properties and source. */
 
+/* Each takes the pointer over 8px and shows as a line of 2px in its middle. */
+
 .resizer {
   position: absolute;
   top: 0;
   bottom: 0;
   z-index: 4;
-  width: 5px;
+  width: 8px;
   cursor: col-resize;
   touch-action: none;
 }
 
 .resizer.at-end {
-  right: -3px;
+  right: -4px;
 }
 
 .resizer.at-start {
-  left: -3px;
+  left: -4px;
 }
 
 .splitter {
+  position: relative;
   flex: none;
-  height: 4px;
-  margin: -2px 0;
+  height: 8px;
+  margin: -4px 0;
   z-index: 3;
   cursor: row-resize;
   touch-action: none;
@@ -755,10 +798,21 @@ select.field {
   display: none;
 }
 
-.resizer:hover,
-.resizer.active,
-.splitter:hover,
-.splitter.active {
+.resizer::after,
+.splitter::after {
+  content: "";
+  position: absolute;
+  inset: 0 3px;
+}
+
+.splitter::after {
+  inset: 3px 0;
+}
+
+.resizer:hover::after,
+.resizer.active::after,
+.splitter:hover::after,
+.splitter.active::after {
   background: var(--accent);
 }
 
@@ -769,7 +823,7 @@ select.field {
   position: relative;
   min-width: 0;
   min-height: 0;
-  overflow: hidden;
+  overflow: clip;
 }
 
 canvas#canvas,
@@ -841,6 +895,85 @@ canvas.layer {
   cursor: pointer;
 }
 
+/* The way back to a diagram the view has left. */
+
+.away {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: var(--control);
+  padding: 0 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--raised);
+  box-shadow: var(--shadow);
+  cursor: pointer;
+}
+
+.away:hover {
+  background: var(--hover);
+}
+
+.banner:not([hidden]) ~ .away {
+  top: 48px;
+}
+
+/* The greeting of a first visit. */
+
+.welcome {
+  position: absolute;
+  left: 12px;
+  bottom: 12px;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: min(320px, calc(100% - 24px));
+  padding: 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: var(--raised);
+  box-shadow: var(--shadow);
+}
+
+.welcome header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: -4px -4px -4px 0;
+}
+
+.welcome strong {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.welcome p {
+  color: var(--text-2);
+}
+
+.welcome b {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.welcome kbd {
+  font:
+    11px system-ui,
+    sans-serif;
+  color: var(--text);
+}
+
+.welcome footer {
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
+}
+
 .preview-label {
   position: absolute;
   top: 12px;
@@ -892,7 +1025,28 @@ canvas.layer {
   pointer-events: auto;
 }
 
-.toast button {
+.toast .toast-close {
+  display: inline-flex;
+  margin: 0 -6px 0 -4px;
+  padding: 2px;
+  border: 0;
+  border-radius: var(--radius);
+  background: none;
+  color: inherit;
+  opacity: 0.7;
+  cursor: pointer;
+}
+
+.toast .toast-close:hover {
+  opacity: 1;
+}
+
+.toast .toast-close svg {
+  width: 14px;
+  height: 14px;
+}
+
+.toast .toast-action {
   padding: 2px 8px;
   border: 1px solid color-mix(in srgb, var(--panel) 40%, transparent);
   border-radius: var(--radius);
@@ -1253,12 +1407,15 @@ code.id {
   color: var(--warning);
 }
 
-.zooms {
+.zooms,
+.modes {
   display: flex;
   align-items: center;
+  gap: 2px;
+  height: 16px;
   margin-left: 4px;
-  padding-left: 4px;
-  border-left: 1px solid var(--line);
+  padding-left: 6px;
+  border-left: 1px solid var(--line-strong);
 }
 
 /* Menus. */
@@ -1348,6 +1505,10 @@ code.id {
 
 .tooltip {
   position: fixed;
+  inset: auto;
+  margin: 0;
+  border: 0;
+  overflow: visible;
   z-index: 60;
   display: flex;
   align-items: center;
@@ -1372,11 +1533,11 @@ code.id {
     sans-serif;
 }
 
-/* Dialogs. */
+/* Dialogs: never higher than the window. The title and the buttons stay, the body between them scrolls. */
 
 .dialog {
   width: min(640px, 92vw);
-  max-height: 88vh;
+  max-height: calc(100vh - 24px);
   padding: 0;
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -1404,6 +1565,14 @@ code.id {
   border-bottom: 1px solid var(--line);
 }
 
+.dialog-body {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+
 .dialog h1 {
   font-size: 14px;
   font-weight: 600;
@@ -1417,7 +1586,7 @@ code.id {
   color: var(--text-2);
 }
 
-.dialog > p {
+.dialog-body > p {
   padding: 16px 16px 0;
 }
 
@@ -1428,18 +1597,28 @@ code.id {
   flex: none;
   gap: 8px;
   padding: 12px 16px;
+  border-top: 1px solid var(--line);
 }
 
 .dialog > footer .note {
   flex: 1;
+  min-width: 0;
+}
+
+.dialog > footer .note.warning {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--warning);
+  font-weight: 500;
 }
 
 .dialog.confirm {
-  width: min(420px, 92vw);
+  width: min(440px, 92vw);
 }
 
-.dialog.confirm > footer {
-  padding-top: 16px;
+.dialog.confirm .dialog-body {
+  padding-bottom: 16px;
 }
 
 .dialog.help {
@@ -1451,14 +1630,13 @@ code.id {
   grid-template-columns: 1fr 1fr;
   gap: 16px 24px;
   padding: 16px;
-  overflow-y: auto;
 }
 
 .syntax .sheet {
   grid-template-columns: 1fr;
 }
 
-.syntax > .note {
+.syntax .dialog-body > .note {
   padding: 0 16px 16px;
 }
 
@@ -1511,15 +1689,30 @@ code.id {
 
 .sheet code {
   color: var(--syntax-word);
+  white-space: pre-wrap;
 }
 
+@media (max-width: 640px) {
+  .sheet {
+    grid-template-columns: 1fr;
+  }
+
+  .syntax .sheet p {
+    grid-template-columns: 1fr;
+    gap: 2px;
+  }
+}
+
+/* The chooser of a new diagram. */
+
 .dialog.chooser {
-  width: min(720px, 94vw);
+  width: min(760px, 94vw);
 }
 
 .cards {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  flex: none;
   gap: 8px;
   padding: 16px;
 }
@@ -1528,6 +1721,7 @@ code.id {
   display: flex;
   flex-direction: column;
   gap: 4px;
+  min-width: 0;
   padding: 8px;
   border: 1px solid var(--line);
   border-radius: var(--radius);
@@ -1541,17 +1735,17 @@ code.id {
   background: var(--hover);
 }
 
-.card[aria-pressed="true"] {
+.card[aria-checked="true"] {
   border-color: var(--accent);
   box-shadow: 0 0 0 1px var(--accent);
   background: var(--accent-soft);
 }
 
+/* The picture fills the card's window: what does not fit is cut at the sides. */
+
 .thumb {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  height: 72px;
+  display: block;
+  height: 80px;
   margin-bottom: 4px;
   border-radius: 3px;
   background: var(--page, var(--field));
@@ -1559,8 +1753,16 @@ code.id {
 }
 
 .thumb img {
-  max-width: 90%;
-  max-height: 60px;
+  display: block;
+  width: 100%;
+  height: 100%;
+  padding: 4px;
+  object-fit: cover;
+}
+
+.thumb img.whole {
+  padding: 6px;
+  object-fit: contain;
 }
 
 .thumb img:not([src]) {
@@ -1587,35 +1789,67 @@ code.id {
   padding: 0 16px 6px;
 }
 
-.starts {
+.starts-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   flex: none;
-  height: 148px;
-  margin: 0 16px;
-  padding: 2px;
+  gap: 8px;
+  height: 172px;
+  margin: 0 16px 16px;
+}
+
+.starts,
+.start-preview {
   border: 1px solid var(--line);
   border-radius: var(--radius);
+}
+
+.starts {
+  padding: 2px;
   background: var(--field);
   overflow-y: auto;
+}
+
+.start-preview {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  background: var(--page, var(--field));
+  overflow: hidden;
+}
+
+.start-preview img {
+  position: absolute;
+  inset: 8px;
+  width: calc(100% - 16px);
+  height: calc(100% - 16px);
+  object-fit: contain;
 }
 
 .start {
   display: flex;
   align-items: center;
   gap: 8px;
-  width: 100%;
   height: var(--control);
   padding: 0 8px;
-  border: 0;
   border-radius: 3px;
-  background: none;
-  text-align: left;
   cursor: pointer;
 }
 
-.start span:last-child {
+.start .name {
+  flex: 1;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.start .tag {
+  flex: none;
+  color: var(--text-3);
+  font-size: 11px;
 }
 
 .start .icon {
@@ -1628,6 +1862,131 @@ code.id {
 
 .start[aria-selected="true"] {
   background: var(--accent-soft);
+}
+
+.start:focus-visible {
+  outline-offset: -2px;
+}
+
+@media (max-width: 560px) {
+  .starts-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .start-preview {
+    display: none;
+  }
+}
+
+/* The export of a picture: what the file will hold, on squares that show where nothing is behind it. */
+
+.dialog.export {
+  width: min(560px, 92vw);
+}
+
+.export-preview {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 1 240px;
+  min-height: 120px;
+  margin: 16px 16px 0;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: repeating-conic-gradient(var(--panel-2) 0% 25%, var(--field) 0% 50%) 50% / 16px 16px;
+  overflow: hidden;
+}
+
+.export-preview img {
+  max-width: 100%;
+  max-height: 216px;
+}
+
+.export-options {
+  display: flex;
+  flex-direction: column;
+  flex: none;
+  gap: 8px;
+  padding: 16px;
+}
+
+.export-options .row {
+  grid-template-columns: 88px minmax(0, 1fr);
+}
+
+/* The list of all commands. */
+
+.dialog.commands {
+  width: min(560px, 92vw);
+  margin-top: 12vh;
+}
+
+.dialog.commands .dialog-body {
+  overflow: hidden;
+}
+
+.dialog.commands .field {
+  flex: none;
+  width: auto;
+  margin: 12px 12px 8px;
+}
+
+.command-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: 50vh;
+  padding: 0 4px 4px;
+  overflow-y: auto;
+}
+
+.command-list .note {
+  padding: 8px 12px 12px;
+}
+
+.command {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-height: var(--control);
+  padding: 6px 8px;
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+
+.command .name {
+  flex: none;
+  max-width: 60%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.command .path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-3);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.command kbd {
+  flex: none;
+  font:
+    11px system-ui,
+    sans-serif;
+  color: var(--text-2);
+}
+
+.command[aria-selected="true"] {
+  background: var(--accent-soft);
+}
+
+.command[aria-disabled="true"] {
+  color: var(--text-3);
+  cursor: default;
 }
 
 /* A window too small for the panels beside the canvas: they lie over it, opened from the rail. */

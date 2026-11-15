@@ -54,7 +54,7 @@ describe("editing a TAM source as text", () => {
     expect(inner.source).toContain("storage db[(Orders)] {\n  storage rows[Rows]\n}");
     expect(parseTam(inner.source).nodes.get("rows")!.parent).toBe("db");
     // A kind is no id, and a name with a bracket goes in quotes.
-    expect(addElement(SHOP, { kind: "storage", label: "Storage" }).id).toBe("storage2");
+    expect(addElement(SHOP, { kind: "storage", label: "Storage" }).id).toBe("storage1");
     expect(addElement("", { kind: "agent", label: "a]b" }).source).toBe('agent a_b "a]b"\n');
   });
 

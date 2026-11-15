@@ -1,6 +1,7 @@
 /**
  * The minimap: the whole diagram small at a corner of the canvas, with the part on show framed.
- * It shows while the diagram reaches beyond the canvas; a press or a drag on it moves the view there.
+ * It shows while the diagram reaches beyond the canvas, unless it is turned off; a press or a drag
+ * on it moves the view there.
  */
 
 import type { Box, Point } from "../src/scene.ts";
@@ -14,6 +15,8 @@ const WIDTH = 180,
 export class Minimap {
   readonly element = h("canvas", { class: "minimap", "aria-hidden": "true" });
   private readonly editor: Editor;
+  /** Whether the minimap shows at all: the View menu turns it off. */
+  enabled = true;
   private dragging = false;
   /** How the diagram maps to the minimap as it was drawn last: the scale and the diagram point at its corner. */
   private map = { scale: 1, x: 0, y: 0 };
@@ -57,7 +60,8 @@ export class Minimap {
       { picture } = editor.doc,
       bounds = picture?.scene.bounds,
       { width, height } = view.size;
-    if (!picture || !bounds?.width || !width || !height) return void (element.hidden = true);
+    if (!this.enabled || !picture || !bounds?.width || !width || !height)
+      return void (element.hidden = true);
     const from = view.toScene({ x: 0, y: 0 }),
       to = view.toScene({ x: width, y: height }),
       seen: Box = { x: from.x, y: from.y, width: to.x - from.x, height: to.y - from.y };

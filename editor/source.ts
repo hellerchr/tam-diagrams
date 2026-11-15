@@ -11,7 +11,7 @@ import {
   closeBracketsKeymap,
   type CompletionContext,
 } from "@codemirror/autocomplete";
-import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
+import { defaultKeymap, indentWithTab } from "@codemirror/commands";
 import { HighlightStyle, indentUnit, syntaxHighlighting } from "@codemirror/language";
 import { setDiagnostics } from "@codemirror/lint";
 import {
@@ -21,8 +21,10 @@ import {
   EditorState,
   StateEffect,
   StateField,
+  type TransactionSpec,
 } from "@codemirror/state";
 import {
+  type Command,
   Decoration,
   type DecorationSet,
   drawSelection,
@@ -31,12 +33,14 @@ import {
   keymap,
   lineNumbers,
   tooltips,
+  ViewPlugin,
+  type ViewUpdate,
 } from "@codemirror/view";
 import { tags } from "@lezer/highlight";
 import type { Known } from "./completion.ts";
-import { completeSource } from "./completion-uml.ts";
-import { newlineAfterBlock, syntaxOf } from "./syntax.ts";
-import type { DiagramType } from "./types.ts";
+import { completeSource, continues } from "./completion-uml.ts";
+import { newlineAfterBlock, syntaxOf, typingRules } from "./syntax.ts";
+import { type DiagramType, typeOf } from "./types.ts";
 
 /** The colors come from the page, so the pane follows the theme. */
 const colors = HighlightStyle.define([
@@ -68,6 +72,8 @@ const look = EditorView.theme({
   ".cm-scroller": {
     fontFamily: 'ui-monospace, "SF Mono", Menlo, Consolas, monospace',
     lineHeight: "1.55",
+    // The signs of the syntax show as they are typed, not drawn together into arrows.
+    fontVariantLigatures: "none",
     scrollbarWidth: "thin",
     scrollbarColor: "var(--line-strong) transparent",
   },
@@ -98,6 +104,7 @@ const look = EditorView.theme({
   ".cm-tooltip.cm-tooltip-autocomplete > ul": {
     fontFamily: 'ui-monospace, "SF Mono", Menlo, Consolas, monospace',
     fontSize: "12px",
+    fontVariantLigatures: "none",
     maxHeight: "18em",
     minWidth: "min(24em, 90vw)",
     maxWidth: "min(40em, 90vw)",
@@ -285,6 +292,190 @@ const selectedLines = StateField.define<DecorationSet>({
   provide: (field) => EditorView.decorations.from(field),
 });
 
+/**
+ * The smallest change that turns one text into another: what lies between the start and the end
+ * the two have in common. Where lines were only added or only removed, the change is whole lines:
+ * it starts at the start of a line. Undefined when the texts are the same.
+ */
+export function changeBetween(
+  old: string,
+  text: string,
+): { from: number; to: number; insert: string } | undefined {
+  if (old === text) return undefined;
+  const most = Math.min(old.length, text.length);
+  let start = 0;
+  while (start < most && old[start] === text[start]) start++;
+  let end = 0;
+  while (end < most - start && old[old.length - 1 - end] === text[text.length - 1 - end]) end++;
+  // Text that is only added or removed may be said to start earlier, when it ends as the text before it does.
+  const longer = old.length > text.length ? old : text,
+    length = longer.length - end - start;
+  if (most === start + end && longer.slice(start, start + length).includes("\n")) {
+    let back = 0;
+    while (
+      start - back > 0 &&
+      longer[start - back - 1] !== "\n" &&
+      longer[start - back - 1] === longer[start - back + length - 1]
+    )
+      back++;
+    if (start - back === 0 || longer[start - back - 1] === "\n") {
+      start -= back;
+      end += back;
+    }
+  }
+  return { from: start, to: old.length - end, insert: text.slice(start, text.length - end) };
+}
+
+/**
+ * The change that shows a text of the document in the pane: only what differs is replaced, so the
+ * cursor, the marked lines and the view stay where they are around it. With `follow` the cursor
+ * goes to where the change ends: the place a step of the history changed. Undefined when the pane
+ * shows the text already.
+ */
+export function showText(
+  state: EditorState,
+  text: string,
+  follow = false,
+): TransactionSpec | undefined {
+  const change = changeBetween(state.doc.toString(), text);
+  if (!change) return undefined;
+  return {
+    changes: change,
+    ...(follow
+      ? {
+          selection: EditorSelection.cursor(change.from + change.insert.length),
+          scrollIntoView: true,
+        }
+      : {}),
+    annotations: fromDocument.of(true),
+  };
+}
+
+/**
+ * Tab behind text on a line writes nothing: it leaves a word that is selected, such as the last
+ * field of a statement just filled in, with the cursor behind it. Tab indents at the start of a
+ * line and with lines selected, which is left to the binding after this one.
+ */
+export const tabBehindText: Command = (view) => {
+  const { state } = view,
+    range = state.selection.main,
+    line = state.doc.lineAt(range.from);
+  if (state.selection.ranges.length > 1 || range.to > line.to) return false;
+  if (!state.sliceDoc(line.from, range.from).trim()) return false;
+  if (!range.empty) view.dispatch({ selection: { anchor: range.to } });
+  return true;
+};
+
+/** The lines that wrap continue two columns further in than they start, so the start of each statement stands out. */
+const hangingIndent = ViewPlugin.fromClass(
+  class {
+    decorations: DecorationSet;
+
+    constructor(view: EditorView) {
+      this.decorations = this.read(view);
+    }
+
+    update(update: ViewUpdate) {
+      if (update.docChanged || update.viewportChanged) this.decorations = this.read(update.view);
+    }
+
+    private read(view: EditorView): DecorationSet {
+      const lines = [];
+      for (const { from, to } of view.visibleRanges)
+        for (let pos = from; pos <= to;) {
+          const line = view.state.doc.lineAt(pos),
+            columns = line.text.length - line.text.trimStart().length + 2;
+          lines.push(
+            Decoration.line({
+              attributes: {
+                style: `text-indent: -${columns}ch; padding-left: calc(${columns}ch + 6px)`,
+              },
+            }).range(line.from),
+          );
+          pos = line.to + 1;
+        }
+      return Decoration.set(lines);
+    }
+  },
+  { decorations: (plugin) => plugin.decorations },
+);
+
+/** How a place is brought into view: where in the pane it comes to stand, and how far from its edges at least. */
+interface Reveal {
+  x: string;
+  y: string;
+  xMargin: number;
+  yMargin: number;
+}
+
+/**
+ * Scrolls the pane, and nothing else, so that a place of the text shows. The heights of lines far
+ * from view are estimates, so the place is looked at once more after the pane moved.
+ */
+function reveal(view: EditorView, pos: number, options: Reveal, again = true) {
+  view.requestMeasure({
+    read(view) {
+      const at = Math.min(pos, view.state.doc.length),
+        block = view.lineBlockAt(at),
+        scroller = view.scrollDOM,
+        box = scroller.getBoundingClientRect(),
+        gutters = scroller.querySelector<HTMLElement>(".cm-gutters")?.offsetWidth ?? 0;
+      return {
+        at: view.coordsAtPos(at),
+        line: { top: view.documentTop + block.top, bottom: view.documentTop + block.bottom },
+        top: box.top + options.yMargin,
+        bottom: box.top + scroller.clientHeight - options.yMargin,
+        left: box.left + gutters + options.xMargin,
+        right: box.left + scroller.clientWidth - options.xMargin,
+      };
+    },
+    write({ at, line, top, bottom, left, right }, view) {
+      const scroller = view.scrollDOM,
+        before = scroller.scrollTop,
+        // The place itself where it is drawn, else the line it is in.
+        { top: start, bottom: end } = at ?? line,
+        y =
+          options.y === "nearest" ? (start < top ? "start" : end > bottom ? "end" : "") : options.y;
+      if (y === "center") scroller.scrollTop += (start + end) / 2 - (top + bottom) / 2;
+      else if (y === "start") scroller.scrollTop += start - top;
+      else if (y === "end") scroller.scrollTop += end - bottom;
+      if (at && at.left < left) scroller.scrollLeft += at.left - left;
+      else if (at && at.right > right) scroller.scrollLeft += at.right - right;
+      if (again && (!at || Math.abs(scroller.scrollTop - before) > 1))
+        reveal(view, pos, options, false);
+    },
+  });
+}
+
+/**
+ * What is brought into view is brought there by scrolling the pane alone: nothing around the pane
+ * moves, whatever else on the page could scroll.
+ */
+const scrollPane = EditorView.scrollHandler.of((view, range, options) => {
+  reveal(view, range.head, options);
+  return true;
+});
+
+/**
+ * Where the lists and hints of the pane are put: a place of no size at the corner of the window,
+ * so they can reach past the pane without making the page any larger.
+ */
+function tooltipHolder(): HTMLElement {
+  const holder = document.createElement("div");
+  holder.className = "cm-tooltip-holder";
+  Object.assign(holder.style, {
+    position: "fixed",
+    left: "0",
+    top: "0",
+    width: "0",
+    height: "0",
+    overflow: "visible",
+    zIndex: "50",
+  });
+  document.body.append(holder);
+  return holder;
+}
+
 /** What the pane asks of the editor around it. */
 export interface SourceHost {
   /** The text changed by typing. */
@@ -311,54 +502,134 @@ export class SourcePane {
   private readonly syntax = new Compartment();
   /** The diagram type whose syntax the pane has. */
   private type: DiagramType;
+  /** Typed text is on its way to the document, which takes it after a pause. */
+  private pending = false;
+  /** The steps of the history asked for while typed text was on its way: taken once it arrived. */
+  private waiting: (() => void)[] = [];
+  /** A step of the history is being taken from the pane: the cursor follows the change. */
+  private stepping = false;
+  /** The user works in the pane: a key or a press went to it last, not to something else on the page. */
+  private active = false;
+  /** When Tab was last pressed anywhere on the page: the focus that comes right after came by it. */
+  private tabbed = -Infinity;
 
   constructor(parent: HTMLElement, host: SourceHost) {
     this.host = host;
     this.type = host.type();
+    // What is typed is read as the type its text says, which the document learns only after a pause.
+    const typed = () => typeOf(this.view.state.doc.toString());
     // A block diagram is completed from its elements; the other types from their text.
     const complete = (context: CompletionContext) =>
-      completeSource(context, host.type(), host.completes() ? host.elements() : []);
+      completeSource(context, typed(), host.completes() ? host.elements() : []);
     this.view = new EditorView({
       parent,
       state: EditorState.create({
         extensions: [
           lineNumbers(),
-          history(),
           drawSelection(),
           highlightActiveLine(),
           indentUnit.of("  "),
           EditorState.tabSize.of(2),
           this.syntax.of(syntaxOf(this.type)),
           syntaxHighlighting(colors),
+          typingRules(typed),
           closeBrackets(),
           // The list reaches past the pane, which would cut it off.
-          tooltips({ parent: document.body }),
-          autocompletion({ override: [complete], icons: true, closeOnBlur: true }),
+          tooltips({ position: "fixed", parent: tooltipHolder() }),
+          autocompletion({
+            override: [complete],
+            icons: true,
+            closeOnBlur: true,
+            activateOnCompletion: continues,
+          }),
           keymap.of([
             // Tab takes the completion on offer, as Enter does; else it indents.
             { key: "Tab", run: acceptCompletion },
-            { key: "Enter", run: newlineAfterBlock(() => this.type) },
+            { key: "Tab", run: tabBehindText },
+            { key: "Enter", run: newlineAfterBlock(typed) },
             ...closeBracketsKeymap,
             ...defaultKeymap,
-            ...historyKeymap,
             indentWithTab,
           ]),
+          scrollPane,
+          EditorView.domEventHandlers({
+            keydown: (event) => {
+              this.active = true;
+              // The pane has no history of its own: the document's holds typed and canvas edits alike.
+              const key = event.key.toLowerCase();
+              if (!(event.ctrlKey || event.metaKey) || event.altKey || (key !== "z" && key !== "y"))
+                return false;
+              return this.step(
+                key === "z" && !event.shiftKey ? () => host.undo() : () => host.redo(),
+              );
+            },
+            mousedown: (_, view) => {
+              this.active = true;
+              view.setTabFocusMode(false);
+            },
+            // A pane the focus came to by Tab lets Tab go on to the next control, until something is typed or pressed in it.
+            focus: (_, view) => {
+              if (performance.now() - this.tabbed < 100) view.setTabFocusMode(true);
+            },
+            blur: () => {
+              this.active = false;
+            },
+          }),
           selectedLines,
           this.wrapping.of([]),
           look,
           EditorView.contentAttributes.of({ "aria-label": "Diagram source", spellcheck: "false" }),
           EditorView.updateListener.of((update) => {
-            const typed = update.transactions.some(
+            const own = update.transactions.filter(
               (transaction) => !transaction.annotation(fromDocument),
             );
-            if (update.docChanged && typed) host.changed(update.state.doc.toString());
+            if (own.some((transaction) => transaction.docChanged)) {
+              this.pending = true;
+              this.active = true;
+              update.view.setTabFocusMode(false);
+              host.changed(update.state.doc.toString());
+            }
             // A click or a key moved the cursor: the element declared there is selected.
-            else if (update.selectionSet && typed && update.view.hasFocus)
+            else if (update.selectionSet && own.length && update.view.hasFocus)
               host.cursorAt(update.state.doc.lineAt(update.state.selection.main.head).number);
           }),
         ],
       }),
     });
+    // What happens outside the pane: a press there ends the work in it, and Tab may bring the focus to it.
+    document.addEventListener(
+      "pointerdown",
+      (event) => {
+        if (!(event.target instanceof Node && this.view.dom.contains(event.target)))
+          this.active = false;
+      },
+      true,
+    );
+    document.addEventListener(
+      "keydown",
+      (event) => {
+        if (event.key === "Tab") this.tabbed = performance.now();
+      },
+      true,
+    );
+  }
+
+  /**
+   * Takes a step of the document's history, with the cursor following to where the text changed.
+   * While typed text is on its way to the document the step waits for it, so that it steps back
+   * from what is on show.
+   */
+  private step(run: () => void): boolean {
+    if (this.pending) this.waiting.push(run);
+    else {
+      this.stepping = true;
+      try {
+        run();
+      } finally {
+        this.stepping = false;
+      }
+    }
+    return true;
   }
 
   get text() {
@@ -369,14 +640,26 @@ export class SourcePane {
     return this.view.hasFocus;
   }
 
-  /** Shows a text that came from the document: an edit on the canvas, undo, a file. True when it replaced another, and the marked lines with it. */
+  /** The line the cursor is on, from 1. */
+  get cursorLine() {
+    const { state } = this.view;
+    return state.doc.lineAt(state.selection.main.head).number;
+  }
+
+  /**
+   * Shows a text that came from the document: an edit on the canvas, a step of the history, a file.
+   * It is not typing, so the host does not hear of it. Only what differs is replaced: the cursor,
+   * the view and the marked lines stay around it. True when the text was another.
+   */
   setText(text: string): boolean {
     this.setType(this.host.type());
-    if (text === this.text) return false;
-    this.view.dispatch({
-      changes: { from: 0, to: this.view.state.doc.length, insert: text },
-      annotations: fromDocument.of(true),
-    });
+    // The document has what was typed: the steps that waited for it are taken, once this call is through.
+    this.pending = false;
+    const waiting = this.waiting.splice(0);
+    if (waiting.length) queueMicrotask(() => waiting.forEach((run) => this.step(run)));
+    const change = showText(this.view.state, text, this.stepping);
+    if (!change) return false;
+    this.view.dispatch(change);
     return true;
   }
 
@@ -417,12 +700,12 @@ export class SourcePane {
     );
   }
 
-  /** Marks the lines of the selected elements and brings the first into view, unless the user is typing here. */
+  /** Marks the lines of what is selected on the canvas and brings the first into view, unless the user works here. */
   setSelectedLines(lines: number[]) {
     this.view.dispatch({
       effects: [
         markLines.of(lines),
-        ...(lines.length && !this.focused && lines[0] <= this.view.state.doc.lines
+        ...(lines.length && !this.active && lines[0] >= 1 && lines[0] <= this.view.state.doc.lines
           ? [EditorView.scrollIntoView(this.view.state.doc.line(lines[0]).from, { y: "nearest" })]
           : []),
       ],
@@ -432,7 +715,10 @@ export class SourcePane {
 
   /** Wraps long lines at the edge of the pane, or lets them run on and scroll. */
   setWrap(on: boolean) {
-    this.view.dispatch({ effects: this.wrapping.reconfigure(on ? EditorView.lineWrapping : []) });
+    this.view.dispatch({
+      effects: this.wrapping.reconfigure(on ? [EditorView.lineWrapping, hangingIndent] : []),
+      annotations: fromDocument.of(true),
+    });
   }
 
   /** Puts the cursor on a line and the focus in the pane. */
@@ -444,6 +730,7 @@ export class SourcePane {
       effects: EditorView.scrollIntoView(line.from, { y: "center" }),
       annotations: fromDocument.of(true),
     });
+    this.active = true;
     this.view.focus();
   }
 
@@ -465,6 +752,7 @@ export class SourcePane {
       selection: EditorSelection.range(from + lead.length, from + lead.length + text.length),
       effects: EditorView.scrollIntoView(from + lead.length, { y: "center" }),
     });
+    this.active = true;
     this.view.focus();
   }
 }

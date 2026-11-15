@@ -11,8 +11,8 @@ import { typeInfo } from "./types.ts";
 
 /** What the status bar asks of the panels around it. */
 export interface StatusHost {
-  /** The Arrange menu, which the layout mode opens. */
-  arrange(): MenuEntry[];
+  /** The two layout modes, as a choice the layout mode opens. */
+  layout(): MenuEntry[];
   /** The zoom steps and fits. */
   zoom(): MenuEntry[];
   /** Shows where the problem is: the line of an error, or the elements that overlap. */
@@ -59,7 +59,7 @@ export class StatusBar {
       h("span", {}),
     );
     this.mode = h("button", { class: "status-button", type: "button" }, h("span", {}));
-    menuButton(this.mode, () => host.arrange(), { above: true });
+    menuButton(this.mode, () => host.layout(), { above: true });
     this.snap = h(
       "button",
       {
@@ -88,22 +88,21 @@ export class StatusBar {
       this.problem,
       this.selection,
       this.pointer,
-      this.mode,
-      this.snap,
+      h("div", { class: "modes" }, this.mode, this.snap),
       h(
         "div",
         { class: "zooms" },
         iconButton(
           "minus",
           { tip: "Zoom out", key: "−", side: "top" },
-          () => editor.view.zoomBy(0.8),
+          () => editor.view.zoomStep(-1),
           "status-button",
         ),
         this.zoom,
         iconButton(
           "plus",
           { tip: "Zoom in", key: "+", side: "top" },
-          () => editor.view.zoomBy(1.25),
+          () => editor.view.zoomStep(1),
           "status-button",
         ),
       ),
@@ -175,10 +174,10 @@ export class StatusBar {
       .join(", ");
     this.selection.hidden = !elements && !wires;
     const placed = !!doc.picture?.placed && doc.picture.diagram.nodes.size > 0;
-    this.mode.hidden = this.snap.hidden = !editor.editable;
+    this.mode.parentElement!.hidden = !editor.editable;
     this.mode.firstElementChild!.textContent = placed ? "Manual positions" : "Auto layout";
     this.mode.dataset.tip = placed
-      ? "Elements stand where the source places them (@x,y). Arrange has Auto layout."
+      ? "Elements stand where the source places them (@x,y). Click for Auto layout."
       : "No element is placed: the layout is automatic until one is moved.";
     this.mode.dataset.side = "top";
     this.snap.setAttribute("aria-pressed", String(editor.snapping));

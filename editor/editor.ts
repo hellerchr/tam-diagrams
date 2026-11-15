@@ -58,8 +58,9 @@ import {
   snapMove,
 } from "./guides.ts";
 import { parseUml } from "../src/index.ts";
-import type { Structure } from "../src/structure.ts";
+import type { Structure, StructureEdge } from "../src/structure.ts";
 import { classMembers, setClassMembers } from "../src/uml-class-edit.ts";
+import { moveMessage, moveParticipant } from "../src/uml-sequence-edit.ts";
 import { structureOf } from "./structures.ts";
 import { type DiagramType, typeInfo, typeOf, withUmlTitle } from "./types.ts";
 import type { View } from "./view.ts";
@@ -139,7 +140,14 @@ type Gesture =
       guides?: Guide[];
       result?: string;
     }
-  | { type: "frame"; start: Point; current: Point; kept: Part[] }
+  | {
+      type: "frame";
+      start: Point;
+      current: Point;
+      kept: Part[];
+      /** The container the frame was started in: a press without a drag selects it. */
+      inside?: Part;
+    }
   | {
       type: "connect";
       from: string;
@@ -207,6 +215,8 @@ export class Editor {
   private gesture: Gesture | undefined;
   /** The kind of join picked for new connections. */
   private picked: string | undefined;
+  /** The part just added that has no name of its own yet. */
+  private fresh: string | undefined;
   /** The part a piece dragged from the palette would join. */
   private pieceTarget: string | undefined;
   private hover: Part | undefined;
@@ -215,6 +225,8 @@ export class Editor {
   /** A new element shown before it is placed: under the pointer with a shape tool, or dragged from the palette. */
   private ghost: { kind: ElementKind; at: Point; target: string | null } | undefined;
   private space = false;
+  /** Where the pointer was at the last paste. */
+  private pasted: Point | undefined;
   /** What was copied last, and how often it was pasted. */
   private copied: { text: string; times: number } | undefined;
   /** Whether the pointer is on the canvas. */
@@ -239,6 +251,13 @@ export class Editor {
     canvas.addEventListener("pointerenter", () => (this.over = true));
     canvas.addEventListener("pointerleave", () => {
       this.over = false;
+      // What the pointer was over shows no longer, and its dots take no click.
+      if (!this.gesture) {
+        this.hover = undefined;
+        this.linkHost = undefined;
+        this.ghost = undefined;
+        this.view.invalidate();
+      }
       this.onPointer(undefined);
     });
     // Copy, cut and paste work on the selection unless a text field has the focus.
@@ -346,12 +365,15 @@ export class Editor {
   /** Applies a new source; false, with a notice, when it breaks a rule of the notation. */
   private change(source: string | undefined): boolean {
     if (source === undefined) {
+      const { problem } = this.doc;
       this.notify(
-        !this.editable
-          ? `${typeInfo(this.type).plural} are edited as text, in the source.`
-          : this.doc.problem
-            ? "Fix the source first: it does not parse."
-            : "The layout is not ready yet.",
+        problem
+          ? `Fix the error in the source first${problem.line ? ` (line ${problem.line})` : ""}.`
+          : this.structural
+            ? `This is not available for ${typeInfo(this.type).plural.toLowerCase()} yet.`
+            : !this.editable
+              ? `${typeInfo(this.type).plural} are edited as text, in the source.`
+              : "The layout is not ready yet.",
       );
       return false;
     }
@@ -382,6 +404,10 @@ export class Editor {
   private structEdit(make: (structure: Structure, source: string) => string): boolean {
     const { structure } = this;
     if (this.doc.problem || !structure) return this.change(undefined);
+    if (this.picture?.source !== this.doc.source) {
+      this.notify("The layout is not ready yet.");
+      return false;
+    }
     try {
       const next = make(structure, this.doc.source);
       parseUml(next);
@@ -398,9 +424,10 @@ export class Editor {
   /**
    * Adds a piece to a diagram with a structure, at a part: inside it when it is a group, else
    * joined to it as the piece joins (a step follows, a start leads) and in its group. Without `at`
-   * the one selected part is taken; with null the piece stands alone. Its name opens for typing.
+   * the one selected part is taken; with null the piece stands alone; `joined` joins it to the part
+   * whatever the piece says, as a connection drawn to the empty canvas asks. Its name opens for typing.
    */
-  addPiece(kind: string, at?: string | null) {
+  addPiece(kind: string, at?: string | null, lane?: string, joined = false) {
     const { picture, structure } = this,
       piece = structure?.pieces.find((item) => item.kind === kind);
     if (!structure || !piece || !picture) return;
@@ -408,13 +435,27 @@ export class Editor {
       chosen =
         at === null ? undefined : (at ?? (this.selectedElements.length === 1 ? only : undefined)),
       node = chosen ? picture.parts?.get(chosen) : undefined,
-      parent = node?.group ? node.id : (node?.parent ?? null);
+      fits = !!node && (!piece.joinsTo || piece.joinsTo.includes(node.kind)),
+      // A piece without a name of its own that joins a group stands at it, not in it: the end of
+      // a composite state.
+      beside = !!node?.group && !!piece.joins && !piece.named && fits,
+      // A piece joins only the kinds of part it has a join with.
+      joins =
+        !!node && (!node.group || beside) && !piece.group && (joined || (!!piece.joins && fits)),
+      // A note is for the part it is added at, and a participant stands beside the one it is
+      // added at: those take the part itself; the others its group, or the group it is.
+      parent =
+        node && (kind === "note" || this.type === "sequence")
+          ? node.id
+          : node?.group && !beside
+            ? node.id
+            : (node?.parent ?? lane ?? null);
     let made = "";
     const before = this.doc.source;
     const done = this.structEdit((edits, source) => {
       const added = edits.add(source, { kind, parent });
       made = added.id;
-      if (!made || !node || node.group || piece.group || !piece.joins) return added.source;
+      if (!made || !node || !joins) return added.source;
       return piece.joins === "before"
         ? edits.connect(added.source, made, node.id)
         : edits.connect(added.source, node.id, made);
@@ -427,8 +468,12 @@ export class Editor {
     }
     this.tool = "select";
     this.pieceTarget = undefined;
+    // The first name typed for it may become its id.
+    this.fresh = piece.named ? made : undefined;
     this.select([{ type: "element", id: made }]);
     void this.whenShown().then(() => {
+      // A piece that exists only as the end of a join may have come out under another id.
+      if (!this.picture?.parts?.has(made)) return this.select([]);
       this.reveal(made);
       if (piece.named) this.rename(made);
     });
@@ -445,20 +490,97 @@ export class Editor {
 
   /** A piece dropped on the canvas: at the part under it, or alone on the empty canvas. */
   dropPiece(kind: string, at: Point) {
-    const part = this.picture && partAt(this.picture, at, 0);
-    this.addPiece(kind, part?.type === "element" ? part.id : null);
+    this.addPiece(kind, this.targetAt(at) ?? null, this.laneAt(at));
+  }
+
+  /**
+   * The element a connection or a dropped piece is aimed at: the one under the point, and in a
+   * sequence diagram the participant whose lifeline runs there.
+   */
+  private targetAt(point: Point): string | undefined {
+    const { picture } = this;
+    if (!picture) return undefined;
+    const part = partAt(picture, point, 0);
+    if (part?.type === "element") return part.id;
+    if (this.type !== "sequence") return undefined;
+    for (const [id, node] of picture.parts ?? []) {
+      const box = node.group ? undefined : boxOf(picture, id);
+      if (box && point.x >= box.x && point.x <= box.x + box.width && point.y >= box.y) return id;
+    }
+    return undefined;
+  }
+
+  /**
+   * The lane of a swimlane diagram a point lies in. Lanes are drawn as lines, not shapes: the lane
+   * is the one whose parts lie nearest across the lanes.
+   */
+  private laneAt(point: Point): string | undefined {
+    const { picture } = this;
+    if (this.type !== "swimlane" || !picture?.parts) return undefined;
+    const lanes = [...picture.parts.values()].flatMap((lane) => {
+      if (!lane.group) return [];
+      const boxes = [...picture.parts!.values()].flatMap((node) =>
+        node.parent === lane.id ? (boxOf(picture, node.id) ?? []) : [],
+      );
+      return boxes.length ? [{ id: lane.id, box: around(boxes) }] : [];
+    });
+    if (!lanes.length) return undefined;
+    // Lanes lie side by side along the axis their middles differ most on.
+    const middles = lanes.map(({ box }) => ({
+        x: box.x + box.width / 2,
+        y: box.y + box.height / 2,
+      })),
+      spread = (axis: "x" | "y") =>
+        Math.max(...middles.map((middle) => middle[axis])) -
+        Math.min(...middles.map((middle) => middle[axis])),
+      axis = spread("x") >= spread("y") ? "x" : "y";
+    return lanes
+      .map((lane, index) => ({ id: lane.id, away: Math.abs(middles[index][axis] - point[axis]) }))
+      .toSorted((a, b) => a.away - b.away)[0].id;
+  }
+
+  /** Whether anything of the picture lies at a point: a shape or a text, also one that is no part. */
+  private drawnAt(point: Point): boolean {
+    const { picture } = this,
+      within = (box: Box) =>
+        point.x >= box.x &&
+        point.x <= box.x + box.width &&
+        point.y >= box.y &&
+        point.y <= box.y + box.height;
+    return (
+      !!picture &&
+      (picture.scene.shapes.some((shape) => shape.kind !== "region" && within(shape.box)) ||
+        picture.scene.texts.some((text) => within(text.box)))
+    );
   }
 
   /** Gives an element another name, in whichever notation the diagram is written. */
   relabel(id: string, label: string) {
-    if (this.structural) this.structEdit((edits, source) => edits.rename(source, id, label));
-    else this.edit((source) => setElement(source, id, { label }));
+    if (!this.structural) return void this.edit((source) => setElement(source, id, { label }));
+    const first = this.fresh === id;
+    this.fresh = undefined;
+    let named = id;
+    const done = this.structEdit((edits, source) => {
+      // A part just added takes its id from its first name where the syntax allows.
+      if (!first || !edits.retitle) return edits.rename(source, id, label);
+      const result = edits.retitle(source, id, label);
+      named = result.id || id;
+      return result.source;
+    });
+    if (done && named !== id && this.isSelected({ type: "element", id }))
+      this.select(
+        this.selection.map((part) =>
+          part.type === "element" && part.id === id ? { type: "element", id: named } : part,
+        ),
+      );
   }
 
   /** The label of a connection, and a way to set it; undefined for one that carries none. */
   wireLabel(id: string): { text: string; set: (text: string) => void } | undefined {
     if (this.structural) {
       const edge = this.picture?.joins?.get(id);
+      // A join whose text says what kind it is has no label to set.
+      if (edge?.fixedLabel) return undefined;
       return (
         edge && {
           text: edge.label ?? "",
@@ -494,13 +616,71 @@ export class Editor {
     return links.some((item) => item.kind === this.picked) ? this.picked : links[0]?.kind;
   }
 
-  /** Picks the kind of join for new connections; the one selected join becomes it too. */
+  /** Picks the kind of join new connections are drawn with. */
   setLink(kind: string) {
     this.picked = kind;
-    const [only] = this.selectedWires;
-    if (this.selection.length === 1 && only && this.linkKind(only) !== kind)
-      this.relink(only, kind);
     this.onState();
+  }
+
+  /** Whether the diagram's structure has one of the edits that not every type has. */
+  can(edit: "reverse" | "copy" | "moveInto" | "ungroup" | "reid"): boolean {
+    return !!this.structure?.[edit];
+  }
+
+  /** Swaps the ends of a join of a structure. */
+  reverseJoin(id: string) {
+    this.structEdit((edits, source) => {
+      const next = edits.reverse?.(source, id) ?? source;
+      if (next === source) throw new Error("This connection has only one way to run.");
+      return next;
+    });
+  }
+
+  /** Removes a group of a structure and keeps what it holds. */
+  ungroup(id: string) {
+    if (this.structEdit((edits, source) => edits.ungroup?.(source, id) ?? source)) this.select([]);
+  }
+
+  /** Gives a part of a structure another id, at every mention of it. */
+  renameId(id: string, next: string) {
+    const structure = this.structure;
+    if (!structure?.reid) return;
+    let named = "";
+    const done = this.structEdit((edits, source) => {
+      const result = edits.reid!(source, id, next.trim());
+      if (result === source) throw new Error(`\`${next.trim()}\` is taken, or is no id.`);
+      // The part is the one that was not there before.
+      const before = new Set(edits.read(source).nodes.map((node) => node.id));
+      named = edits.read(result).nodes.find((node) => !before.has(node.id))?.id ?? "";
+      return result;
+    });
+    if (done && named) this.select([{ type: "element", id: named }]);
+  }
+
+  /** Runs an edit of a structure's source that only its type has: a class's stereotype, a state's description. */
+  amend(make: (source: string) => string) {
+    this.structEdit((_, source) => make(source));
+  }
+
+  /** Whether a part of a structure carries a name to type: a start or a fork does not. */
+  nameable(id: string): boolean {
+    const kind = this.picture?.parts?.get(id)?.kind,
+      piece = this.structure?.pieces.find((item) => item.kind === kind);
+    return !this.structural || !piece || !!piece.named;
+  }
+
+  /**
+   * Moves the selected message of a sequence diagram a step earlier or later, or the selected
+   * participant a column to the left or right.
+   */
+  shift(delta: -1 | 1) {
+    if (this.type !== "sequence" || this.selection.length !== 1) return;
+    const [part] = this.selection;
+    this.structEdit((_, source) =>
+      part.type === "wire"
+        ? moveMessage(source, part.id, delta)
+        : moveParticipant(source, part.id, delta),
+    );
   }
 
   /** The kind of a join of a structure, one of its links. */
@@ -593,6 +773,12 @@ export class Editor {
 
   /** Whether elements may stand inside another, or at the top with null. */
   allowsMove(ids: string[], parent: string | null) {
+    if (this.structure)
+      return (
+        !!this.structure.moveInto &&
+        !ids.includes(parent ?? "") &&
+        (parent === null || !!this.picture?.parts?.get(parent)?.group)
+      );
     return (
       !ids.includes(parent ?? "") &&
       this.allows((source) => {
@@ -605,12 +791,25 @@ export class Editor {
 
   /** Puts elements inside another, or at the top with null: below what stands there, so nothing lies on anything. */
   moveElements(ids: string[], parent: string | null) {
+    if (this.structural) {
+      const done = this.structEdit((edits, source) => {
+        const moved = ids.reduce((next, id) => edits.moveInto?.(next, id, parent) ?? next, source);
+        if (moved === source) throw new Error("This part cannot stand there.");
+        return moved;
+      });
+      if (done) this.select(ids.map((id) => ({ type: "element", id })));
+      return;
+    }
     const base = this.doc.placedSource();
     if (base === undefined) return this.change(undefined);
     try {
       const picture = this.doc.layout(base),
-        { outer } = this.movers(picture.diagram, ids),
+        // What stands in the target already stays where it is.
+        outer = this.movers(picture.diagram, ids).outer.filter(
+          (id) => holder(picture.diagram, id) !== parent,
+        ),
         into = parent ? boxOf(picture, parent) : picture.scene.bounds;
+      if (!outer.length) return;
       let source = base,
         x = (into?.x ?? 0) + 2 * GRID;
       for (const id of outer) {
@@ -730,11 +929,17 @@ export class Editor {
     if (base === undefined) return void this.change(undefined);
     const box = boxOf(this.doc.layout(base), id);
     if (!box) return;
-    const gap = 3 * GRID,
+    // Without a place of its own a copy stands across the diagram's direction: beside in one that
+    // runs down, below in one that runs across. The other side needs a place.
+    const direction = this.picture?.diagram.direction ?? "TB",
+      usual = direction === "TB" || direction === "BT" ? "beside" : "below",
+      gap = 3 * GRID,
       at =
-        side === "beside"
-          ? { x: box.x + box.width + gap, y: box.y }
-          : { x: box.x, y: box.y + box.height + gap };
+        side === usual
+          ? undefined
+          : side === "beside"
+            ? { x: box.x + box.width + gap, y: box.y }
+            : { x: box.x, y: box.y + box.height + gap };
     this.change(place(base, new Map([[`${id}#2`, at]])));
   }
 
@@ -755,9 +960,47 @@ export class Editor {
   duplicateSelection() {
     const ids = this.selectedElements;
     if (!ids.length) return;
+    if (this.structural) {
+      // The layout places the copies: each stands for itself, without the joins of its original.
+      const made: string[] = [];
+      const done = this.structEdit((edits, source) => {
+        if (!edits.copy) throw new Error("Parts of this diagram are not copied yet.");
+        let next = source;
+        for (const id of ids) {
+          const copy = edits.copy(next, id);
+          next = copy.source;
+          if (copy.id) made.push(copy.id);
+        }
+        if (!made.length) throw new Error("This part cannot be copied.");
+        return next;
+      });
+      if (done) this.select(made.map((id) => ({ type: "element", id })));
+      return;
+    }
+    // Beside the originals, a gap away, further down while something stands there.
+    const { picture } = this,
+      boxes = picture?.placed ? ids.flatMap((id) => boxesOf(picture, id)) : [],
+      offset = { x: 2 * GRID, y: 2 * GRID };
+    if (picture && boxes.length) {
+      const all = around(boxes),
+        taken = elementShapes(picture)
+          .filter(({ shape }) => !shape.container)
+          .map(({ shape }) => shape.box);
+      offset.x = snap(all.width + 2 * GRID, false);
+      offset.y = 0;
+      const clear = () =>
+        taken.every(
+          (box) =>
+            all.x + offset.x >= box.x + box.width + GRID ||
+            box.x >= all.x + offset.x + all.width + GRID ||
+            all.y + offset.y >= box.y + box.height + GRID ||
+            box.y >= all.y + offset.y + all.height + GRID,
+        );
+      for (let tries = 0; tries < 40 && !clear(); tries++) offset.y += 2 * GRID;
+    }
     let made: string[] = [];
     const done = this.edit((source) => {
-      const result = duplicate(source, ids, { x: 2 * GRID, y: 2 * GRID });
+      const result = duplicate(source, ids, offset);
       made = result.ids;
       return result.source;
     });
@@ -787,22 +1030,56 @@ export class Editor {
     const placed = !!this.picture?.placed,
       base = placed ? this.doc.placedSource() : this.doc.source;
     if (base === undefined) return void this.change(undefined);
-    // Each paste of the same text stands a step further, so copies do not hide each other.
     if (this.copied?.text !== fragment) this.copied = { text: fragment, times: 0 };
-    const step = ++this.copied.times * 2 * GRID,
-      places = [...parseTam(fragment).nodes.values()].flatMap((node) => (node.at ? [node.at] : []));
+    this.copied.times++;
+    const picture = placed ? this.doc.layout(base) : undefined,
+      pasted = parseTam(fragment),
+      places = [...pasted.nodes.values()].flatMap((node) => (node.at ? [node.at] : []));
     const origin = places.length
       ? { x: Math.min(...places.map((at) => at.x)), y: Math.min(...places.map((at) => at.y)) }
       : this.pointer;
-    const at = this.over
+    // Under the pointer when it has moved since the last paste; else beside the copies before, so
+    // that no paste lands on another.
+    const aimed =
+      this.over && (this.pasted?.x !== this.pointer.x || this.pasted?.y !== this.pointer.y);
+    this.pasted = { ...this.pointer };
+    let at = aimed
       ? { x: snap(this.pointer.x, false), y: snap(this.pointer.y, false) }
-      : { x: origin.x + step, y: origin.y + step };
+      : { x: origin.x + 2 * GRID, y: origin.y + 2 * GRID };
+    if (picture && places.length) {
+      const size = {
+        width: Math.max(...places.map((item) => item.x + (item.width ?? 96))) - origin.x,
+        height: Math.max(...places.map((item) => item.y + (item.height ?? 40))) - origin.y,
+      };
+      const taken = elementShapes(picture)
+        .filter(({ shape }) => !shape.container)
+        .map(({ shape }) => shape.box);
+      const free = (spot: Point) =>
+        taken.every(
+          (box) =>
+            spot.x >= box.x + box.width + GRID ||
+            box.x >= spot.x + size.width + GRID ||
+            spot.y >= box.y + box.height + GRID ||
+            box.y >= spot.y + size.height + GRID,
+        );
+      for (let tries = 0; tries < 40 && !free(at); tries++)
+        at = { x: at.x + 2 * GRID, y: at.y + 2 * GRID };
+    }
+    // Into the container the paste lands in, as a shape dropped there would go.
+    const into = aimed && picture ? dropTarget(picture, this.pointer, new Set(), false) : null;
     let made: string[] = [];
     const done = this.change(
       (() => {
         const result = paste(base, fragment, { at, placed });
         made = result.ids;
-        return result.source;
+        if (!into) return result.source;
+        try {
+          const nested = moveInto(result.source, made, into);
+          parseTam(nested);
+          return nested;
+        } catch {
+          return result.source;
+        }
       })(),
     );
     if (done) this.select(made.map((id) => ({ type: "element", id })));
@@ -843,9 +1120,23 @@ export class Editor {
   /** Takes the selected elements out of the element that holds them, into the one around it. */
   takeOut() {
     const { picture } = this,
-      inside = this.selectionHolder;
+      inside = this.selectionHolder,
+      base = this.doc.placedSource();
     if (!picture || !inside) return;
-    this.moveElements(this.selectedElements, holder(picture.diagram, inside));
+    if (base === undefined) return void this.change(undefined);
+    const ids = this.selectedElements,
+      outer = holder(picture.diagram, inside);
+    this.edit(() => {
+      const moved = moveInto(base, ids, outer),
+        diagram = parseTam(moved),
+        box = diagram.nodes.get(inside);
+      // A box that holds nothing any more and is joined to nothing was only there to hold them.
+      const idle =
+        !!box &&
+        !box.children.length &&
+        !diagram.edges.some((edge) => edge.source === inside || edge.target === inside);
+      return idle ? remove(moved, [inside]) : moved;
+    });
   }
 
   /** Resolves when the picture of the committed source is on show. */
@@ -1055,13 +1346,21 @@ export class Editor {
     if (base === undefined) return this.change(undefined);
     const parent = picture ? dropTarget(picture, at, new Set(), true) : null;
     const size = kind === "group" ? sizeOf(kind) : {};
+    // In an element that held nothing yet, the new one stands below where its title will be, so
+    // that the element grows down and right from where it stood.
+    const host = parent && picture ? picture.diagram.nodes.get(parent) : undefined,
+      box = parent && picture ? boxOf(picture, parent) : undefined,
+      spot =
+        host && box && !host.children.length
+          ? { x: snap(box.x + 14, false), y: snap(box.y + 44, false) }
+          : dropPlace(kind, at, free);
     let made = "";
     this.ghost = undefined;
     const add = (into: string | null) => {
       const result = addElement(base, {
         kind,
         label: NAMES[kind] || undefined,
-        at: { ...dropPlace(kind, at, free), ...size },
+        at: { ...spot, ...size },
         parent: into,
       });
       made = result.id;
@@ -1114,6 +1413,8 @@ export class Editor {
       });
       return;
     }
+    // A start, an end, a fork: parts that carry no name open no field.
+    if (!this.nameable(id)) return;
     // The element may be on its way: its picture comes after the layout.
     const box = boxOf(picture, id) ?? {
       x: this.pointer.x - 48,
@@ -1137,6 +1438,8 @@ export class Editor {
       screen = view.pointOf(event),
       point = view.toScene(screen);
     this.pointer = point;
+    // A text selection left in a panel would turn the next drag into a drag of that text.
+    window.getSelection()?.removeAllRanges();
     view.canvas.setPointerCapture(event.pointerId);
     if (event.button === 2) {
       // A right click selects what it is on, unless that is selected already, and asks for the menu.
@@ -1200,6 +1503,20 @@ export class Editor {
       const kept = event.shiftKey ? this.selection : [];
       this.select(kept);
       this.gesture = { type: "frame", start: point, current: point, kept };
+      return;
+    }
+    // A drag that starts inside a container that is not selected frames its parts; its title, or
+    // the container once selected, moves it.
+    const held = part.type === "element" && picture ? boxOf(picture, part.id) : undefined;
+    if (
+      held &&
+      this.editable &&
+      !event.shiftKey &&
+      !this.isSelected(part) &&
+      picture?.diagram.nodes.get(part.id)?.children.length &&
+      point.y > held.y + 36
+    ) {
+      this.gesture = { type: "frame", start: point, current: point, kept: [], inside: part };
       return;
     }
     if (event.shiftKey)
@@ -1282,8 +1599,10 @@ export class Editor {
       }
       case "connect": {
         gesture.current = point;
-        const part = this.picture && partAt(this.picture, point, 0);
-        gesture.target = part?.type === "element" && part.id !== gesture.from ? part.id : undefined;
+        // A part of a structure may join itself: a self message, a transition back to its state.
+        const target = this.targetAt(point);
+        gesture.target =
+          target && (target !== gesture.from || this.structural) ? target : undefined;
         view.invalidate();
         return;
       }
@@ -1364,11 +1683,14 @@ export class Editor {
       box && !free
         ? snapMove({ ...box, x: box.x + dx, y: box.y + dy }, others, ALIGN / this.view.zoom)
         : undefined;
-    dx = snapped?.x ? Math.round((dx + snapped.dx) * 2) / 2 : snap(lead.x + dx, free) - lead.x;
-    dy = snapped?.y ? Math.round((dy + snapped.dy) * 2) / 2 : snap(lead.y + dy, free) - lead.y;
+    // Whole steps, so that the source holds whole numbers.
+    dx = snapped?.x ? Math.round(dx + snapped.dx) : snap(lead.x + dx, free) - lead.x;
+    dy = snapped?.y ? Math.round(dy + snapped.dy) : snap(lead.y + dy, free) - lead.y;
     if (box && snapped) gesture.guides = guidesAt({ ...box, x: box.x + dx, y: box.y + dy }, others);
     const moved = place(picture.source, shifted(places, dx, dy));
-    const target = dropTarget(picture, point, all, false);
+    // What is moved goes where its middle is: a part leaves its container when most of it has.
+    const middle = box ? { x: box.x + dx + box.width / 2, y: box.y + dy + box.height / 2 } : point;
+    const target = dropTarget(picture, middle, all, false);
     gesture.target = undefined;
     let result = moved;
     if (outer.some((id) => holder(picture.diagram, id) !== target)) {
@@ -1468,15 +1790,28 @@ export class Editor {
             this.select(gesture.copies.map((id) => ({ type: "element", id })));
         } else if (gesture.type === "resize" || gesture.base) this.doc.cancel();
         break;
-      case "attach":
+      case "attach": {
         if (gesture.target) this.setWire(gesture.id, { [gesture.end]: gesture.target });
+        else {
+          // Dropped on an element the connection cannot end at: the notation's reason is said.
+          const part = this.picture && partAt(this.picture, gesture.current, 0),
+            why =
+              part?.type === "element"
+                ? this.refusal((source) =>
+                    setConnection(source, gesture.id, { [gesture.end]: part.id }),
+                  )
+                : undefined;
+          if (why) this.notify(why);
+        }
         break;
+      }
       case "connect": {
         const screen = view.pointOf(event),
           clicked =
             gesture.dot &&
             Math.hypot(screen.x - gesture.dot.screen.x, screen.y - gesture.dot.screen.y) < SLOP;
-        if (clicked) this.addBeside(gesture.from, gesture.dot!.side);
+        // A dot is dragged: a click on one only selects its element, so a slip adds nothing.
+        if (clicked) this.select([{ type: "element", id: gesture.from }]);
         else if (gesture.target) this.connect(gesture.from, gesture.target);
         else this.connectNew(gesture.from, gesture.current);
         break;
@@ -1485,6 +1820,14 @@ export class Editor {
         this.create(gesture.kind, view.toScene(view.pointOf(event)), gesture.free, gesture.keep);
         break;
       case "frame":
+        // A press without a drag inside a container selects the container.
+        if (
+          gesture.inside &&
+          Math.hypot(gesture.current.x - gesture.start.x, gesture.current.y - gesture.start.y) *
+            view.zoom <
+            SLOP
+        )
+          this.select([gesture.inside]);
         // The selection the frame made shows in the panels once it is done.
         this.onState();
         break;
@@ -1499,14 +1842,51 @@ export class Editor {
   /** Connects two elements with the word that fits them and selects the connection. */
   connect(from: string, to: string) {
     if (this.structure) {
-      // The join that is new after the edit is the one to select.
-      const before = new Set(this.picture?.joins?.keys());
-      if (!this.structEdit((edits, source) => edits.connect(source, from, to, this.link))) return;
-      const made = this.structure
-        .read(this.doc.source)
-        .edges.findLast((edge) => !before.has(edge.id));
+      // Ids of joins are often their position. A structure that says which join it wrote is asked;
+      // else the new one is told by what it says, the last of its like. In a diagram whose joins
+      // are ordered, the new one follows the selected one.
+      const { structure } = this,
+        says = (edge: StructureEdge) => `${edge.source}\u0000${edge.target}\u0000${edge.kind}`,
+        count = new Map<string, number>(),
+        [chosen] = this.selectedWires,
+        after = this.selection.length === 1 ? chosen : undefined;
+      for (const edge of this.picture?.joins?.values() ?? [])
+        count.set(says(edge), (count.get(says(edge)) ?? 0) + 1);
+      let written: string | undefined;
+      const done = this.structEdit((edits, source) => {
+        if (!edits.join) return edits.connect(source, from, to, this.link);
+        const result = edits.join(source, from, to, this.link, after);
+        written = result.edge;
+        return result.source;
+      });
+      if (!done) return;
+      const edges = structure.read(this.doc.source).edges,
+        made =
+          written !== undefined
+            ? edges.find((edge) => edge.id === written)
+            : edges.findLast(
+                (edge) =>
+                  edges.filter((other) => says(other) === says(edge)).length >
+                  (count.get(says(edge)) ?? 0),
+              );
       this.tool = "select";
-      if (made) this.select([{ type: "wire", id: made.id }]);
+      if (!made)
+        return void this.notify(
+          this.doc.picture?.joins &&
+            [...this.doc.picture.joins.values()].some(
+              (edge) => edge.source === from && edge.target === to,
+            )
+            ? "These two are joined that way already."
+            : "These two cannot be joined that way.",
+        );
+      this.select([{ type: "wire", id: made.id }]);
+      // A message says something: its text opens for typing.
+      if (this.type === "sequence")
+        void this.whenShown().then(() => {
+          const wire = this.picture?.scene.wires.find((item) => item.edge === made.id),
+            middle = wire?.points[Math.floor(wire.points.length / 2)];
+          if (middle) this.rename(made.id, true, middle);
+        });
       return;
     }
     if (!this.edit((source) => connect(source, from, to))) return;
@@ -1600,8 +1980,8 @@ export class Editor {
   /** A connection dropped on the empty canvas ends at a new agent there. */
   private connectNew(from: string, at: Point) {
     if (this.structure) {
-      if (this.picture && !partAt(this.picture, at, 0))
-        this.addPiece(this.structure.pieces[0].kind, from);
+      // Only on the empty canvas: a note or a frame under the pointer is no place for a new part.
+      if (!this.drawnAt(at)) this.addPiece(this.structure.pieces[0].kind, from, undefined, true);
       return;
     }
     const { picture } = this,
@@ -1651,8 +2031,9 @@ export class Editor {
     if (this.tool !== "select" || (!this.editable && !this.structural)) return;
     const part = picture && partAt(picture, point, 6 / this.view.zoom);
     if (!part) {
-      if (this.structure) this.addPiece(this.structure.pieces[0].kind, null);
-      else this.create("agent", point, event.altKey);
+      if (!this.structure) this.create("agent", point, event.altKey);
+      else if (!this.drawnAt(point))
+        this.addPiece(this.structure.pieces[0].kind, null, this.laneAt(point));
     } else if (part.type === "element") this.rename(part.id);
     else this.rename(part.id, true, point);
   }
@@ -1707,14 +2088,15 @@ export class Editor {
         if (this.selection.length === 1 && only.type === "element") (done(), this.rename(only.id));
         return;
       }
+      // In a sequence diagram the arrows move a message in time and a participant in its row.
       case "ArrowLeft":
-        return (done(), this.nudge(-step, 0));
+        return (done(), this.type === "sequence" ? this.shift(-1) : this.nudge(-step, 0));
       case "ArrowRight":
-        return (done(), this.nudge(step, 0));
+        return (done(), this.type === "sequence" ? this.shift(1) : this.nudge(step, 0));
       case "ArrowUp":
-        return (done(), this.nudge(0, -step));
+        return (done(), this.type === "sequence" ? this.shift(-1) : this.nudge(0, -step));
       case "ArrowDown":
-        return (done(), this.nudge(0, step));
+        return (done(), this.type === "sequence" ? this.shift(1) : this.nudge(0, step));
       case "v":
         return this.setTool("select");
       case "h":

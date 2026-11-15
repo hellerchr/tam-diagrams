@@ -6,6 +6,8 @@
 
 import { h, icon, iconButton } from "./dom.ts";
 import type { Editor, TreeItem } from "./editor.ts";
+import type { IconName } from "./icons.ts";
+import { pieceIcon } from "./structures.ts";
 import { kindName, typeInfo } from "./types.ts";
 
 /** An element of the tree with everything inside it, as ids. */
@@ -103,8 +105,11 @@ export class Outline {
       item.label.toLowerCase().includes(words) ||
       item.id.toLowerCase().includes(words) ||
       item.kind.includes(words) ||
+      this.look(item).name.toLowerCase().includes(words) ||
+      this.look(item).kind.toLowerCase().includes(words) ||
       item.children.some(matches);
-    const key = JSON.stringify([items, [...this.folded], words, editor.type]);
+    const kinds = [...(editor.doc.picture?.parts?.values() ?? [])].map((part) => part.kind);
+    const key = JSON.stringify([items, kinds, [...this.folded], words, editor.type]);
     if (key !== this.shown) {
       this.shown = key;
       this.rows.clear();
@@ -136,6 +141,32 @@ export class Outline {
     }
   }
 
+  /**
+   * How a row shows its element: its drawing, its name, and the name of its kind. A part of a
+   * diagram with a structure shows as the piece it is; one without a name of its own, as a start
+   * or an end node, goes by the name of its kind.
+   */
+  private look(item: TreeItem): { icon: IconName; name: string; kind: string } {
+    const { editor } = this,
+      part = editor.doc.picture?.parts?.get(item.id),
+      label = (part?.label ?? item.label).replace(/<br\s*\/?>/gi, " ").trim();
+    if (!part)
+      return {
+        icon: item.kind,
+        name: label || item.id.replace(/#.*/, ""),
+        kind: kindName(item.kind),
+      };
+    const kind =
+      editor.structure?.pieces.find((piece) => piece.kind === part.kind)?.name ??
+      kindName(part.kind);
+    // An id the library made up (`root#initial`) is no name to read.
+    return {
+      icon: pieceIcon(part.kind),
+      name: label || (item.id.includes("#") ? kind : item.id),
+      kind,
+    };
+  }
+
   /** The row of an element, and below it the rows of what it holds while it is open. */
   private row(
     item: TreeItem,
@@ -155,6 +186,7 @@ export class Outline {
         else this.folded.add(id);
       this.update();
     };
+    const look = this.look(item);
     const twist = h(
       "span",
       parent
@@ -184,16 +216,12 @@ export class Outline {
         draggable: "true",
         ...(parent ? { "aria-expanded": String(!folded) } : {}),
         style: `padding-left:${4 + depth * 14}px`,
-        "data-tip": `${kindName(item.kind)} ${item.id}`,
+        "data-tip": item.id.includes("#") ? look.kind : `${look.kind} ${item.id}`,
         "data-side": "right",
       },
       twist,
-      icon(item.kind),
-      h(
-        "span",
-        { class: "name" },
-        item.label.replace(/<br\s*\/?>/gi, " ") || item.id.replace(/#.*/, ""),
-      ),
+      icon(look.icon),
+      h("span", { class: "name" }, look.name),
       parent && folded && h("span", { class: "count" }, String(within(item).length - 1)),
     );
     this.rows.set(item.id, line);

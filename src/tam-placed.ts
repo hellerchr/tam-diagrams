@@ -4,7 +4,7 @@
  * like a layout by ELK.
  */
 
-import { type Box, centerOf, type Point } from "./scene.ts";
+import { type Box, centerOf, grow, inside, overlaps, type Point } from "./scene.ts";
 import type { TamEdge, TamNode } from "./tam.ts";
 import { type Measure, SMALL } from "./text.ts";
 import {
@@ -51,6 +51,9 @@ const ROW = 720;
 /** An interface's line reaches this far from its element; each further one on the side reaches STEP less far or further. */
 const STUB = 30,
   STEP = 18;
+
+/** An interface's circle and name keep this far from other elements and from their container's border. */
+const CLEAR = 4;
 
 /** Three dots at the end of a row stand this far from the last element. */
 const DOTS = 20;
@@ -202,17 +205,17 @@ export function placeElements(prepared: TamGraph, measure: Measure): PlacedEleme
       x = box.x + box.width + NODE_SPACING;
       tallest = Math.max(tallest, box.height);
     }
-    taken.push(...marks(children));
+    taken.push(...marks(children, parent));
     return taken.length ? union(taken) : { ...free, width: 0, height: 0 };
   };
 
-  /** The dots and interfaces among `ids` (and in their rows), placed by the elements they belong to. */
-  const marks = (ids: string[]): Box[] => {
+  /** The dots and interfaces among `ids` (and in their rows), parts of `parent`, placed by the elements they belong to. */
+  const marks = (ids: string[], parent: string | null): Box[] => {
     const taken: Box[] = [];
     const lollipops = new Map<string, TamEdge[]>();
     // A row takes the room of what stands in it, so dots beside a row find it.
     for (const id of ids.filter(isRow)) {
-      taken.push(...marks(node(id).children));
+      taken.push(...marks(node(id).children, parent));
       const inside = node(id).children.flatMap((child) => boxes.get(child) ?? []);
       if (inside.length) boxes.set(id, union(inside));
     }
@@ -244,45 +247,77 @@ export function placeElements(prepared: TamGraph, measure: Measure): PlacedEleme
         taken.push({ x: spot.center.x - 8, y: spot.center.y - 8, width: 16, height: 16 });
       }
     }
-    // Interfaces leave their element on the side the diagram runs toward, each on a line of its own.
-    const side: Side = { TB: "bottom", BT: "top", LR: "right", RL: "left" }[
+    // Interfaces leave their element on the side the diagram runs toward, each on a line of its own;
+    // on another side where an element stands in the way there, or the container's room ends.
+    const flow: Side = { TB: "bottom", BT: "top", LR: "right", RL: "left" }[
       diagram.direction
     ] as Side;
-    const out = side === "bottom" || side === "right" ? 1 : -1;
+    const sides: Side[] = [
+      flow,
+      ...(lies(flow) ? (["right", "left"] as Side[]) : (["bottom", "top"] as Side[])),
+      { bottom: "top", top: "bottom", right: "left", left: "right" }[flow] as Side,
+    ];
+    const given = parent ? node(parent).at : undefined,
+      room =
+        given?.width !== undefined && given.height !== undefined
+          ? { x: given.x, y: given.y, width: given.width, height: given.height }
+          : undefined;
     for (const [owner, edges] of lollipops) {
       const box = boxes.get(owner)!;
-      edges.forEach((edge, index) => {
-        const share = (index + 1) / (edges.length + 1),
-          name = node(edge.target).label,
-          width = name ? Math.ceil(measure(name, SMALL, 400)) : 0;
-        let from: Point, center: Point, room: Box | undefined;
-        if (lies(side)) {
-          // Names stand right of the circles: the lines get shorter to the right, so no name meets a line.
-          from = sidePoint(box, side, box.x + box.width * share);
-          center = { x: from.x, y: from.y + out * (STUB + (edges.length - 1 - index) * STEP) };
-          room = { x: center.x + CHANNEL / 2 + MARKER_GAP, y: center.y - 8, width, height: 16 };
-        } else {
-          from = sidePoint(box, side, box.y + box.height * share);
-          center = { x: from.x + out * (STUB + (index % 2) * (width / 2 + STEP)), y: from.y };
-          room = {
-            x: center.x - width / 2,
-            y: center.y - CHANNEL / 2 - MARKER_GAP - 16,
-            width,
-            height: 16,
+      /** The interfaces of the element on one of its sides: each one's line, circle and the room for its name. */
+      const on = (side: Side) =>
+        edges.map((edge, index) => {
+          const out = side === "bottom" || side === "right" ? 1 : -1,
+            share = (index + 1) / (edges.length + 1),
+            name = node(edge.target).label,
+            width = name ? Math.ceil(measure(name, SMALL, 400)) : 0;
+          let from: Point, center: Point, label: Box;
+          if (lies(side)) {
+            // Names stand right of the circles: the lines get shorter to the right, so no name meets a line.
+            from = sidePoint(box, side, box.x + box.width * share);
+            center = { x: from.x, y: from.y + out * (STUB + (edges.length - 1 - index) * STEP) };
+            label = { x: center.x + CHANNEL / 2 + MARKER_GAP, y: center.y - 8, width, height: 16 };
+          } else {
+            from = sidePoint(box, side, box.y + box.height * share);
+            center = { x: from.x + out * (STUB + (index % 2) * (width / 2 + STEP)), y: from.y };
+            label = {
+              x: center.x - width / 2,
+              y: center.y - CHANNEL / 2 - MARKER_GAP - 16,
+              width,
+              height: 16,
+            };
+          }
+          const circle = {
+            x: center.x - CHANNEL / 2,
+            y: center.y - CHANNEL / 2,
+            width: CHANNEL,
+            height: CHANNEL,
           };
-        }
-        const circle = {
-          x: center.x - CHANNEL / 2,
-          y: center.y - CHANNEL / 2,
-          width: CHANNEL,
-          height: CHANNEL,
-        };
+          return { edge, from, center, circle, label, name };
+        });
+      /** Whether the interfaces on a side stand clear of every other element and inside the container's room. */
+      const free = (side: Side) =>
+        on(side).every(({ circle, label, name }) =>
+          [circle, ...(name ? [label] : [])].every(
+            (item) =>
+              (!room || inside(item, room, -CLEAR)) &&
+              ![...boxes].some(
+                ([id, other]) =>
+                  id !== owner &&
+                  !isRow(id) &&
+                  !inside(box, other) &&
+                  overlaps(grow(item, CLEAR), other),
+              ),
+          ),
+        );
+      const side = sides.find(free) ?? flow;
+      for (const { edge, from, center, circle, label, name } of on(side)) {
         boxes.set(edge.target, circle);
         stubs.set(edge.id, [from, center]);
         upright.set(edge.target, lies(side));
-        if (name) labels.set(edge.target, [room]);
-        taken.push(circle, ...(name ? [room] : []));
-      });
+        if (name) labels.set(edge.target, [label]);
+        taken.push(circle, ...(name ? [label] : []));
+      }
     }
     return taken;
   };

@@ -31,10 +31,30 @@ export interface PopupOptions {
   above?: boolean;
   /** Lines up with the right edge of the control instead of its left. */
   right?: boolean;
+  /** Starts with the focus on the first row, as a menu opened by a key does. */
+  first?: boolean;
 }
 
 /** Closes the menu that is open. */
 let closeOpen: () => void = () => {};
+
+/** Whether a menu is open. */
+export const menuOpen = () => !!document.querySelector(".menu");
+
+/** Closes the menu that is open, if one is. */
+export const closeMenu = () => closeOpen();
+
+/**
+ * Why a row is not to be picked: its own reason, or for a submenu in which every row is off the
+ * reason they share (the first, when they differ). Undefined for a row that is on.
+ */
+export function refusal(row: MenuItem): string | boolean | undefined {
+  if (row.off || !row.items) return row.off || undefined;
+  const rows = row.items.filter((item): item is MenuItem => !!item && item !== "line"),
+    reasons = rows.map(refusal);
+  if (!reasons.every(Boolean)) return undefined;
+  return reasons.find((reason) => typeof reason === "string") ?? true;
+}
 
 /** The rows worth showing: no empty ones, and no line at an end or after another. */
 function tidy(entries: MenuEntry[]): (MenuItem | "line")[] {
@@ -98,6 +118,7 @@ export function popup(
         menu.append(h("hr"));
         continue;
       }
+      const off = refusal(row);
       const control = h(
         "button",
         {
@@ -107,7 +128,7 @@ export function popup(
           "aria-checked": row.checked === undefined ? undefined : String(row.checked),
           "aria-haspopup": row.items ? "menu" : undefined,
           "aria-expanded": row.items ? "false" : undefined,
-          "data-tip": typeof row.off === "string" ? row.off : undefined,
+          "data-tip": typeof off === "string" ? off : undefined,
           "data-side": "right",
         },
         ticks && h("span", { class: "tick" }, row.checked ? icon("check") : null),
@@ -115,9 +136,9 @@ export function popup(
         row.key && h("kbd", {}, row.key),
         row.items && icon("chevron-right"),
       );
-      setOff(control, row.off);
+      setOff(control, off);
       const enter = () => {
-        if (!row.items) return closeFrom(level + 1);
+        if (!row.items || off) return closeFrom(level + 1);
         if (control.getAttribute("aria-expanded") === "true") return;
         build(level + 1, row.items, (sub) => {
           // Beside its row: to the right where there is room, else to the left.
@@ -142,6 +163,7 @@ export function popup(
         );
       });
       control.addEventListener("click", () => {
+        if (isOff(control)) return;
         if (row.items) return (enter(), rowsOf(open[level + 1])[0]?.focus());
         close();
         row.run?.();
@@ -151,6 +173,12 @@ export function popup(
     document.body.append(menu);
     open[level] = menu;
     place(menu);
+    // A name too long for its row is said whole by its tooltip.
+    for (const name of menu.querySelectorAll<HTMLElement>(":scope > button > .name")) {
+      const row = name.parentElement!;
+      if (name.scrollWidth > name.clientWidth && !row.dataset.tip)
+        row.dataset.tip = name.textContent ?? "";
+    }
     return menu;
   };
   const key = (event: KeyboardEvent) => {
@@ -194,6 +222,24 @@ export function popup(
         } else options.step?.(-1);
         return;
     }
+    // A letter goes to the next row whose name starts with it.
+    if (
+      event.key.length !== 1 ||
+      event.key === " " ||
+      event.ctrlKey ||
+      event.metaKey ||
+      event.altKey
+    )
+      return;
+    const letter = event.key.toLowerCase(),
+      all = [...open[level].querySelectorAll<HTMLElement>(":scope > button")],
+      from = all.indexOf(focused as HTMLElement),
+      next = [...all.slice(from + 1), ...all.slice(0, from + 1)].find(
+        (row) =>
+          !isOff(row) &&
+          row.querySelector(".name")?.textContent?.trim().toLowerCase().startsWith(letter),
+      );
+    if (next) go(next);
   };
   const menu = build(0, entries, (menu) => {
     const { width, height } = menu.getBoundingClientRect();
@@ -208,6 +254,7 @@ export function popup(
     menu.style.top = `${Math.max(4, Math.min(y, window.innerHeight - height - 4))}px`;
   });
   menu.focus({ preventScroll: true });
+  if (options.first) rowsOf(menu)[0]?.focus({ preventScroll: true });
   window.addEventListener("pointerdown", outside, true);
   window.addEventListener("keydown", key, true);
   window.addEventListener("blur", close);
@@ -224,16 +271,17 @@ export function menuButton(
   control: HTMLElement,
   items: () => MenuEntry[],
   options: PopupOptions = {},
-): { open: () => void; close: () => void; readonly isOpen: boolean } {
+): { open: (first?: boolean) => void; close: () => void; readonly isOpen: boolean } {
   let close: (() => void) | undefined,
     closedAt = 0;
   control.setAttribute("aria-haspopup", "menu");
   control.setAttribute("aria-expanded", "false");
-  const open = () => {
+  const open = (first = false) => {
     if (close || isOff(control)) return;
     control.setAttribute("aria-expanded", "true");
     close = popup(items(), control, {
       ...options,
+      first,
       closed: () => {
         close = undefined;
         closedAt = performance.now();
@@ -250,7 +298,7 @@ export function menuButton(
   });
   control.addEventListener("click", (event) => {
     // A click without a pointer comes from the keyboard.
-    if (event.detail === 0) open();
+    if (event.detail === 0) open(true);
   });
   return {
     open,

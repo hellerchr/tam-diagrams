@@ -5,10 +5,15 @@ const box = (x: number, y: number, width = 100, height = 40) => ({ x, y, width, 
 
 describe("alignment help", () => {
   it("lines a moved box up with the edges and middles of others", () => {
-    // Its left edge is 4 off another's left edge, its top 3 off another's bottom.
-    const snapped = snapMove(box(204, 143), [box(200, 0), box(400, 100)], 6);
+    // Its left edge is 4 off another's left edge, its top 3 off another's top.
+    const snapped = snapMove(box(204, 103), [box(200, 0), box(400, 100)], 6);
     expect(snapped).toMatchObject({ dx: -4, dy: -3 });
     expect(snapped.guides).toHaveLength(2);
+    // Below another in its column it comes to rest a gap away, never touching, and an edge takes
+    // no middle of another.
+    expect(snapMove(box(200, 63), [box(200, 0)], 6)).toMatchObject({ dx: 0, dy: -3 });
+    expect(snapMove(box(200, 43), [box(200, 0)], 6).dy).toBe(0);
+    expect(snapMove(box(500, 23), [box(200, 0)], 6).dy).toBe(0);
     // The middle on a middle: 150 wide next to 100 wide.
     expect(snapMove(box(178, 200, 150), [box(200, 0)], 6).dx).toBe(-3);
     expect(snapMove(box(250, 300), [box(0, 0)], 6)).toEqual({

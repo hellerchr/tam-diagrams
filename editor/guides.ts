@@ -7,6 +7,9 @@ import type { Box, Point } from "../src/scene.ts";
 
 type Axis = "x" | "y";
 
+/** The gap a moved element keeps to the edge of a neighbour it comes to rest beside. */
+const GAP = 20;
+
 /** A line shown while an element is aligned on it. */
 export type Guide = [Point, Point];
 
@@ -52,15 +55,26 @@ function snapAxis(
   reach: number,
 ): { by: number; guides: Guide[] } {
   const across = other(axis);
-  // An edge or the middle on an edge or the middle of another: the nearest wins.
+  // An edge on the same edge of another, a middle on a middle, or an edge a gap away from the
+  // edge that faces it, so that two elements never come to rest touching: the nearest wins.
   let best: { by: number; at: number; with: Box } | undefined;
-  for (const item of others)
-    for (const mine of stops(box, axis))
-      for (const theirs of stops(item, axis)) {
-        const by = theirs - mine;
-        if (Math.abs(by) <= reach && (!best || Math.abs(by) < Math.abs(best.by)))
-          best = { by, at: theirs, with: item };
-      }
+  const take = (mine: number, theirs: number, item: Box, at = theirs) => {
+    const by = theirs - mine;
+    if (Math.abs(by) <= reach && (!best || Math.abs(by) < Math.abs(best.by)))
+      best = { by, at, with: item };
+  };
+  for (const item of others) {
+    const [start, middle, finish] = stops(box, axis),
+      [theirStart, theirMiddle, theirFinish] = stops(item, axis);
+    take(start, theirStart, item);
+    take(middle, theirMiddle, item);
+    take(finish, theirFinish, item);
+    // Only beside each other, not one inside the other, do facing edges keep a gap.
+    if (inLine(item, box, axis) && !inLine(item, box, other(axis))) {
+      take(start, theirFinish + GAP, item, theirFinish);
+      take(finish, theirStart - GAP, item, theirStart);
+    }
+  }
   if (best) {
     const from = Math.min(box[across], best.with[across]) - 12,
       to = Math.max(end(box, across), end(best.with, across)) + 12;

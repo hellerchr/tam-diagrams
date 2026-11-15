@@ -1,18 +1,29 @@
 /**
- * The editor's dialogs: the chooser of diagram types, a question before something is replaced, and
- * the two help sheets (keyboard and mouse, the TAM syntax).
+ * The editor's dialogs: the chooser of diagram types, a question before something is replaced, the
+ * export of a picture, the list of all commands, and the two help sheets (keyboard and mouse, the
+ * syntax of the diagram on show).
  */
 
 import { svgUrl } from "../src/index.ts";
-import { h, icon, iconButton } from "./dom.ts";
+import { h, icon, iconButton, setOff } from "./dom.ts";
+import type { Recent } from "./files.ts";
+import type { Command } from "./menus.ts";
 import { STARTER } from "./starter.ts";
-import { type DiagramType, TYPES, type TypeInfo } from "./types.ts";
+import { structureOf } from "./structures.ts";
+import { type DiagramType, TYPES, type TypeInfo, typeInfo, typeOf } from "./types.ts";
+
+/** The parts of a dialog below its title: what scrolls when the window is small, and the row of buttons that stays. */
+interface DialogParts {
+  body: (HTMLElement | false)[];
+  footer?: (HTMLElement | false)[];
+}
 
 /**
- * A dialog with its title and a close button at the top right, open over the page. It leaves the
- * page when it closes: by its button, by Escape, or by a click beside it.
+ * A dialog with its title and a close button at the top, its body, and its buttons at the bottom,
+ * open over the page. It is never higher than the window: the body scrolls, the title and the
+ * buttons stay. It leaves the page when it closes: by its button, by Escape, or by a click beside it.
  */
-function dialog(kind: string, title: string, ...body: (HTMLElement | false)[]): HTMLDialogElement {
+function dialog(kind: string, title: string, parts: DialogParts): HTMLDialogElement {
   const box = h(
     "dialog",
     { class: `dialog ${kind}`, tabindex: "-1" },
@@ -22,7 +33,8 @@ function dialog(kind: string, title: string, ...body: (HTMLElement | false)[]): 
       h("h1", {}, title),
       iconButton("close", { tip: "Close", key: "Esc" }, () => box.close()),
     ),
-    ...body,
+    h("div", { class: "dialog-body" }, ...parts.body),
+    parts.footer && h("footer", {}, ...parts.footer),
   ) as HTMLDialogElement;
   box.addEventListener("close", () => box.remove());
   box.addEventListener("pointerdown", (event) => {
@@ -35,14 +47,23 @@ function dialog(kind: string, title: string, ...body: (HTMLElement | false)[]): 
   return box;
 }
 
+/** Whether a dialog is open over the page. */
+export const dialogOpen = () => !!document.querySelector("dialog[open]");
+
 /** What the pointer does, which a sheet writes as words between the keys. */
 const GESTURES = new Set(["Click", "Drag", "Wheel"]);
+
+/** A row of a sheet: the keys, the gesture or the code, and what it does. */
+type SheetRow = [string | string[], string];
+
+/** A group of a sheet under its title. */
+type SheetGroup = [string, SheetRow[]];
 
 /**
  * A sheet of what each key, gesture or line of code does, in groups. Keys are given as a list and
  * show as keycaps; a gesture is given as a sentence.
  */
-function sheet(groups: [string, [string | string[], string][]][], code: boolean): HTMLElement {
+function sheet(groups: SheetGroup[], code: boolean): HTMLElement {
   const keys = (how: string | string[]) =>
     typeof how === "string"
       ? [h(code ? "code" : "span", {}, how)]
@@ -63,170 +84,625 @@ function sheet(groups: [string, [string | string[], string][]][], code: boolean)
   );
 }
 
-/** What the keyboard and the mouse do. Opened again while it is open, it closes. */
-export function helpDialog() {
-  const existing = document.querySelector<HTMLDialogElement>("dialog.help");
-  if (existing) return existing.close();
-  const box = dialog(
-    "help",
-    "Keyboard and mouse",
-    sheet(
+/** Moving the view and working with files: the same in every diagram type. */
+const VIEW_KEYS: SheetGroup = [
+  "View and files",
+  [
+    ["Wheel", "Move the view; Space-drag and the middle button do too"],
+    [["Shift", "Wheel"], "Move the view sideways"],
+    [["Ctrl", "Wheel"], "Zoom; + and − do too"],
+    [["1"], "Fit the diagram"],
+    [["2"], "Fit the selection"],
+    [["Ctrl", "0"], "Zoom to 100%"],
+    [["V", "H"], "Select tool, pan tool"],
+    [["Ctrl", "S"], "Save; with Shift, save as another file"],
+    [["Ctrl", "O"], "Open a file"],
+    [["Ctrl", "Alt", "N"], "New diagram"],
+    [["Ctrl", "K"], "All commands, to pick by typing"],
+    [["Alt"], "The menu bar; F10 does too"],
+  ],
+];
+
+/** What the keyboard and the mouse do in a block diagram, whose elements are placed by hand. */
+const BLOCK_KEYS: SheetGroup[] = [
+  [
+    "Add and connect",
+    [
+      ["Drag a shape", "Add it where it is dropped"],
+      [["A", "U", "S", "G"], "Agent, human, storage, group: then click"],
+      ["Double-click a shape", "Keep the tool to place several; Escape ends it"],
+      ["Double-click the canvas", "Add an agent"],
+      ["Click a dot", "Add a connected agent on that side"],
+      ["Drag a dot", "Connect to another element, or to a new one"],
+      [["C"], "Connect tool"],
+    ],
+  ],
+  [
+    "Select and change",
+    [
+      ["Click", "Select"],
+      [["Shift", "Click"], "Add to the selection, or take from it"],
+      ["Drag on the canvas", "Select with a frame"],
+      [["Ctrl", "A"], "Select everything"],
+      [["Escape"], "End a gesture or a tool; then clear the selection"],
+      [["Enter", "F2"], "Name an element; a double click does too"],
+      ["Drag a connection's end", "Attach it to another element"],
+      ["Right-click", "Menu: put in a box, change a kind, arrange, ..."],
+      [["Ctrl", "G"], "Put the selection in an agent"],
+      [["Ctrl", "Shift", "G"], "Put the selection in a group"],
+      [["Delete"], "Remove"],
+    ],
+  ],
+  [
+    "Move and arrange",
+    [
+      ["Drag", "Move; into a container to put it inside"],
+      [["Shift", "Drag"], "Keep to one axis"],
+      [["Ctrl", "Drag"], "Drag a copy away"],
+      [["Alt", "Drag"], "No snapping"],
+      [["←", "↑", "→", "↓"], "Move by 10; with Shift by 1"],
+      [["Ctrl", "D"], "Duplicate"],
+      [["Ctrl", "C"], "Copy; X cuts, V pastes"],
+      [["Ctrl", "Z"], "Undo"],
+      [["Ctrl", "Y"], "Redo; Ctrl+Shift+Z does too"],
+    ],
+  ],
+  VIEW_KEYS,
+];
+
+/** What the keyboard and the mouse do in a diagram that lays itself out: its parts are added, named, joined and removed. */
+const structureKeys = (info: TypeInfo): SheetGroup[] => {
+  const usual = structureOf(info.type)?.pieces[0]?.name.toLowerCase() ?? "part";
+  return [
+    [
+      "Add and connect",
       [
+        ["Click a shape", "Add it at the selected part"],
+        ["Drag a shape", "Carry it onto a part, into a group, or to the empty canvas"],
+        ["Double-click the canvas", `Add a ${usual}`],
+        ["Drag a dot", "Connect to another part, with the kind picked under Shapes"],
+        [["C"], "Connect tool: drag from one part to another"],
+      ],
+    ],
+    [
+      "Select and change",
+      [
+        ["Click", "Select a part or a connection"],
+        [["Shift", "Click"], "Add to the selection, or take from it"],
+        [["Ctrl", "A"], "Select everything"],
+        [["Escape"], "End a gesture or a tool; then clear the selection"],
+        ["Double-click", "Name a part, or label a connection"],
+        [["Enter", "F2"], "Name the selected part"],
+        ["Right-click", "Menu: add here, change a kind, delete"],
+        [["Delete"], "Remove, with the connections"],
+        [["Ctrl", "Z"], "Undo"],
+        [["Ctrl", "Y"], "Redo; Ctrl+Shift+Z does too"],
+      ],
+    ],
+    VIEW_KEYS,
+    [
+      "Layout",
+      [
+        ["Automatic", `${info.plural} lay themselves out: parts are not moved by hand`],
         [
-          "Add and connect",
-          [
-            ["Drag a shape", "Add it where it is dropped"],
-            [["A", "U", "S", "G"], "Agent, human, storage, group: then click"],
-            ["Double-click a shape", "Keep the tool to place several; Escape ends it"],
-            ["Double-click the canvas", "Add an agent"],
-            ["Click a dot", "Add a connected agent on that side"],
-            ["Drag a dot", "Connect to another element, or to a new one"],
-            [["C"], "Connect tool"],
-          ],
-        ],
-        [
-          "Select and change",
-          [
-            ["Click", "Select"],
-            [["Shift", "Click"], "Add to the selection, or take from it"],
-            ["Drag on the canvas", "Select with a frame"],
-            [["Enter", "F2"], "Name an element; a double click does too"],
-            ["Drag a connection's end", "Attach it to another element"],
-            ["Right-click", "Menu: put in a box, change a kind, arrange, …"],
-            [["Ctrl", "G"], "Put the selection in an agent"],
-            [["Ctrl", "Shift", "G"], "Put the selection in a group"],
-            [["Delete"], "Remove"],
-          ],
-        ],
-        [
-          "Move and arrange",
-          [
-            ["Drag", "Move; into a container to put it inside"],
-            [["Shift", "Drag"], "Keep to one axis"],
-            [["Ctrl", "Drag"], "Drag a copy away"],
-            [["Alt", "Drag"], "No snapping"],
-            [["←", "↑", "→", "↓"], "Move by 10; with Shift by 1"],
-            [["Ctrl", "D"], "Duplicate"],
-            [["Ctrl", "C"], "Copy; X cuts, V pastes"],
-            [["Ctrl", "Z"], "Undo; with Shift, redo"],
-          ],
-        ],
-        [
-          "View and files",
-          [
-            ["Wheel", "Move the view; Space-drag and the middle button do too"],
-            [["Ctrl", "Wheel"], "Zoom; + and − do too"],
-            [["1"], "Fit the diagram"],
-            [["2"], "Fit the selection"],
-            [["Ctrl", "0"], "Zoom to 100%"],
-            [["V", "H"], "Select tool, pan tool"],
-            [["Ctrl", "S"], "Save the source as a file"],
-            [["Ctrl", "O"], "Open a file"],
-            [["Ctrl", "Alt", "N"], "New diagram"],
-          ],
+          "Source",
+          "Every change is an edit of the text in the Source section, and the other way round",
         ],
       ],
-      false,
-    ),
-  );
+    ],
+  ];
+};
+
+/** What the keyboard and the mouse do in a diagram edited as text. */
+const TEXT_KEYS: SheetGroup[] = [
+  [
+    "Edit",
+    [
+      ["Type in the source", "The picture follows after a moment"],
+      [["Ctrl", "Space"], "Complete what is being typed"],
+      [["Ctrl", "Z"], "Undo"],
+      [["Ctrl", "Y"], "Redo; Ctrl+Shift+Z does too"],
+    ],
+  ],
+  VIEW_KEYS,
+];
+
+/** What the keyboard and the mouse do in a diagram of a type. Opened again while it is open, it closes. */
+export function helpDialog(type: DiagramType) {
+  const existing = document.querySelector<HTMLDialogElement>("dialog.help");
+  if (existing) return existing.close();
+  const info = typeInfo(type);
+  const box = dialog("help", `Keyboard and mouse: ${info.name.toLowerCase()}`, {
+    body: [
+      sheet(
+        info.mode === "canvas"
+          ? BLOCK_KEYS
+          : info.mode === "structure"
+            ? structureKeys(info)
+            : TEXT_KEYS,
+        false,
+      ),
+    ],
+  });
   box.addEventListener("keydown", (event) => {
     if (event.key === "?") box.close();
   });
 }
 
 /** The TAM notation on one sheet: what a line of the source may say. */
-export function syntaxDialog() {
-  dialog(
-    "help syntax",
-    "TAM syntax",
-    sheet(
+const TAM_SYNTAX: SheetGroup[] = [
+  [
+    "Diagram",
+    [
+      ["title Order system", "The title"],
+      ["direction LR", "The way an automatic layout runs: TB, LR, BT or RL"],
+      ["level conceptual", "Only agents, storages and channels; level design takes components"],
+      ["%% a remark", "A comment"],
+    ],
+  ],
+  [
+    "Elements",
+    [
+      ["agent api[Order API]", "A kind, an id, and the name in brackets"],
       [
-        [
-          "Diagram",
-          [
-            ["title Order system", "The title"],
-            ["direction LR", "The way an automatic layout runs: TB, LR, BT or RL"],
-            [
-              "level conceptual",
-              "Only agents, storages and channels; level design takes components",
-            ],
-            ["%% a remark", "A comment"],
-          ],
-        ],
-        [
-          "Elements",
-          [
-            ["agent api[Order API]", "A kind, an id, and the name in brackets"],
-            [
-              "agent human storage group",
-              "The kinds of a block diagram; component, subsystem, class and package at design level",
-            ],
-            ["agent shop[Web Shop] { … }", "A container: its parts stand between the braces"],
-            ["storage cart[Cart]:::blue", "A color"],
-            [
-              "agent worker[Worker] stack",
-              "Several, drawn as a stack; … draws two with dots between",
-            ],
-            ["agent api[Order API] @250,90 140x40", "A position, and a least size"],
-          ],
-        ],
-        [
-          "Connections",
-          [
-            ["a -- calls: place order @HTTPS --> b", "A request with a label and a protocol"],
-            ["a <-- calls --> b", "Requests both ways"],
-            ["a -- sends data --> b", "A data flow"],
-            ["a --- b", "A channel without a direction"],
-            ["a -- reads --> s", "An access to a storage: reads, writes or reads/writes"],
-            ["a -- requires IOrders --> b", "An interface one requires and the other provides"],
-            ["a provides IRefund", "An interface without a partner; requires works the same"],
-            ["a -. use .-> b", "A dependency: use, import, create, generate or pointer"],
-          ],
-        ],
+        "agent human storage group",
+        "The kinds of a block diagram; component, subsystem, class and package at design level",
       ],
-      true,
-    ),
-    h(
-      "p",
-      { class: "note" },
-      "The other diagram types are written in Mermaid's syntax; the snippets on the left add their usual statements.",
-    ),
-  );
+      [
+        "agent shop[Web Shop] { ... }",
+        "A container: its parts stand on the lines between the braces",
+      ],
+      ["storage cart[Cart]:::blue", "A color"],
+      ["agent worker[Worker] stack", "Several, drawn as a stack"],
+      [
+        "agent worker[Worker] ...",
+        "Several, drawn as two with dots between: three dots after the name",
+      ],
+      ["agent api[Order API] @250,90 140x40", "A position, and a least size"],
+    ],
+  ],
+  [
+    "Connections",
+    [
+      ["a -- calls: place order @HTTPS --> b", "A request with a label and a protocol"],
+      ["a <-- calls --> b", "Requests both ways"],
+      ["a -- sends data --> b", "A data flow"],
+      ["a --- b", "A channel without a direction"],
+      ["a -- reads --> s", "An access to a storage: reads, writes or reads/writes"],
+      ["a -- requires IOrders --> b", "An interface one requires and the other provides"],
+      ["a provides IRefund", "An interface without a partner; requires works the same"],
+      ["a -. use .-> b", "A dependency: use, import, create, generate or pointer"],
+    ],
+  ],
+];
+
+/** The first lines of every Mermaid source: a title, and remarks. */
+const FRONT: SheetRow[] = [
+  ["---\ntitle: Order system\n---", "The title, before the first line of the diagram"],
+  ["%% a remark", "A comment"],
+];
+
+/**
+ * The Mermaid syntax the editor draws, per diagram type: the statements of a diagram and what each
+ * says. The rows of a type, read one after the other, are a diagram of that type.
+ */
+const UML_SYNTAX: Record<Exclude<DiagramType, "tam">, SheetRow[]> = {
+  class: [
+    ["classDiagram", "The first line: a class diagram"],
+    ["class Customer", "A class"],
+    [
+      "class Order {\n  +id: string\n  -total() number\n}",
+      "Members: + public, - private, # protected",
+    ],
+    [
+      "class Payable {\n  <<interface>>\n  +pay()\n}",
+      "An interface; <<abstract>> and <<enumeration>> work the same",
+    ],
+    ["Payable <|.. Order", "Realization: the class implements the interface"],
+    ["Order <|-- RushOrder", "Inheritance: the base class first"],
+    ['Customer "1" --> "*" Order : places', "An association with multiplicities and a name"],
+    ["Order *-- OrderItem", "Composition; o-- is an aggregation"],
+    ["Order ..> Customer : notifies", "A dependency"],
+  ],
+  usecase: [
+    ["usecase-beta", "The first line: a use case diagram"],
+    ["direction LR", "The way the layout runs: LR or TB"],
+    ["actor User", "An actor"],
+    [
+      "systemBoundary shop[Web Shop]\n  browse(Browse Products)\n  order(Place Order)\nend",
+      "A system with its use cases: an id, and the name in round brackets",
+    ],
+    ["User --> browse", "An actor takes part in a use case"],
+    ["User --> order", "Every line is one association"],
+  ],
+  flowchart: [
+    ["flowchart TB", "The first line: an activity diagram that runs TB, LR, BT or RL"],
+    ["start((Start)) --> check{In stock?}", "A start node, a flow, and a decision"],
+    ["check -->|yes| ship[Ship order]", "A flow with a guard, to a step"],
+    ["check -->|no| wait[Wait for supply]", "The other branch"],
+    ["wait --> check", "A flow back"],
+    ["ship --> done(((End)))", "An end node"],
+    ["subgraph pack [Packing]\n  box[Box it] --> label[Label it]\nend", "A group of steps"],
+  ],
+  swimlane: [
+    ["swimlane-beta TB", "The first line: an activity with lanes that runs TB or LR"],
+    [
+      "subgraph Customer\n  start((Start)) --> order(Place Order)\nend",
+      "A lane with its steps: a start node and an action",
+    ],
+    [
+      "subgraph Shop\n  check(Check Order) --> ship(Ship Goods)\n  ship --> stop(((End)))\nend",
+      "Another lane, with an end node",
+    ],
+    ["order --> check", "A flow from lane to lane"],
+  ],
+  state: [
+    ["stateDiagram-v2", "The first line: a state machine"],
+    ["[*] --> Draft", "The start: the first state"],
+    ["Draft --> Submitted : submit", "A transition and the event that causes it"],
+    ['state "Waiting for approval" as Waiting', "A state with a name of several words"],
+    ["Submitted --> Waiting", "A transition without an event"],
+    [
+      "state Review {\n  [*] --> Reading\n  Reading --> [*]\n}",
+      "A composite state with states of its own",
+    ],
+    ["Waiting --> Review : assign", "Composite states take transitions like any other"],
+    ["Review --> [*]", "The end"],
+  ],
+  sequence: [
+    ["sequenceDiagram", "The first line: a sequence diagram"],
+    ["actor U as User", "A person who takes part: an id, and the name"],
+    ["participant S as Shop", "A participant"],
+    ["U->>S: place order", "A message"],
+    ["S-->>U: confirmation", "A reply"],
+    [
+      "alt in stock\n  S->>U: ship\nelse sold out\n  S->>U: refund\nend",
+      "Alternatives; opt has one branch",
+    ],
+    ["loop every day\n  S->>S: check supply\nend", "A loop, with a message to itself"],
+    ["Note over U,S: A note", "A note over participants"],
+  ],
+};
+
+/** The rows of the syntax sheet of a Mermaid type, in their order. */
+export const syntaxRows = (type: Exclude<DiagramType, "tam">): string[] =>
+  UML_SYNTAX[type].map(([code]) => code as string);
+
+/** The syntax of a diagram type on one sheet: what the lines of its source may say. */
+export function syntaxDialog(type: DiagramType) {
+  const info = typeInfo(type);
+  if (type === "tam")
+    return void dialog("help syntax", "TAM syntax", {
+      body: [
+        sheet(TAM_SYNTAX, true),
+        h(
+          "p",
+          { class: "note" },
+          "The other diagram types are written in Mermaid's syntax: Help shows it while one of them is open.",
+        ),
+      ],
+    });
+  dialog("help syntax", `${info.name} syntax`, {
+    body: [
+      sheet(
+        [
+          ["Statements", UML_SYNTAX[type]],
+          ["Every type", FRONT],
+        ],
+        true,
+      ),
+      h(
+        "p",
+        { class: "note" },
+        "This is the part of Mermaid's syntax the editor draws. The shapes on the left add these statements for you; the source completes them as you type.",
+      ),
+    ],
+  });
 }
 
-/** Asks before something is lost; resolves true when the user goes on. */
-export function confirmDialog(title: string, message: string, action: string): Promise<boolean> {
+/** What the user chose when asked before something is lost. */
+export type Answer = "go" | "save" | "cancel";
+
+/**
+ * Asks before something is lost: to go on, to save first and then go on, or to leave it. The focus
+ * starts on leaving it, so Enter loses nothing.
+ */
+export function confirmDialog(title: string, message: string, action: string): Promise<Answer> {
   return new Promise((resolve) => {
-    let sure = false;
-    const box = dialog(
-      "confirm",
-      title,
-      h("p", {}, message),
-      h(
-        "footer",
-        {},
+    let answer: Answer = "cancel";
+    const answers = (given: Answer) => () => {
+      answer = given;
+      box.close();
+    };
+    const box = dialog("confirm", title, {
+      body: [h("p", {}, message)],
+      footer: [
         h(
           "button",
-          { class: "button outlined", type: "button", onClick: () => box.close() },
+          { class: "button outlined", type: "button", autofocus: true, onClick: answers("cancel") },
           "Cancel",
         ),
+        h("span", { class: "spacer" }),
         h(
           "button",
-          {
-            class: "button primary",
-            type: "button",
-            autofocus: true,
-            onClick: () => {
-              sure = true;
-              box.close();
-            },
-          },
+          { class: "button outlined", type: "button", onClick: answers("save") },
+          "Save first",
+        ),
+        h(
+          "button",
+          { class: "button primary danger", type: "button", onClick: answers("go") },
           action,
         ),
-      ),
-    );
-    box.addEventListener("close", () => resolve(sure));
+      ],
+    });
+    box.addEventListener("close", () => resolve(answer));
   });
+}
+
+/**
+ * A choice of one among a few, as buttons side by side. The arrow keys go from one to the next.
+ * Returns the control and what sets the choice and turns single choices off.
+ */
+function segments<Value extends string>(
+  label: string,
+  choices: [Value, string][],
+  start: Value,
+  chosen: (value: Value) => void,
+) {
+  let value = start;
+  const show = () =>
+    buttons.forEach((button, index) => {
+      const on = choices[index][0] === value;
+      button.setAttribute("aria-checked", String(on));
+      button.setAttribute("aria-pressed", String(on));
+      button.tabIndex = on ? 0 : -1;
+    });
+  const set = (next: Value) => {
+    value = next;
+    show();
+    chosen(next);
+  };
+  const buttons = choices.map(([choice, name]) =>
+    h(
+      "button",
+      { class: "segment", type: "button", role: "radio", onClick: () => set(choice) },
+      name,
+    ),
+  );
+  const element = h(
+    "div",
+    { class: "segments", role: "radiogroup", "aria-label": label },
+    ...buttons,
+  );
+  element.addEventListener("keydown", (event) => {
+    const by = { ArrowLeft: -1, ArrowUp: -1, ArrowRight: 1, ArrowDown: 1 }[event.key];
+    if (!by) return;
+    event.preventDefault();
+    const on = buttons.filter((button) => button.getAttribute("aria-disabled") !== "true"),
+      at = on.indexOf(document.activeElement as HTMLButtonElement),
+      next = on[(at + by + on.length) % on.length];
+    next?.focus();
+    next?.click();
+  });
+  show();
+  return {
+    element,
+    /** Turns the whole choice off, with the reason, or on again. */
+    setOff: (reason: string | undefined) => buttons.forEach((button) => setOff(button, reason)),
+  };
+}
+
+/** What is behind an exported picture: white, nothing, or the page color of the editor's theme. */
+export type Backdrop = "white" | "transparent" | "theme";
+
+/** How a picture is exported. */
+export interface ExportOptions {
+  format: "svg" | "png";
+  /** The pixels of a PNG per unit of the diagram. */
+  scale: 1 | 2 | 3;
+  backdrop: Backdrop;
+}
+
+/** What the export dialog needs from the page. */
+export interface ExportHost {
+  /** The choices the dialog starts with. */
+  options: ExportOptions;
+  /** Whether the editor shows in its dark theme, which "Editor theme" then names. */
+  dark: boolean;
+  /** The file name a format is saved under. */
+  name(format: "svg" | "png"): string;
+  /** The picture as an SVG with a backdrop, and its size in units of the diagram. */
+  picture(backdrop: Backdrop): { svg: string; width: number; height: number } | undefined;
+  /** Writes the picture as a file. */
+  save(options: ExportOptions): void;
+}
+
+/**
+ * The export of the picture: its format, the scale of a PNG, what is behind it, and a preview of
+ * what the file will hold. The picture is drawn in the light colors unless the editor's theme is asked for.
+ */
+export function exportDialog(host: ExportHost) {
+  if (document.querySelector("dialog.export")) return;
+  const options = { ...host.options };
+  const preview = h("img", { alt: "Preview of the exported picture", draggable: "false" }),
+    size = h("span", { class: "note" });
+  const format = segments(
+    "Format",
+    [
+      ["svg", "SVG"],
+      ["png", "PNG"],
+    ],
+    options.format,
+    (value) => {
+      options.format = value;
+      show();
+    },
+  );
+  const scale = segments(
+    "Scale",
+    [
+      ["1", "1×"],
+      ["2", "2×"],
+      ["3", "3×"],
+    ],
+    String(options.scale) as "1" | "2" | "3",
+    (value) => {
+      options.scale = Number(value) as ExportOptions["scale"];
+      show();
+    },
+  );
+  const backdrop = segments<Backdrop>(
+    "Background",
+    [
+      ["white", "White"],
+      ["transparent", "Transparent"],
+      ["theme", host.dark ? "Editor theme (dark)" : "Editor theme (light)"],
+    ],
+    options.backdrop,
+    (value) => {
+      options.backdrop = value;
+      show();
+    },
+  );
+  const row = (name: string, control: HTMLElement) =>
+    h("div", { class: "row" }, h("span", {}, name), control);
+  const show = () => {
+    const picture = host.picture(options.backdrop),
+      png = options.format === "png",
+      times = png ? options.scale : 1;
+    scale.setOff(png ? undefined : "An SVG is sharp at every size");
+    if (picture) preview.src = svgUrl(picture.svg);
+    size.textContent = picture
+      ? `${host.name(options.format)} · ${Math.ceil(picture.width * times)} × ${Math.ceil(picture.height * times)}${png ? " pixels" : ""}`
+      : "";
+    file.textContent = `Export ${png ? "PNG" : "SVG"}`;
+  };
+  const file = h("button", {
+    class: "button primary",
+    type: "button",
+    autofocus: true,
+    onClick: () => {
+      box.close();
+      host.save(options);
+    },
+  });
+  const box = dialog("export", "Export a picture", {
+    body: [
+      h("div", { class: "export-preview" }, preview),
+      h(
+        "div",
+        { class: "export-options" },
+        row("Format", format.element),
+        row("Scale", scale.element),
+        row("Background", backdrop.element),
+      ),
+    ],
+    footer: [
+      size,
+      h(
+        "button",
+        { class: "button outlined", type: "button", onClick: () => box.close() },
+        "Cancel",
+      ),
+      file,
+    ],
+  });
+  show();
+}
+
+/** The most commands the list shows at a time. */
+const LISTED = 60;
+
+/**
+ * The list of all commands: typing narrows it to the commands whose name or menu holds every word
+ * typed, the arrow keys go through it, Enter runs the marked one.
+ */
+export function commandDialog(commands: Command[]) {
+  const existing = document.querySelector<HTMLDialogElement>("dialog.commands");
+  if (existing) return existing.close();
+  const list = h("div", { class: "command-list", role: "listbox", id: "command-list" });
+  const field = h("input", {
+    class: "field",
+    type: "text",
+    autofocus: true,
+    spellcheck: "false",
+    placeholder: "Type a command…",
+    role: "combobox",
+    "aria-label": "Command",
+    "aria-controls": "command-list",
+    "aria-expanded": "true",
+  });
+  let found: Command[] = [],
+    at = 0;
+  const mark = () =>
+    [...list.children].forEach((row, index) => {
+      row.setAttribute("aria-selected", String(index === at));
+      if (index === at) row.scrollIntoView({ block: "nearest" });
+    });
+  const run = (command: Command | undefined) => {
+    if (!command || command.off) return;
+    box.close();
+    command.run();
+  };
+  const show = () => {
+    const words = field.value.toLowerCase().split(/\s+/).filter(Boolean);
+    found = commands
+      .filter((command) => {
+        const text = `${command.path} ${command.name}`.toLowerCase();
+        return words.every((word) => text.includes(word));
+      })
+      // What can be run comes before what cannot; a name that starts with what was typed comes first.
+      .toSorted(
+        (a, b) =>
+          Number(!!a.off) - Number(!!b.off) ||
+          Number(!!words[0] && b.name.toLowerCase().startsWith(words[0])) -
+            Number(!!words[0] && a.name.toLowerCase().startsWith(words[0])),
+      )
+      .slice(0, LISTED);
+    // The first command that can be run is the marked one.
+    at = 0;
+    list.replaceChildren(
+      ...(found.length
+        ? found.map((command, index) => {
+            const row = h(
+              "div",
+              {
+                class: "command",
+                role: "option",
+                "data-tip": typeof command.off === "string" ? command.off : undefined,
+                "data-side": "right",
+                onClick: () => run(command),
+                onPointermove: () => {
+                  if (at === index) return;
+                  at = index;
+                  mark();
+                },
+              },
+              h("span", { class: "name" }, command.name),
+              h("span", { class: "path" }, command.path),
+              command.key && h("kbd", {}, command.key),
+            );
+            setOff(row, command.off);
+            return row;
+          })
+        : [h("p", { class: "note" }, "No command has these words.")]),
+    );
+    mark();
+  };
+  field.addEventListener("input", show);
+  field.addEventListener("keydown", (event) => {
+    const step = { ArrowDown: 1, ArrowUp: -1 }[event.key];
+    if (step && found.length) {
+      event.preventDefault();
+      at = (at + step + found.length) % found.length;
+      mark();
+    } else if (event.key === "Enter") {
+      event.preventDefault();
+      run(found[at]);
+    }
+  });
+  const box = dialog("commands", "All commands", { body: [field, list] });
+  show();
 }
 
 /** What the chooser of diagram types needs from the page. */
@@ -235,6 +711,8 @@ export interface ChooserHost {
   current: DiagramType;
   /** Whether the diagram on show has changes that were not saved. */
   unsaved: boolean;
+  /** The diagrams that were on show lately. */
+  recents: Recent[];
   /** A source drawn as an SVG, for the picture on a card. */
   sketch(source: string): Promise<string | undefined>;
   /** Starts the diagram the user chose. */
@@ -242,99 +720,267 @@ export interface ChooserHost {
 }
 
 /**
+ * The pictures on the cards of the chooser: a small diagram of each type that is wider than high,
+ * as the window of a card is. A type without one shows its starter.
+ */
+const THUMBS: Partial<Record<DiagramType, string>> = {
+  tam: STARTER,
+  class: `classDiagram
+  direction LR
+  class Customer {
+    +name: string
+  }
+  class Order {
+    +id: string
+    +total() number
+  }
+  Customer "1" --> "*" Order : places`,
+  usecase: `usecase-beta
+  direction LR
+  actor User
+  systemBoundary shop[Web Shop]
+    browse(Browse Products)
+    order(Place Order)
+  end
+  User --> browse
+  User --> order`,
+  flowchart: `flowchart LR
+  start((Start)) --> check{In stock?}
+  check -->|yes| ship[Ship order]
+  check -->|no| wait[Wait]
+  ship --> done(((End)))`,
+  swimlane: `swimlane-beta LR
+  subgraph Customer
+    start((Start)) --> order(Place Order)
+    receive(Receive Goods) --> stop(((End)))
+  end
+  subgraph Shop
+    check(Check Order) --> ship(Ship Goods)
+  end
+  order --> check
+  ship --> receive`,
+  state: `stateDiagram-v2
+  direction LR
+  [*] --> Draft
+  Draft --> Approved : approve
+  Draft --> Rejected : reject`,
+  sequence: `sequenceDiagram
+  participant U as User
+  participant S as Shop
+  participant P as Payment
+  U->>S: place order
+  S->>P: charge
+  P-->>S: paid`,
+};
+
+/** How much wider than high a picture may be to fill the window of a card; any other shows whole. */
+const FILLS = { least: 1.7, most: 2.6 };
+
+/** The source of the picture on a type's card. */
+export const thumbOf = (info: TypeInfo): string => THUMBS[info.type] ?? (info.starter || STARTER);
+
+/** How a type is worked on, in a few plain words. */
+const BADGES: Record<TypeInfo["mode"], string> = {
+  canvas: "Placed by hand",
+  structure: "Lays itself out",
+  text: "Written as text",
+};
+
+/** A diagram to start from, as the chooser lists it. */
+interface Start {
+  name: string;
+  source: string;
+  icon: "plus" | "file";
+  /** A word after the name that says where it comes from. */
+  tag?: string;
+}
+
+/** What the chooser offers to start a diagram of a type from: a new one, the diagrams of that type on show lately, and the examples. */
+export function startsOf(info: TypeInfo, recents: Recent[]): Start[] {
+  const first: Start[] = [
+    info.starter
+      ? { name: "Small starter diagram", source: info.starter, icon: "plus" }
+      : { name: "Empty diagram", source: "", icon: "plus" },
+    ...(info.type === "tam"
+      ? [{ name: "Order system (sample)", source: STARTER, icon: "file" as const }]
+      : []),
+  ];
+  const examples = info.examples.map(([name, source]): Start => ({ name, source, icon: "file" }));
+  // One row per source: a recent diagram that is an example shows as the example.
+  const known = new Set([...first, ...examples].map((start) => start.source));
+  return [
+    ...first,
+    ...recents
+      .filter((recent) => typeOf(recent.source) === info.type && !known.has(recent.source))
+      .map((recent): Start => ({
+        name: recent.title,
+        source: recent.source,
+        icon: "file",
+        tag: "Recent",
+      })),
+    ...examples,
+  ];
+}
+
+/**
  * The chooser of a new diagram: a card for each type with a picture of it, and below the cards
- * what to start from, an empty diagram or one of the type's examples.
+ * what to start from (a new diagram, a recent one, an example of the type) beside a picture of it.
+ * The arrow keys go through the cards and through the list; Enter creates.
  */
 export function chooser(host: ChooserHost) {
   const existing = document.querySelector<HTMLDialogElement>("dialog.chooser");
   if (existing) return;
   let type = host.current,
-    source = "";
+    source = "",
+    turn = 0;
   const starts = h("div", { class: "starts", role: "listbox", "aria-label": "Start from" });
+  const picture = h("img", { alt: "", draggable: "false" }),
+    blank = h("span", { class: "note" }),
+    preview = h("div", { class: "start-preview" }, picture, blank);
   const create = () => {
     box.close();
     host.create(source);
   };
+  /** Picks a row of the list: it is the one Create starts from, and the picture beside the list shows it. */
+  const choose = (row: HTMLElement, start: Start, focus = false) => {
+    source = start.source;
+    for (const other of starts.children) {
+      other.setAttribute("aria-selected", String(other === row));
+      (other as HTMLElement).tabIndex = other === row ? 0 : -1;
+    }
+    row.scrollIntoView({ block: "nearest" });
+    if (focus) row.focus();
+    const mine = ++turn;
+    picture.hidden = true;
+    blank.textContent = start.source.trim() ? "" : "An empty canvas";
+    if (start.source.trim())
+      void host.sketch(start.source).then((svg) => {
+        if (mine !== turn) return;
+        if (svg) picture.src = svgUrl(svg);
+        picture.hidden = !svg;
+        blank.textContent = svg ? "" : "No picture of this one";
+      });
+  };
   const pick = (info: TypeInfo) => {
     type = info.type;
-    for (const [other, card] of cards) card.setAttribute("aria-pressed", String(other === type));
-    const rows: [string, string][] = [
-      [info.mode === "canvas" ? "Empty diagram" : "A small diagram to change", info.starter],
-      ...info.examples,
-    ];
-    source = info.starter;
-    starts.replaceChildren(
-      ...rows.map(([name, text], index) => {
-        const row = h(
-          "button",
-          {
-            class: "start",
-            type: "button",
-            role: "option",
-            "aria-selected": String(index === 0),
-            onClick: () => {
-              source = text;
-              for (const other of starts.children)
-                other.setAttribute("aria-selected", String(other === row));
-            },
-            onDblclick: create,
-          },
-          icon(index ? "file" : "plus"),
-          h("span", {}, name),
-        );
-        return row;
-      }),
-    );
+    for (const [other, card] of cards) {
+      card.setAttribute("aria-checked", String(other === type));
+      card.tabIndex = other === type ? 0 : -1;
+    }
+    const list = startsOf(info, host.recents);
+    const rows = list.map((start) => {
+      const row: HTMLElement = h(
+        "div",
+        {
+          class: "start",
+          role: "option",
+          "data-tip": start.name.length > 40 ? start.name : undefined,
+          "data-side": "top",
+          onClick: () => choose(row, start, true),
+          onDblclick: create,
+        },
+        icon(start.icon),
+        h("span", { class: "name" }, start.name),
+        start.tag && h("span", { class: "tag" }, start.tag),
+      );
+      return row;
+    });
+    starts.replaceChildren(...rows);
+    choose(rows[0], list[0]);
+    starts.scrollTop = 0;
   };
+  starts.addEventListener("keydown", (event) => {
+    const rows = [...starts.children] as HTMLElement[],
+      at = rows.findIndex((row) => row.getAttribute("aria-selected") === "true"),
+      to = {
+        ArrowDown: Math.min(at + 1, rows.length - 1),
+        ArrowUp: Math.max(at - 1, 0),
+        Home: 0,
+        End: rows.length - 1,
+      }[event.key];
+    if (event.key === "Enter") {
+      event.preventDefault();
+      return create();
+    }
+    if (to === undefined) return;
+    event.preventDefault();
+    rows[to]?.click();
+  });
   const cards = new Map(
     TYPES.map((info) => {
-      const picture = h("img", { alt: "", draggable: "false" });
-      // The picture is the type's own starter, drawn by the library and shown as an image.
-      void host.sketch(info.starter || STARTER).then((svg) => {
-        if (svg) picture.src = svgUrl(svg);
+      const thumb = h("img", { alt: "", draggable: "false" });
+      // The picture is a small diagram of the type, drawn by the library and shown as an image.
+      void host.sketch(thumbOf(info)).then((svg) => {
+        if (!svg) return;
+        const [, width, height] = svg.match(/width="([\d.]+)" height="([\d.]+)"/) ?? [],
+          wide = Number(width) / Number(height);
+        thumb.classList.toggle("whole", !(wide >= FILLS.least && wide <= FILLS.most));
+        thumb.src = svgUrl(svg);
       });
       const card = h(
         "button",
-        { class: "card", type: "button", onClick: () => pick(info), onDblclick: create },
-        h("span", { class: "thumb" }, picture),
+        {
+          class: "card",
+          type: "button",
+          role: "radio",
+          "data-tip": info.about,
+          "data-side": "bottom",
+          onClick: () => pick(info),
+          onDblclick: create,
+        },
+        h("span", { class: "thumb" }, thumb),
         h("span", { class: "name" }, icon(info.icon), h("span", {}, info.name)),
-        h(
-          "span",
-          { class: "badge" },
-          info.mode === "canvas"
-            ? "Canvas"
-            : info.mode === "structure"
-              ? "Canvas, automatic layout"
-              : "Text + preview",
-        ),
+        h("span", { class: "badge" }, BADGES[info.mode]),
       );
       return [info.type, card] as const;
     }),
   );
-  const box = dialog(
-    "chooser",
-    "New diagram",
-    h("div", { class: "cards" }, ...cards.values()),
-    h("h2", {}, "Start from"),
-    starts,
-    h(
-      "footer",
-      {},
-      h(
-        "span",
-        { class: "note" },
-        host.unsaved
-          ? "The diagram on show has unsaved changes. Undo brings it back."
-          : "The new diagram takes the place of the one on show. Undo brings it back.",
-      ),
+  const deck = h(
+    "div",
+    { class: "cards", role: "radiogroup", "aria-label": "Diagram type" },
+    ...cards.values(),
+  );
+  deck.addEventListener("keydown", (event) => {
+    const list = [...cards.values()],
+      at = list.indexOf(document.activeElement as HTMLButtonElement);
+    if (at < 0) return;
+    if (event.key === "Enter") {
+      event.preventDefault();
+      return create();
+    }
+    // The cards of a row stand at one height: as many as the first row has make a step up or down.
+    const across = list.filter((card) => card.offsetTop === list[0].offsetTop).length,
+      by = { ArrowLeft: -1, ArrowRight: 1, ArrowUp: -across, ArrowDown: across }[event.key];
+    if (!by) return;
+    event.preventDefault();
+    const next = list[at + by];
+    if (!next) return;
+    next.focus();
+    next.click();
+  });
+  const box = dialog("chooser", "New diagram", {
+    body: [deck, h("h2", {}, "Start from"), h("div", { class: "starts-row" }, starts, preview)],
+    footer: [
+      host.unsaved
+        ? h(
+            "span",
+            { class: "note warning" },
+            icon("warning"),
+            h("span", {}, "The diagram on show has unsaved changes. Undo brings it back."),
+          )
+        : h(
+            "span",
+            { class: "note" },
+            "The new diagram takes the place of the one on show. Undo brings it back.",
+          ),
       h(
         "button",
         { class: "button outlined", type: "button", onClick: () => box.close() },
         "Cancel",
       ),
       h("button", { class: "button primary", type: "button", onClick: create }, "Create"),
-    ),
-  );
+    ],
+  });
   pick(TYPES.find((info) => info.type === type) ?? TYPES[0]);
   cards.get(type)?.focus();
 }

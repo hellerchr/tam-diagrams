@@ -5,11 +5,21 @@ import { STATE_EXAMPLES } from "../src/samples/uml-examples.ts";
 import { parseStateDiagram } from "../src/uml-state.ts";
 import {
   addStatePiece,
+  connectState,
   connectStates,
+  duplicateState,
   labelTransition,
+  moveStateInto,
   removeStates,
   renameState,
+  renameStateId,
+  retitleState,
+  reverseTransition,
+  setNoteSide,
+  setStateDescription,
+  stateDescription,
   stateStructure,
+  ungroupComposite,
 } from "../src/uml-state-edit.ts";
 
 const STARTER = `stateDiagram-v2
@@ -158,31 +168,50 @@ describe("editing a state diagram as text", () => {
   it("adds notes and regions", () => {
     const note = addStatePiece(STARTER, { kind: "note", label: "Look\nhere", parent: "Draft" });
     expect(note.id).toBe("note1");
-    expect(note.source.endsWith("\n  note right of Draft : Look<br>here")).toBe(true);
+    // After the line that names its state first.
+    expect(changed(STARTER, note.source)).toEqual({
+      lost: [],
+      added: ["  note right of Draft : Look<br>here"],
+    });
+    expect(note.source.split("\n")[2]).toBe("  note right of Draft : Look<br>here");
     expect(parseStateDiagram(note.source).notes[0]).toMatchObject({
       target: "Draft",
       text: "Look<br>here",
     });
-    // Without a part to stand beside it takes the last state.
-    expect(addStatePiece(NESTED, { kind: "note" })).toMatchObject({ id: "note3" });
-    expect(addStatePiece(NESTED, { kind: "note" }).source).toContain("note right of Done : Note");
-    expect(addStatePiece("stateDiagram-v2", { kind: "note" })).toEqual({
-      source: "stateDiagram-v2",
-      id: "",
-    });
-    const region = addStatePiece(REGIONS, { kind: "region", parent: "CapsOn" });
+    // A second note of a state follows the first, a note of a composite state its block; notes
+    // are numbered in the order of the source.
+    const second = addStatePiece(NESTED, { kind: "note", parent: "Idle" });
+    expect(second.id).toBe("note2");
+    expect(second.source).toContain(
+      "    note right of Idle : waits\n    note right of Idle : Note\n    note left of Done\n",
+    );
+    const outer = addStatePiece(NESTED, { kind: "note", parent: "Edit" });
+    expect(outer.id).toBe("note1");
+    expect(outer.source).toContain(
+      "    }\n    note right of Edit : Note\n    state pick <<choice>>",
+    );
+    expect(addStatePiece(NESTED, { kind: "note", parent: "pick" }).source).toContain(
+      "    state pick <<choice>>\n    note right of pick : Note\n",
+    );
+    // Without a state to stand beside there is no note.
+    for (const parent of [undefined, null, "root#initial", "note1", "nothing"])
+      expect(addStatePiece(NESTED, { kind: "note", parent })).toEqual({ source: NESTED, id: "" });
+    expect(addStatePiece(REGIONS, { kind: "note", parent: "Active#region1" }).id).toBe("");
+    const region = addStatePiece(REGIONS, { kind: "region", parent: "Active#region1" });
     expect(region.id).toBe("Active#region3");
     expect(region.source).toContain('    CapsOn --> [*]\n    --\n    state "State" as state1\n  }');
     expect(parentOf(region.source, "state1")).toBe("Active#region3");
     const split = addStatePiece(NESTED, { kind: "region", parent: "Check" });
     expect(split.id).toBe("Check#region2");
     expect(parentOf(split.source, "Inner")).toBe("Check#region1");
-    const made = addStatePiece(STARTER, { kind: "region" });
-    expect(made.id).toBe("composite1#region2");
-    expect(parseStateDiagram(made.source).states.get("composite1")!.children).toEqual([
-      "composite1#region1",
-      "composite1#region2",
-    ]);
+    expect(addStatePiece(REGIONS, { kind: "region", parent: "Active" }).id).toBe("Active#region3");
+    // A region is a part of a composite state: there is none at a plain state, and none alone.
+    for (const parent of [undefined, null, "Draft", "root#initial"])
+      expect(addStatePiece(STARTER, { kind: "region", parent })).toEqual({
+        source: STARTER,
+        id: "",
+      });
+    expect(addStatePiece(REGIONS, { kind: "region", parent: "CapsOn" }).id).toBe("");
   });
 
   it("names the initial and final state a start or an end becomes when connected", () => {
@@ -218,7 +247,8 @@ describe("editing a state diagram as text", () => {
     });
     expect(inner).toContain("        Saved --> [*]\n        Saved --> Unsaved : change\n    }");
     const across = connectStates(NESTED, "Inner", "Done");
-    expect(across.endsWith("\n    class Done bold\n    Inner --> Done")).toBe(true);
+    // At the end, before the styling a source closes with.
+    expect(across.endsWith("\n    end note\n    Inner --> Done\n    class Done bold")).toBe(true);
     expect(parentOf(across, "Inner")).toBe("Check");
     expect(parentOf(across, "Done")).toBeNull();
     expect(connectStates(STARTER, "Draft", "Nowhere")).toBe(STARTER);
@@ -247,7 +277,9 @@ describe("editing a state diagram as text", () => {
     expect(transitions(num)).toContain("Active#initial>NumOn");
     // A state named first after the composite state stays outside it: the composite opens once more.
     const late = connectStates(NESTED, "Edit#initial", "Done");
-    expect(late.endsWith("\n    state Edit {\n        [*] --> Done\n    }")).toBe(true);
+    expect(
+      late.endsWith("\n    state Edit {\n        [*] --> Done\n    }\n    class Done bold"),
+    ).toBe(true);
     expect(transitions(late)).toContain("Edit#initial>Done");
     expect(parentOf(late, "Done")).toBeNull();
     // What the syntax cannot say.
@@ -414,6 +446,522 @@ describe("editing a state diagram as text", () => {
     );
     expect(removeStates(REGIONS, ["Active"])).toBe("stateDiagram-v2");
   });
+});
+
+describe("naming new states, and what the canvas does with a state", () => {
+  it("lets the id of a new state follow its first name", () => {
+    const added = addStatePiece(STARTER, { kind: "state", parent: null }),
+      joined = connectStates(added.source, "Draft", added.id);
+    expect(joined.endsWith('\n  state "State" as state1\n  Draft --> state1')).toBe(true);
+    const named = retitleState(joined, added.id, "Paid");
+    expect(named).toEqual({ id: "Paid", source: `${STARTER}\n  Paid\n  Draft --> Paid` });
+    // A name that cannot be an id, or that another state has, is written beside the id.
+    expect(retitleState(joined, "state1", "Paid in full")).toEqual({
+      id: "state1",
+      source: `${STARTER}\n  state "Paid in full" as state1\n  Draft --> state1`,
+    });
+    expect(retitleState(joined, "state1", "Draft").id).toBe("state1");
+    expect(retitleState(joined, "state1", "note").id).toBe("state1");
+    expect(retitleState(joined, "state1", "end").source).toContain('state "end" as state1');
+    // Composite states, with what stands in them and every line that names them.
+    const composite = addStatePiece(STARTER, { kind: "composite" }),
+      filled = addStatePiece(composite.source, { kind: "state", parent: composite.id }),
+      noted = addStatePiece(connectStates(filled.source, "Approved", composite.id), {
+        kind: "note",
+        parent: composite.id,
+      }),
+      styled = `${noted.source}\n  class Draft,composite1 bold\n  style composite1 fill:#eee`;
+    const review = retitleState(styled, "composite1", "Review");
+    expect(review.id).toBe("Review");
+    expect(changed(styled, review.source)).toEqual({
+      lost: [
+        '  state "Composite" as composite1 {',
+        "  note right of composite1 : Note",
+        "  Approved --> composite1",
+        "  class Draft,composite1 bold",
+        "  style composite1 fill:#eee",
+      ],
+      added: [
+        "  state Review {",
+        "  note right of Review : Note",
+        "  Approved --> Review",
+        "  class Draft,Review bold",
+        "  style Review fill:#eee",
+      ],
+    });
+    expect(parentOf(review.source, "state1")).toBe("Review");
+    // Only a generated id follows the name; a state the user named keeps its id.
+    expect(retitleState(STARTER, "Draft", "Sketch")).toEqual({
+      id: "Draft",
+      source: renameState(STARTER, "Draft", "Sketch"),
+    });
+    // Notes and what has no name go the way of `rename`.
+    expect(retitleState(NESTED, "note1", "long")).toEqual({
+      id: "note1",
+      source: renameState(NESTED, "note1", "long"),
+    });
+    expect(retitleState(NESTED, "pick", "x")).toEqual({ id: "pick", source: NESTED });
+    expect(stateStructure.retitle!(joined, "state1", "Paid").id).toBe("Paid");
+  });
+
+  it("writes a state by its id alone when its name is the id or empty", () => {
+    const aliased = renameState(STARTER, "Draft", "First draft");
+    expect(renameState(aliased, "Draft", "")).toBe(STARTER.replace("  [*]", "  Draft\n  [*]"));
+    expect(renameState(aliased, "Draft", "Draft")).not.toContain('"');
+    const cleared = renameState(NESTED, "Edit", "");
+    expect(changed(NESTED, cleared)).toEqual({
+      lost: ['    state "Edit Mode" as Edit {'],
+      added: ["    state Edit {"],
+    });
+    expect(parseStateDiagram(cleared).states.get("Edit")!.label).toBe("Edit");
+  });
+
+  it("renames an id with all its mentions", () => {
+    const renamed = renameStateId(NESTED, "Done", "Finished");
+    expect(changed(NESTED, renamed)).toEqual({
+      lost: [
+        "    pick --> Done",
+        "    Done --> [*]",
+        "    note left of Done",
+        "    class Done bold",
+      ],
+      added: [
+        "    pick --> Finished",
+        "    Finished --> [*]",
+        "    note left of Finished",
+        "    class Finished bold",
+      ],
+    });
+    expect(transitions(renamed)).toEqual(
+      transitions(NESTED).map((item) => item.replace("Done", "Finished")),
+    );
+    const described = `stateDiagram-v2\n  W:::hot --> W : again\n  W : entry / start\n  state W\n  W`;
+    expect(renameStateId(described, "W", "Waiting")).toBe(
+      `stateDiagram-v2\n  Waiting:::hot --> Waiting : again\n  Waiting : entry / start\n  state Waiting\n  Waiting`,
+    );
+    // An id only where it stands as one: not inside another id, a label or a note.
+    const alike = `stateDiagram-v2\n  A --> AB : A\n  note right of A : A is A`;
+    expect(renameStateId(alike, "A", "C")).toBe(
+      `stateDiagram-v2\n  C --> AB : A\n  note right of C : A is A`,
+    );
+    for (const id of ["Idle", "two words", "a-b", "[*]", "x:y", "note3", "class", "end", "", "a#b"])
+      expect(renameStateId(NESTED, "Done", id), id).toBe(NESTED);
+    expect(renameStateId(NESTED, "root#initial", "Begin")).toBe(NESTED);
+    expect(renameStateId(NESTED, "nothing", "Begin")).toBe(NESTED);
+    expect(renameStateId(REGIONS, "Active#region1", "Begin")).toBe(REGIONS);
+    // A composite state keeps what it holds, its regions under their new ids.
+    const active = renameStateId(REGIONS, "Active", "On");
+    expect(parentOf(active, "CapsOn")).toBe("On#region2");
+  });
+
+  it("does not write a transition that is there already", () => {
+    expect(connectState(STARTER, "root#initial", "Draft")).toEqual({ source: STARTER, edge: "t1" });
+    expect(connectState(STARTER, "Draft", "Submitted", "submit")).toEqual({
+      source: STARTER,
+      edge: "t2",
+    });
+    expect(connectState(STARTER, "Approved", "root#final1")).toEqual({
+      source: STARTER,
+      edge: "t5",
+    });
+    // Another label, another direction or another scope is another transition.
+    expect(connectState(STARTER, "Draft", "Submitted").edge).toBe("t6");
+    expect(connectState(STARTER, "Draft", "Submitted", "resubmit").edge).toBe("t6");
+    expect(connectState(STARTER, "Submitted", "root#final1").edge).toBe("t6");
+    expect(connectState(NESTED, "Saved", "Edit#final1")).toEqual({ source: NESTED, edge: "t4" });
+    expect(connectState(NESTED, "Edit#initial", "Unsaved").edge).toBe("t1");
+    expect(stateStructure.connect(STARTER, "root#initial", "Draft")).toBe(STARTER);
+  });
+
+  it("returns the transition it wrote, wherever it stands", () => {
+    // In the middle of the source: the transitions after it are numbered anew.
+    const inner = connectState(NESTED, "Unsaved", "Edit#final1");
+    expect(inner.edge).toBe("t5");
+    expect(stateStructure.read(inner.source).edges.find((edge) => edge.id === "t5")).toMatchObject({
+      source: "Unsaved",
+      target: "Edit#final2",
+      line: 14,
+    });
+    expect(stateStructure.read(inner.source).edges.at(-1)).toMatchObject({ source: "Done" });
+    const caps = connectState(REGIONS, "CapsOff", "CapsOn", "shift");
+    expect(caps.edge).toBe("t7");
+    expect(transitions(caps.source)[6]).toBe("CapsOff>CapsOn:shift");
+    // In a composite state opened once more.
+    const late = connectState(NESTED, "Edit#initial", "Done");
+    expect(transitions(late.source)[Number(late.edge.slice(1)) - 1]).toBe("Edit#initial>Done");
+    // No transition for what moves a note or is refused.
+    expect(connectState(NESTED, "Edit", "note1").edge).toBe("");
+    expect(connectState(NESTED, "Edit", "note1").source).not.toBe(NESTED);
+    expect(connectState(STARTER, "root#final1", "Draft")).toEqual({ source: STARTER, edge: "" });
+  });
+
+  it("joins a start or an end to a composite state beside it", () => {
+    for (const parent of ["Edit", "Check"]) {
+      const end = addStatePiece(NESTED, { kind: "end", parent });
+      expect(end.id).toMatch(new RegExp(`^${parent}#final\\d$`));
+      const ended = connectState(end.source, parent, end.id),
+        made = stateStructure.read(ended.source).edges.find((edge) => edge.id === ended.edge)!;
+      expect(made.source).toBe(parent);
+      expect(parentOf(ended.source, made.target)).toBe(parentOf(NESTED, parent));
+      const start = addStatePiece(NESTED, { kind: "start", parent });
+      expect(start.id).toBe(`${parent}#initial`);
+      const started = connectState(start.source, start.id, parent);
+      expect(transitions(started.source)[Number(started.edge.slice(1)) - 1]).toBe(
+        `${parentOf(NESTED, parent) ?? "root"}#initial>${parent}`,
+      );
+    }
+    expect(changed(NESTED, connectStates(NESTED, "Edit", "Edit#final1"))).toEqual({
+      lost: [],
+      added: ["    Edit --> [*]"],
+    });
+    expect(changed(NESTED, connectStates(NESTED, "Check#initial", "Check"))).toEqual({
+      lost: [],
+      added: ["        [*] --> Check"],
+    });
+    // A composite state in regions: the pseudo-state of any of its regions.
+    const regions = addStatePiece(REGIONS, { kind: "start", parent: "Active" });
+    expect(regions.id).toBe("Active#region2#initial");
+    // `[*] --> Active` is there already.
+    expect(connectState(REGIONS, regions.id, "Active")).toEqual({ source: REGIONS, edge: "t1" });
+    const twice = connectState(
+      REGIONS.replace("\n  Active --> [*]", ""),
+      "Active",
+      "Active#final9",
+    );
+    expect(twice.source.endsWith("  }\n  Active --> [*]")).toBe(true);
+  });
+
+  it("says which parts a new piece joins", () => {
+    const joinsTo = (kind: string) =>
+      stateStructure.pieces.find((piece) => piece.kind === kind)!.joinsTo;
+    for (const kind of ["state", "choice", "fork", "join", "start", "end", "note"]) {
+      expect(joinsTo(kind), kind).toEqual(expect.arrayContaining(["state", "composite", "choice"]));
+      expect(joinsTo(kind), kind).not.toContain("note");
+      expect(joinsTo(kind), kind).not.toContain("region");
+      expect(joinsTo(kind), kind).not.toContain("end");
+    }
+    expect(joinsTo("state")).toContain("start");
+    expect(joinsTo("start")).not.toContain("start");
+    // A note changes its state only when it is one end of a connection.
+    const added = addStatePiece(NESTED, { kind: "state", parent: null });
+    expect(parseStateDiagram(added.source).notes).toEqual(parseStateDiagram(NESTED).notes);
+  });
+
+  it("labels the parts that have no name by what they are", () => {
+    const labels = (source: string) =>
+      Object.fromEntries(stateStructure.read(source).nodes.map((node) => [node.id, node.label]));
+    expect(labels(NESTED)).toMatchObject({
+      "root#initial": "Start",
+      "Edit#initial": "Start",
+      "Edit#final1": "End",
+      "root#final2": "End",
+      pick: "Choice",
+      Edit: "Edit Mode",
+      Idle: "Idle",
+    });
+    expect(labels(REGIONS)).toMatchObject({
+      "Active#region1": "Region 1",
+      "Active#region2": "Region 2",
+    });
+    const bars = labels("stateDiagram-v2\n  state f <<fork>>\n  state j <<join>>\n  f --> j");
+    expect(bars).toEqual({ f: "Fork", j: "Join" });
+    for (const source of [NESTED, REGIONS, ...STATE_EXAMPLES.map(([, text]) => text)])
+      for (const node of stateStructure.read(source).nodes) {
+        expect(node.label, node.id).not.toMatch(/#|^$/);
+        if (!["state", "composite", "note"].includes(node.kind))
+          expect(stateStructure.rename(source, node.id, "Named")).toBe(source);
+      }
+  });
+
+  it("puts new statements before the styling a source closes with", () => {
+    const styled = `${STARTER}\n\n  %% colours\n  classDef hot fill:#f96\n  class Draft hot\n`;
+    const state = addStatePiece(styled, { kind: "state", label: "Paid" });
+    expect(state.source).toBe(
+      `${STARTER}\n  Paid\n\n  %% colours\n  classDef hot fill:#f96\n  class Draft hot\n`,
+    );
+    expect(connectStates(styled, "Approved", "Draft")).toContain(
+      "  Approved --> [*]\n  Approved --> Draft\n\n  %% colours\n",
+    );
+    expect(addStatePiece(styled, { kind: "composite", label: "Review" }).source).toContain(
+      "  state Review {\n  }\n\n  %% colours\n",
+    );
+    // Styling in the middle stays where it is, and a source of styling alone takes lines after it.
+    const middle = "stateDiagram-v2\n  classDef hot fill:#f96\n  A --> B";
+    expect(addStatePiece(middle, { kind: "state", label: "C" }).source).toBe(`${middle}\n  C`);
+    const only = "stateDiagram-v2\n  classDef hot fill:#f96";
+    expect(addStatePiece(only, { kind: "state", label: "C" }).source).toBe(`${only}\n  C`);
+  });
+
+  it("reads and writes the description of a state", () => {
+    const described = `stateDiagram-v2\n  state "Waiting" as W\n  W : entry / start\n  W --> X\n  W : exit / stop\n  X : stays`;
+    expect(stateDescription(described, "W")).toBe("entry / start\nexit / stop");
+    expect(stateDescription(described, "nothing")).toBe("");
+    expect(stateDescription(STARTER, "Draft")).toBe("");
+    expect(setStateDescription(described, "W", "do / wait\n\n  a: b ")).toBe(
+      `stateDiagram-v2\n  state "Waiting" as W\n  W : do / wait\n  W : a: b\n  W --> X\n  X : stays`,
+    );
+    expect(setStateDescription(described, "W", "")).toBe(
+      `stateDiagram-v2\n  state "Waiting" as W\n  W --> X\n  X : stays`,
+    );
+    // A state without one gets it after the line that names it first.
+    const draft = setStateDescription(STARTER, "Draft", "entry / open form");
+    expect(changed(STARTER, draft)).toEqual({ lost: [], added: ["  Draft : entry / open form"] });
+    expect(draft.split("\n")[2]).toBe("  Draft : entry / open form");
+    expect(stateDescription(draft, "Draft")).toBe("entry / open form");
+    // The description that names a state first leaves the state where it is.
+    const inner = "stateDiagram-v2\n  state A {\n    B : busy\n  }\n  A --> B";
+    expect(setStateDescription(inner, "B", "")).toBe(
+      "stateDiagram-v2\n  state A {\n    B\n  }\n  A --> B",
+    );
+    for (const text of ['say "hi" <b>now</b>', "a < b", "x --> y"])
+      expect(stateDescription(setStateDescription(STARTER, "Draft", text), "Draft")).toBe(text);
+    // Composite states and what is no state have none.
+    expect(setStateDescription(NESTED, "Edit", "x")).toBe(NESTED);
+    expect(setStateDescription(NESTED, "pick", "x")).toBe(NESTED);
+    expect(setStateDescription(NESTED, "root#initial", "x")).toBe(NESTED);
+  });
+
+  it("puts a note on the other side", () => {
+    expect(changed(NESTED, setNoteSide(NESTED, "note1", "left"))).toEqual({
+      lost: ["    note right of Idle : waits"],
+      added: ["    note left of Idle : waits"],
+    });
+    const block = setNoteSide(NESTED, "note2", "right");
+    expect(changed(NESTED, block)).toEqual({
+      lost: ["    note left of Done"],
+      added: ["    note right of Done"],
+    });
+    expect(parseStateDiagram(block).notes[1]).toMatchObject({ side: "right", text: "all<br>over" });
+    expect(setNoteSide(NESTED, "note1", "right")).toBe(NESTED);
+    expect(setNoteSide(NESTED, "note9", "left")).toBe(NESTED);
+  });
+
+  it("duplicates a state beside it", () => {
+    const copy = duplicateState(STARTER, "Draft");
+    expect(copy).toEqual({ id: "Draft2", source: `${STARTER}\n  Draft2` });
+    expect(duplicateState(copy.source, "Draft").id).toBe("Draft3");
+    const described = `stateDiagram-v2\n  state "Waiting" as W1\n  W1 : entry / start\n  W1 --> X`;
+    expect(duplicateState(described, "W1")).toEqual({
+      id: "W2",
+      source: `${described}\n  state "Waiting" as W2\n  W2 : entry / start`,
+    });
+    const inner = duplicateState(NESTED, "Saved");
+    expect(parentOf(inner.source, inner.id)).toBe("Edit");
+    expect(changed(NESTED, inner.source)).toEqual({ lost: [], added: ["        Saved2"] });
+    expect(duplicateState(NESTED, "pick").source).toContain("    state pick2 <<choice>>\n");
+    // A composite state with what it holds, under new ids.
+    const edit = duplicateState(NESTED, "Edit");
+    expect(edit.id).toBe("Edit2");
+    expect(changed(NESTED, edit.source).lost).toEqual([]);
+    expect(changed(NESTED, edit.source).added).toEqual([
+      '    state "Edit Mode" as Edit2 {',
+      "        [*] --> Unsaved2",
+      "        Unsaved2 --> Saved2 : apply",
+      "        state Check2 {",
+      "            [*] --> Inner2",
+      "        Saved2 --> [*]",
+    ]);
+    const read = parseStateDiagram(edit.source);
+    expect(read.states.get("Edit2")).toMatchObject({ label: "Edit Mode", parent: null });
+    expect(read.states.get("Inner2")!.parent).toBe("Check2");
+    expect(read.states.get("Inner")!.parent).toBe("Check");
+    expect(read.transitions).toHaveLength(parseStateDiagram(NESTED).transitions.length + 4);
+    const active = duplicateState(REGIONS, "Active");
+    expect(parentOf(active.source, "CapsOn2")).toBe("Active2#region4");
+    for (const id of ["root#initial", "Active#region1", "note1", "nothing"])
+      expect(duplicateState(REGIONS, id)).toEqual({ source: REGIONS, id: "" });
+  });
+
+  it("moves a state into a composite state and out of it", () => {
+    const moved = moveStateInto(NESTED, "Idle", "Check");
+    expect(parentOf(moved, "Idle")).toBe("Check");
+    expect(transitions(moved).toSorted()).toEqual(transitions(NESTED).toSorted());
+    const out = moveStateInto(NESTED, "Inner", null);
+    expect(parentOf(out, "Inner")).toBeNull();
+    expect(out.split("\n").slice(4, 6)).toEqual(["    %% the outer machine", "    Inner"]);
+    expect(changed(NESTED, out)).toEqual({ lost: [], added: ["    Inner"] });
+    expect(
+      moveStateInto(out, "Inner", "Check")
+        .split("\n")
+        .filter((line) => line.trim() === "Inner"),
+    ).toHaveLength(1);
+    // A composite state moves with what it holds.
+    const check = moveStateInto(NESTED, "Check", null);
+    expect(parentOf(check, "Check")).toBeNull();
+    expect(parentOf(check, "Inner")).toBe("Check");
+    expect(check).toContain("\n    state Check {\n        [*] --> Inner\n    }\n");
+    expect(check.split("\n")).toHaveLength(NESTED.split("\n").length);
+    // A state named by its declaration takes the declaration along.
+    const declared = `stateDiagram-v2\n  state "Waiting" as W\n  W : entry / start\n  state Box {\n    A --> B\n  }\n  W --> A`;
+    expect(moveStateInto(declared, "W", "Box")).toBe(
+      `stateDiagram-v2\n  state Box {\n    A --> B\n    state "Waiting" as W\n    W : entry / start\n  }\n  W --> A`,
+    );
+    // Into a region, and into a plain state, which becomes a composite state.
+    const region = moveStateInto(`${REGIONS}\n  Off --> Active`, "Off", "Active#region1");
+    expect(parentOf(region, "Off")).toBe("Active#region1");
+    expect(parentOf(moveStateInto(`${REGIONS}\n  Off --> Active`, "Off", "Active"), "Off")).toBe(
+      "Active#region2",
+    );
+    const plain = moveStateInto(STARTER, "Approved", "Submitted");
+    expect(parentOf(plain, "Approved")).toBe("Submitted");
+    // Where it is already, into itself or what it holds, or what holds nothing.
+    expect(moveStateInto(NESTED, "Inner", "Check")).toBe(NESTED);
+    expect(moveStateInto(NESTED, "Idle", null)).toBe(NESTED);
+    expect(moveStateInto(NESTED, "Edit", "Check")).toBe(NESTED);
+    expect(moveStateInto(NESTED, "Edit", "Edit")).toBe(NESTED);
+    expect(moveStateInto(NESTED, "Idle", "pick")).toBe(NESTED);
+    expect(moveStateInto(NESTED, "root#initial", "Edit")).toBe(NESTED);
+    expect(moveStateInto(NESTED, "note1", "Edit")).toBe(NESTED);
+  });
+
+  it("ungroups a composite state and keeps its states", () => {
+    const flat = ungroupComposite(NESTED, "Check");
+    expect(changed(NESTED, flat)).toEqual({
+      lost: ["        state Check {", "            [*] --> Inner", "        }"],
+      added: ["        [*] --> Inner"],
+    });
+    expect(parentOf(flat, "Inner")).toBe("Edit");
+    const edit = ungroupComposite(NESTED, "Edit");
+    const read = parseStateDiagram(edit);
+    expect(read.states.has("Edit")).toBe(false);
+    for (const id of ["Unsaved", "Saved", "Check"]) expect(read.states.get(id)!.parent).toBeNull();
+    expect(read.states.get("Inner")!.parent).toBe("Check");
+    expect(edit).toContain(
+      "    %% the outer machine\n    [*] --> Unsaved\n    Unsaved --> Saved : apply\n\n    state Check {\n        [*] --> Inner\n    }\n    Saved --> [*]\n    state pick <<choice>>\n",
+    );
+    // Its transitions go with it.
+    expect(edit).not.toContain("Idle --> Edit");
+    expect(edit).not.toContain("Edit --> pick");
+    const regions = ungroupComposite(REGIONS, "Active");
+    expect(regions).toBe(
+      `stateDiagram-v2\n  [*] --> NumOff\n  NumOff --> NumOn : press\n  [*] --> CapsOff\n  CapsOff --> CapsOn : press\n  CapsOn --> [*]`,
+    );
+    expect(ungroupComposite(NESTED, "Idle")).toBe(NESTED);
+    expect(ungroupComposite(NESTED, "nothing")).toBe(NESTED);
+    expect(ungroupComposite(REGIONS, "Active#region1")).toBe(REGIONS);
+  });
+
+  it("reverses a transition", () => {
+    expect(changed(STARTER, reverseTransition(STARTER, "t2"))).toEqual({
+      lost: ["  Draft --> Submitted : submit"],
+      added: ["  Submitted --> Draft : submit"],
+    });
+    // An initial state becomes a final state, and the other way round.
+    expect(reverseTransition(STARTER, "t1")).toContain("\n  Draft --> [*]\n");
+    expect(transitions(reverseTransition(STARTER, "t5")).at(-1)).toBe("root#initial>Approved");
+    expect(reverseTransition(NESTED, "t6")).toContain("    Edit --> Idle: open\n");
+    expect(reverseTransition("stateDiagram-v2\n  A:::hot-->B:::cold:go", "t1")).toBe(
+      "stateDiagram-v2\n  B:::cold-->A:::hot:go",
+    );
+    expect(reverseTransition(connectStates(STARTER, "Draft", "Draft"), "t6")).toBe(
+      connectStates(STARTER, "Draft", "Draft"),
+    );
+    expect(reverseTransition(STARTER, "t9")).toBe(STARTER);
+  });
+
+  it("keeps every example readable, with the ids of the scene", async () => {
+    for (const [name, source] of STATE_EXAMPLES) {
+      const { nodes, edges } = stateStructure.read(source),
+        real = nodes.filter((node) =>
+          ["state", "composite", "choice", "fork", "join"].includes(node.kind),
+        ),
+        homes = (text: string) =>
+          Object.fromEntries(
+            stateStructure
+              .read(text)
+              .nodes.filter((node) => real.some((item) => item.id === node.id))
+              .map((node) => [node.id, node.parent?.replace(/#region\d+$/, "") ?? null]),
+          );
+      const drawn = async (text: string, hint: string) => {
+        const read = stateStructure.read(text),
+          { shapes, wires } = await sceneIds(text);
+        for (const node of read.nodes)
+          expect(shapes.has(node.id), `${name} ${hint} ${node.id}`).toBe(true);
+        for (const edge of read.edges)
+          expect(wires.has(edge.id), `${name} ${hint} ${edge.id}`).toBe(true);
+      };
+      /** Lines are only added: every line of the source is still there, in its order. */
+      const keeps = (text: string, hint: string) => {
+        const now = text.split("\n");
+        let at = 0;
+        for (const line of source.split("\n")) {
+          at = now.indexOf(line, at) + 1;
+          expect(at, `${name} ${hint}: ${line}`).toBeGreaterThan(0);
+        }
+      };
+      for (const node of real) {
+        // A new state at this one, joined and named.
+        const added = stateStructure.add(source, { kind: "state", parent: node.parent }),
+          joined = connectState(added.source, node.id, added.id),
+          named = retitleState(joined.source, added.id, "Fresh");
+        expect(named.id, `${name} ${node.id}`).toBe("Fresh");
+        expect(named.source).not.toContain("state1");
+        expect(
+          stateStructure.read(named.source).edges.find((edge) => edge.id === joined.edge),
+        ).toMatchObject({ source: node.id, target: "Fresh" });
+        keeps(named.source, `add at ${node.id}`);
+        // A second connection of the same kind changes nothing.
+        expect(connectState(joined.source, node.id, added.id)).toEqual({
+          source: joined.source,
+          edge: joined.edge,
+        });
+        // A note, an end and a start at it.
+        const note = stateStructure.add(source, { kind: "note", parent: node.id });
+        expect(
+          parseStateDiagram(note.source).notes.find((item) => item.id === note.id)!.target,
+        ).toBe(node.id);
+        keeps(note.source, `note at ${node.id}`);
+        expect(homes(note.source)).toEqual(homes(source));
+        for (const kind of ["start", "end"] as const) {
+          const made = stateStructure.add(source, {
+              kind,
+              parent: node.group ? node.id : node.parent,
+            }),
+            linked =
+              kind === "start"
+                ? connectState(source, made.id, node.id)
+                : connectState(source, node.id, made.id);
+          expect(linked.edge, `${name} ${kind} ${node.id}`).not.toBe("");
+          const edge = stateStructure
+            .read(linked.source)
+            .edges.find((item) => item.id === linked.edge)!;
+          expect(kind === "start" ? edge.target : edge.source).toBe(node.id);
+          expect(homes(linked.source)).toEqual(homes(source));
+          if (linked.source !== source) keeps(linked.source, `${kind} at ${node.id}`);
+        }
+        const copy = duplicateState(source, node.id);
+        expect(copy.id, `${name} ${node.id}`).not.toBe("");
+        keeps(copy.source, `copy of ${node.id}`);
+        expect(homes(copy.source)).toEqual(homes(source));
+        const renamed = renameStateId(source, node.id, "Zz9");
+        expect(stateStructure.read(renamed).edges).toHaveLength(edges.length);
+        expect(stateStructure.read(renamed).nodes).toHaveLength(nodes.length);
+        for (const text of [named.source, note.source, copy.source, renamed])
+          await drawn(text, node.id);
+        if (node.kind === "composite") {
+          const flat = ungroupComposite(source, node.id);
+          expect(parseStateDiagram(flat).states.has(node.id), `${name} ${node.id}`).toBe(false);
+          await drawn(flat, `ungroup ${node.id}`);
+        }
+        for (const into of [
+          null,
+          ...real.filter((item) => item.kind === "composite").map((item) => item.id),
+        ]) {
+          const moved = moveStateInto(source, node.id, into);
+          if (moved === source) continue;
+          expect(homes(moved)[node.id], `${name} ${node.id} into ${into}`).toBe(into);
+          expect(stateStructure.read(moved).edges).toHaveLength(edges.length);
+          await drawn(moved, `move ${node.id}`);
+        }
+      }
+      for (const edge of edges) {
+        const turned = reverseTransition(source, edge.id);
+        expect(() => parseUml(turned), `${name} ${edge.id}`).not.toThrow();
+        expect(turned.split("\n")).toHaveLength(source.split("\n").length);
+        expect(parseStateDiagram(turned).transitions).toHaveLength(edges.length);
+      }
+    }
+  }, 120_000);
 });
 
 describe("a state diagram as a structure", () => {

@@ -70,8 +70,9 @@ package needs one of the others, or the command line, which runs from the bundle
 `dist/editor`). It edits every diagram type on a canvas: TAM block diagrams with elements placed by
 hand, and the UML types (class, use case, activity with and without lanes, state machine, sequence)
 by their structure, with the layout automatic.
-*File ▸ New* opens a chooser with a card for each type and its examples; the chip beside the title
-says which type is on show.
+A first visit shows a sample block diagram and a note that says what to try. *File ▸ New* opens a
+chooser with a card for each type, and below the cards what to start from (an empty diagram, a
+recent one, an example) beside a picture of it; the chip beside the title says which type is on show.
 
 In a block diagram, shapes are dragged from the Shapes tab onto the canvas, moved, resized, nested by
 dropping them into a container, and connected by dragging from the dots beside an element; the
@@ -99,9 +100,20 @@ The window has a menu bar (File, Edit, View, Arrange, Help) with the document's 
 the pointer tools, a left panel (Shapes and Outline), a right panel (Properties above Source, with a
 splitter between) and a status bar with a hint, the problems of the source, the selection, the
 layout mode, snapping and the zoom. The panels are resized by their inner edges and lie over the
-canvas in a small window. A source with an error keeps the last valid picture on show, dimmed,
-under a banner that leads to the line. Replacing the diagram (new, open, an example) is a step Undo
-takes back, and asks first when there are unsaved changes.
+canvas in a small window. Alt or F10 puts the keyboard on the menu bar, a letter goes to the row
+that starts with it, and Ctrl+K lists every command of the menus to pick one by typing. A source
+with an error keeps the last valid picture on show, dimmed, under a banner that leads to the line.
+Replacing the diagram (new, open, a recent one, an example) is a step Undo takes back with the view
+fitted again, and asks first when there are unsaved changes, with the offer to save them.
+
+*File ▸ Open* takes a `.tam` or `.mmd` source, or a Markdown text, of which it opens the first
+`tam` or `mermaid` fence; a file without a diagram is refused and the diagram on show stays.
+*Save* writes a block diagram as `.tam` and a Mermaid type as `.mmd`, named after the file it was
+opened from or after its title, in whatever script that is written. Where the browser has file
+pickers (Chromium), Save writes back to the opened file and *Save as* picks another; elsewhere
+both download. *Export* opens a dialog with a preview: SVG or PNG, the PNG at one to three pixels
+per unit, on white, on nothing, or in the colors of the editor's theme. A picture is exported in
+the light colors unless the theme is asked for, so one made in the dark theme reads on a white page.
 
 The document is the TAM source, shown beside the canvas and editable there: every gesture is an edit
 of that text, and every other line stays as its author wrote it. A source without positions is laid
@@ -240,7 +252,10 @@ api -- reads/writes --> cart
 | `src/tam-geometry.ts`        | TAM layout stage 2: ELK's result read back, then the geometry passes                 |
 | `src/tam-scene.ts`           | TAM layout stage 3: the scene drawn from the final geometry                          |
 | `src/tam-placed.ts`          | TAM layout by hand: element boxes from the positions in the source (`@x,y`)          |
-| `src/tam-placed-wires.ts`    | TAM layout by hand: wires between placed elements, channel circles and labels        |
+| `src/tam-placed-wires.ts`    | TAM layout by hand: the wires between placed elements, from line to marks            |
+| `src/tam-placed-field.ts`    | TAM layout by hand: what stands in a wire's way and what a line through it costs     |
+| `src/tam-placed-lines.ts`    | TAM layout by hand: the simple lines between two elements                            |
+| `src/tam-placed-marks.ts`    | TAM layout by hand: where a connection's circle and label stand on its wire          |
 | `src/tam-placed-detour.ts`   | TAM layout by hand: a wire's way around the elements between its ends                |
 | `src/tam-edit.ts`            | Edits of a TAM source as text: place, add, change, connect, remove, nest, copy       |
 | `src/tam-pin.ts`             | Positions for every element from a layout                                            |
@@ -323,6 +338,7 @@ api -- reads/writes --> cart
 | `editor/structures.ts`       | The `Structure` of each type edited by its structure, and the drawings of its pieces |
 | `editor/icons.ts`            | The editor's icons as SVG                                                            |
 | `editor/main.ts`             | The page: theme, files, export, autosave                                             |
+| `editor/files.ts`            | File names, the diagram in an opened file, export backgrounds, recent diagrams       |
 | `rolldown.config.mjs`        | The build: bundles `cli/bin.ts` into `dist/cli.js`, the package's `bin`              |
 | `test/`                      | Tests; `tam.fuzz.test.ts` is a stress run gated by `HARNESS=1`                       |
 

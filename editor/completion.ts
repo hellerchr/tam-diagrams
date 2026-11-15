@@ -90,13 +90,39 @@ export const option = (
   ...(apply ? { apply } : {}),
 });
 
-/** The directions a diagram can be laid out in. */
-export const DIRECTIONS: Completion[] = [
-  option("TB", "constant", "top to bottom"),
-  option("LR", "constant", "left to right"),
-  option("BT", "constant", "bottom to top"),
-  option("RL", "constant", "right to left"),
-];
+/** Options in the order given, not of the alphabet: the first is the best, each next one a step below it. */
+export const ranked = (options: Completion[], top: number): Completion[] =>
+  options.map((item, index) => ({ ...item, boost: Math.max(top - index, -99) }));
+
+/** The elements of a source as options, in the order the source declares them, below the statements of its syntax. */
+export const inOrder = (options: Completion[]): Completion[] =>
+  options.map((item, index) => ({ ...item, boost: -Math.min(index, 60) }));
+
+/**
+ * An option that writes a text with fields to fill in (`${name}`): Tab goes from field to field,
+ * and from the last one to the end of the text, unless the text ends with that field. A text
+ * without fields is written as it is, with the cursor behind it.
+ */
+export function filled(template: string, completion: Completion): Completion {
+  if (!template.includes("${"))
+    return template === completion.label ? completion : { ...completion, apply: template };
+  // A stop right behind a field would take in what is typed at the end of that field.
+  return snippetCompletion(
+    /\$\{[^{}]*\}$/.test(template) ? template : `${template}\${}`,
+    completion,
+  );
+}
+
+/** The directions a diagram can be laid out in, the usual ones first. */
+export const DIRECTIONS: Completion[] = ranked(
+  [
+    option("TB", "constant", "top to bottom"),
+    option("LR", "constant", "left to right"),
+    option("BT", "constant", "bottom to top"),
+    option("RL", "constant", "right to left"),
+  ],
+  9,
+);
 
 /** The completions at the cursor of a block diagram source; null where nothing is to offer. */
 export function completeTam(context: CompletionContext, known: Known[]): CompletionResult | null {
@@ -113,19 +139,24 @@ export function completeTam(context: CompletionContext, known: Known[]): Complet
   // The start of a line: a declaration, a header line, or the element a connection starts at.
   if ((match = before.match(/^(\w*)$/))) {
     if (!match[1] && !context.explicit) return null;
+    // The statements of the notation first, then the elements in the order of the source.
     return result(at(match[1].length), [
-      ...ELEMENT_KINDS.map((kind) =>
-        snippetCompletion(kind === "group" ? "group {\n\t${}\n}" : `${kind} \${id}[\${Name}]`, {
-          label: kind,
-          type: `declare-${kind}`,
-          detail: ABOUT[kind],
-          boost: 2,
-        }),
+      ...ranked(
+        [
+          ...ELEMENT_KINDS.map((kind) =>
+            filled(kind === "group" ? "group {\n\t${}\n}" : `${kind} \${id}[\${Name}]`, {
+              label: kind,
+              type: `declare-${kind}`,
+              detail: ABOUT[kind],
+            }),
+          ),
+          option("title", "keyword", "the diagram's title", "title "),
+          option("direction", "keyword", "TB, LR, BT or RL", "direction "),
+          option("level", "keyword", "conceptual or design", "level "),
+        ],
+        30,
       ),
-      option("title", "keyword", "the diagram's title", "title "),
-      option("direction", "keyword", "TB, LR, BT or RL", "direction "),
-      option("level", "keyword", "conceptual or design", "level "),
-      ...known.map(element),
+      ...inOrder(known.map(element)),
     ]);
   }
   if ((match = before.match(/^direction\s+(\w*)$/))) return result(at(match[1].length), DIRECTIONS);
@@ -148,31 +179,36 @@ export function completeTam(context: CompletionContext, known: Known[]): Complet
     const { kind } = byId.get(match[1].split(/\s*&\s*/)[0])!;
     return result(
       at(match[2].length),
-      CONNECTIONS.filter((item) => item.from(kind)).map((item, index) =>
-        snippetCompletion(item.text, {
-          label: item.text.replace(/\$\{(\w+)\}/g, "$1").trim(),
-          type: "connection",
-          detail: item.about,
-          // In the order of the notation, not of the alphabet.
-          boost: 50 - index,
-        }),
+      // In the order of the notation, not of the alphabet.
+      ranked(
+        CONNECTIONS.filter((item) => item.from(kind)).map((item) =>
+          filled(item.text, {
+            label: item.text.replace(/\$\{(\w+)\}/g, "$1").trim(),
+            type: "connection",
+            detail: item.about,
+          }),
+        ),
+        50,
       ),
-      /^[-<.\w/ ]*$/,
+      // Behind a whole arrow the elements it reaches are offered instead.
+      /^(?!.*(-->|---|\.->)\s)[-<.\w/ ]*$/,
     );
   }
   const source = before.match(/^(\w+)/)?.[1],
-    others = known.filter((item) => item.id !== source);
+    others = known.filter((item) => item.id !== source),
+    reached = (can: (kind: string) => boolean) =>
+      inOrder(others.filter((item) => can(item.kind)).map(element));
   // After the arrow: the elements the connection reaches.
   if ((match = before.match(/(?:--|<--)\s*([^-]*?)\s*(?:-->|---)\s*(?:\w+\s*&\s*)*(\w*)$/))) {
     const can = reaches(match[1].trim().toLowerCase());
-    return result(at(match[2].length), others.filter((item) => can(item.kind)).map(element));
+    return result(at(match[2].length), reached(can));
   }
   if ((match = before.match(/-\.\s*(\w+)\s*\.->\s*(?:\w+\s*&\s*)*(\w*)$/))) {
     const can = reaches(match[1].toLowerCase());
-    return result(at(match[2].length), others.filter((item) => can(item.kind)).map(element));
+    return result(at(match[2].length), reached(can));
   }
   if ((match = before.match(/^\w+\s+---\s*(\w*)$/)))
-    return result(at(match[1].length), others.filter((item) => talks(item.kind)).map(element));
+    return result(at(match[1].length), reached(talks));
   // Inside a connection: its word.
   if ((match = before.match(/(?:--|<--)\s+([\w/ ]*)$/))) {
     const kind = source ? byId.get(source)?.kind : undefined;
@@ -181,19 +217,24 @@ export function completeTam(context: CompletionContext, known: Known[]): Complet
     ).map((item) => item.text.replace(/^-- /, "").replace(/\s*\$\{IName\}/, ""));
     return result(
       at(match[1].length),
-      words
-        .map((text, index) => option(text.replace(/\s*-->\s*$/, ""), "connection", undefined, text))
-        .map((item, index) => ({ ...item, boost: 50 - index })),
+      ranked(
+        words.map((text) => option(text.replace(/\s*-->\s*$/, ""), "connection", undefined, text)),
+        50,
+      ),
       /^[\w/ ]*$/,
     );
   }
   if ((match = before.match(/-\.\s*(\w*)$/)))
     return result(
       at(match[1].length),
-      ["use", "import", "create", "generate", "pointer"].map((word) =>
-        option(word, "connection", undefined, `${word} .-> `),
+      ranked(
+        ["use", "import", "create", "generate", "pointer"].map((word) =>
+          option(word, "connection", undefined, `${word} .-> `),
+        ),
+        9,
       ),
     );
-  if ((match = before.match(/&\s*(\w*)$/))) return result(at(match[1].length), others.map(element));
+  if ((match = before.match(/&\s*(\w*)$/)))
+    return result(at(match[1].length), inOrder(others.map(element)));
   return null;
 }

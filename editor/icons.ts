@@ -15,6 +15,20 @@ export const ICONS = {
   "uml-compose": svg(
     '<path d="M9.500 10.500L17 3"/><path d="M3 17l2-5.500 4.500 1L7.500 17z" fill="currentColor"/>',
   ),
+  "uml-aggregate": svg(
+    '<path d="M9.500 10.500L17 3"/><path d="M3 17l2-5.500 4.500 1L7.500 17z" fill="var(--panel, #fff)"/>',
+  ),
+  "uml-realize": svg(
+    '<path d="M3 16L11.500 7.500" stroke-dasharray="3 2.500"/><path d="M11 4l5 0 0 5z" fill="var(--panel, #fff)"/>',
+  ),
+  "uml-link": svg('<path d="M3 16L16 4"/>'),
+  "uml-dashed-link": svg('<path d="M3 16L16 4" stroke-dasharray="3 2.500"/>'),
+  "uml-abstract": svg(
+    '<rect x="3" y="3.500" width="14" height="13" stroke-dasharray="3 2"/><path d="M3 8.500h14"/>',
+  ),
+  "uml-enum": svg(
+    '<rect x="3" y="3.500" width="14" height="13"/><path d="M3 8.500h14M6 11.500h.100M6 14h.100M8.500 11.500h5.500M8.500 14h5.500"/>',
+  ),
   "uml-dashed": svg(
     '<path d="M3 16L16 4" stroke-dasharray="3 2.500"/><path d="M10.500 4H16v5.500"/>',
   ),

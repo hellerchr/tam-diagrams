@@ -436,7 +436,7 @@ describe("completing a sequence diagram", () => {
     expect(offered(`${source}  U->>S`)).toEqual(participants);
     expect(offered(`${source}  Shop-->>+`)).toContain("-->>");
     expect(offered(`${source}  Shop-->>+ `)).toEqual(participants);
-    expect(offered(`${source}  Shop-)A`)).toEqual(participants);
+    expect(offered(`${source}  Shop-)Sh`)).toEqual(participants);
     expect(offered(`${source}  U->>Shop: hel`)).toEqual([]);
     expect(offered(`${source}  note `)).toEqual(["over", "left of", "right of"]);
     expect(offered(`${source}  note over `)).toEqual(participants);

@@ -3,8 +3,32 @@
 import type { Box, Point } from "../src/scene.ts";
 import { svgUrl } from "../src/index.ts";
 
-/** Fitting a small diagram enlarges it no further than FIT_ZOOM. */
-const FIT_ZOOM = 1.5;
+/** Fitting a small diagram enlarges it no further than FIT_ZOOM: its natural size. */
+const FIT_ZOOM = 1;
+
+/** The zooms a step in or out stops at. */
+export const ZOOM_LEVELS = [0.1, 0.25, 0.33, 0.5, 0.67, 0.75, 1, 1.25, 1.5, 2, 3, 4, 6, 8];
+
+/** The most one wheel event zooms by. */
+const WHEEL_STEP = 1.2;
+
+/**
+ * The factor a wheel event zooms by. A pinch on a trackpad comes as many small deltas, which zoom
+ * smoothly; a notch of a mouse wheel is one large delta, which zooms by WHEEL_STEP and no more.
+ */
+export function wheelZoom(deltaY: number, deltaMode = 0): number {
+  // Lines and pages as the pixels they scroll.
+  const pixels = deltaY * (deltaMode === 1 ? 16 : deltaMode === 2 ? 400 : 1);
+  return Math.min(WHEEL_STEP, Math.max(1 / WHEEL_STEP, Math.exp(-pixels * 0.01)));
+}
+
+/** The level a step in (1) or out (-1) from a zoom leads to: the next of ZOOM_LEVELS on that side. */
+export function zoomLevel(zoom: number, direction: 1 | -1): number {
+  // A zoom within a hundredth of a level is on it.
+  const above = ZOOM_LEVELS.find((level) => level > zoom * 1.01),
+    below = ZOOM_LEVELS.findLast((level) => level < zoom / 1.01);
+  return (direction > 0 ? above : below) ?? zoom;
+}
 
 /** The zoom range, and the grid dots' distance in diagram coordinates. */
 const MIN_ZOOM = 0.1,
@@ -33,6 +57,8 @@ export class View {
   private readonly back: HTMLCanvasElement;
   private loading = 0;
   private pending = false;
+  /** The box the view was fitted to last, with the viewport that gave: a canvas that changes its size fits it again while the viewport is still that one. */
+  private fitted: { box: Box; margin: number; zoom: number; origin: Point } | undefined;
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
@@ -41,7 +67,28 @@ export class View {
     this.back = document.createElement("canvas");
     this.back.className = "layer";
     canvas.before(this.back);
-    new ResizeObserver(() => this.draw()).observe(canvas);
+    new ResizeObserver(() => {
+      const { fitted } = this;
+      if (
+        fitted &&
+        fitted.zoom === this.zoom &&
+        fitted.origin.x === this.origin.x &&
+        fitted.origin.y === this.origin.y
+      )
+        this.fit(fitted.box, fitted.margin);
+      this.draw();
+    }).observe(canvas);
+    // A pinch or Ctrl with the wheel zooms about the pointer; the wheel alone is left to move the view.
+    canvas.addEventListener(
+      "wheel",
+      (event) => {
+        if (!event.ctrlKey && !event.metaKey) return;
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        this.zoomBy(wheelZoom(event.deltaY, event.deltaMode), this.pointOf(event));
+      },
+      { passive: false },
+    );
   }
 
   /** The canvas size in CSS pixels. */
@@ -113,6 +160,11 @@ export class View {
     this.changed();
   }
 
+  /** Zooms in (1) or out (-1) to the next round level. */
+  zoomStep(direction: 1 | -1) {
+    this.zoomTo(zoomLevel(this.zoom, direction));
+  }
+
   panBy(dx: number, dy: number) {
     this.origin = { x: this.origin.x + dx, y: this.origin.y + dy };
     this.changed();
@@ -132,6 +184,7 @@ export class View {
       x: width / 2 - (box.x + box.width / 2) * this.zoom,
       y: height / 2 - (box.y + box.height / 2) * this.zoom,
     };
+    this.fitted = { box, margin, zoom: this.zoom, origin: this.origin };
     this.changed();
   }
 

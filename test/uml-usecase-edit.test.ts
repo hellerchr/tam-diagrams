@@ -6,10 +6,16 @@ import { parseUseCaseDiagram } from "../src/uml-usecase.ts";
 import {
   addUseCasePiece,
   connectUseCase,
+  duplicateUsecasePart,
   labelUseCaseRelation,
+  moveUsecaseInto,
   relinkUseCase,
   removeUseCase,
   renameUseCase,
+  renameUsecaseId,
+  reverseUsecaseRelation,
+  ungroupUsecaseBoundary,
+  type UseCaseEdge,
   usecaseStructure,
 } from "../src/uml-usecase-edit.ts";
 
@@ -67,7 +73,10 @@ describe("editing a use case diagram as text", () => {
   it("adds use cases, actors, boundaries and notes", () => {
     const useCase = addUseCasePiece(SHOP, { kind: "usecase", label: "Pay" });
     expect(useCase.id).toBe("usecase1");
-    expect(useCase.source).toBe(`${SHOP}\n  usecase1(Pay)`);
+    // Outside the boundaries a use case stands before the relations.
+    expect(useCase.source).toBe(
+      SHOP.replace("  User --> browse\n", "  usecase1(Pay)\n  User --> browse\n"),
+    );
     // At a boundary a use case goes inside it, indented as the others there.
     const inside = addUseCasePiece(SHOP, { kind: "usecase", label: "Pay", parent: "shop" });
     expect(inside.source).toContain("    manage(Manage Catalog)\n    usecase1(Pay)\n  end\n");
@@ -76,40 +85,88 @@ describe("editing a use case diagram as text", () => {
     // An actor stands outside, also when added at a boundary.
     const actor = addUseCasePiece(SHOP, { kind: "actor", label: "Clerk", parent: "shop" });
     expect(actor.id).toBe("actor1");
-    expect(actor.source.endsWith("\n  actor actor1(Clerk)")).toBe(true);
+    expect(actor.source).toBe(
+      SHOP.replace("  actor Admin\n", "  actor Admin\n  actor actor1(Clerk)\n"),
+    );
     expect(element(actor.source, "actor1")).toMatchObject({ kind: "actor", boundary: null });
     const boundary = addUseCasePiece(SHOP, { kind: "boundary", label: "Bank", parent: "shop" });
     expect(boundary.id).toBe("system1");
-    expect(boundary.source.endsWith("\n  systemBoundary system1[Bank]\n  end")).toBe(true);
+    expect(boundary.source).toBe(
+      SHOP.replace("  end\n", "  end\n  systemBoundary system1[Bank]\n  end\n"),
+    );
     expect(parseUseCaseDiagram(boundary.source).boundaries.get("system1")!.label).toBe("Bank");
-    // Ids stay fresh, and the blank line at the end stays the end.
+    // Ids stay fresh, and each stands after the last of its kind.
     const second = addUseCasePiece(useCase.source, { kind: "usecase" });
     expect(second.id).toBe("usecase2");
+    expect(second.source).toContain("  usecase1(Pay)\n  usecase2(Use case)\n  User --> browse\n");
     const mixed = addUseCasePiece(MIXED, { kind: "actor" });
-    expect(mixed.source.endsWith("  style pay fill:#eee\n  actor actor1(Actor)\n")).toBe(true);
+    expect(mixed.source).toContain('bot("Robot") <<system>>\n  actor actor1(Actor)\n\n  %% what');
+    expect(changed(MIXED, mixed.source)).toEqual([]);
+    // Where there is neither its kind nor a relation, at the end; the blank line there stays the end.
+    expect(addUseCasePiece("usecase-beta\n  a(A)\n", { kind: "actor" }).source).toBe(
+      "usecase-beta\n  a(A)\n  actor actor1(Actor)\n",
+    );
+    expect(
+      addUseCasePiece("usecase-beta\n  actor A\n  %% uses\n  A --> b", { kind: "usecase" }).source,
+    ).toBe("usecase-beta\n  actor A\n  usecase1(Use case)\n  %% uses\n  A --> b");
     // In a boundary whose lines are indented deeper, so is the new one.
     expect(addUseCasePiece(MIXED, { kind: "usecase", parent: "Club" }).source).toContain(
       "      pay[Pay fee]\n      usecase1(Use case)\n  end",
     );
   });
 
-  it("adds a note to the last element, of the boundary when given", () => {
-    const note = addUseCasePiece(SHOP, { kind: "note", label: 'Say "hi"' });
+  it("adds a note for the element it is added at", () => {
+    const note = addUseCasePiece(SHOP, { kind: "note", label: 'Say "hi"', parent: "order" });
     expect(note.id).toBe("note1");
-    expect(note.source.endsWith('\n  note for manage "Say #quot;hi#quot;"')).toBe(true);
+    expect(note.source).toBe(`${SHOP}\n  note for order "Say #quot;hi#quot;"`);
     expect(parseUseCaseDiagram(note.source).notes[0]).toMatchObject({
-      target: "manage",
+      target: "order",
       text: 'Say "hi"',
     });
-    expect(addUseCasePiece(MIXED, { kind: "note", parent: "Club" }).id).toBe("note2");
-    expect(addUseCasePiece(MIXED, { kind: "note", parent: "Club" }).source).toContain(
-      'note for pay "Note"',
+    // The next note follows the last, and is the last.
+    const second = addUseCasePiece(MIXED, { kind: "note", parent: "Guest" });
+    expect(second.id).toBe("note2");
+    expect(second.source).toContain(
+      '  note for pay "only once"\n  note for Guest "Note"\n  style pay',
     );
-    // Without an element there is nothing to hang it on.
+    expect(changed(MIXED, second.source)).toEqual([]);
+  });
+
+  it("adds no note without an element, and writes it when it is connected to one", () => {
+    // No element, a boundary, an element a note cannot name: the source stays as it is.
+    for (const parent of [undefined, null, "shop", "nobody"]) {
+      const pending = addUseCasePiece(SHOP, { kind: "note", label: "Lost", parent });
+      expect(pending).toEqual({ source: SHOP, id: "note1" });
+    }
+    expect(addUseCasePiece(MIXED, { kind: "note", parent: "Log out" })).toEqual({
+      source: MIXED,
+      id: "note2",
+    });
+    // The id it comes back with is the note to be: connected to an element, it is written.
+    for (const joined of [
+      connectUseCase(SHOP, "note1", "manage"),
+      connectUseCase(SHOP, "manage", "note1", "association"),
+    ]) {
+      expect(joined).toBe(`${SHOP}\n  note for manage "Note"`);
+      expect(usecaseStructure.read(joined).nodes.at(-1)).toMatchObject({
+        id: "note1",
+        kind: "note",
+      });
+    }
+    expect(renameUseCase(connectUseCase(SHOP, "note1", "User"), "note1", "VIP")).toBe(
+      `${SHOP}\n  note for User "VIP"`,
+    );
+    // Only the next note is promised, and only to an element a note can name.
+    expect(connectUseCase(SHOP, "note2", "manage")).toBe(SHOP);
+    expect(connectUseCase(SHOP, "note1", "shop")).toBe(SHOP);
+    expect(connectUseCase(SHOP, "note1", "note1")).toBe(SHOP);
+    expect(connectUseCase(MIXED, "note2", "Log out")).toBe(MIXED);
+    // A diagram without an element has nothing a note could be for.
     expect(addUseCasePiece("usecase-beta", { kind: "note" })).toEqual({
       source: "usecase-beta",
       id: "",
     });
+    expect(addUseCasePiece('usecase-beta\n  "Log out"', { kind: "note" }).id).toBe("");
   });
 
   it("connects elements with every kind of relation", () => {
@@ -123,11 +180,35 @@ describe("editing a use case diagram as text", () => {
     expect(relations(connectUseCase(SHOP, "Admin", "User", "generalization")).at(-1)).toBe(
       "Admin>User:generalization",
     );
+    expect(connectUseCase(SHOP, "Admin", "order", "undirected")).toBe(`${SHOP}\n  Admin -- order`);
     // A quoted name is its own id.
     expect(connectUseCase(MIXED, "Guest", "Log out")).toContain('\n  Guest --> "Log out"\n');
-    // Boundaries and unknown ids take no relation.
+    // Boundaries and unknown ids take no relation, and there is no unknown kind of one.
     expect(connectUseCase(SHOP, "User", "shop")).toBe(SHOP);
     expect(connectUseCase(SHOP, "User", "nobody")).toBe(SHOP);
+    expect(connectUseCase(SHOP, "User", "order", "wavy")).toBe(SHOP);
+  });
+
+  it("connects only what UML relates", () => {
+    const pairs: [string, string, string[]][] = [
+      ["User", "order", ["association", "undirected"]],
+      ["order", "User", ["association", "undirected"]],
+      ["order", "browse", ["include", "extend", "generalization"]],
+      ["Admin", "User", ["generalization"]],
+    ];
+    for (const [from, to, kinds] of pairs)
+      for (const { kind } of usecaseStructure.links) {
+        const joined = connectUseCase(SHOP, from, to, kind);
+        if (!kinds.includes(kind)) expect(joined, `${from} ${kind} ${to}`).toBe(SHOP);
+        else
+          expect(usecaseStructure.read(joined).edges.at(-1), `${from} ${kind} ${to}`).toMatchObject(
+            { id: "r4", source: from, target: to, kind },
+          );
+      }
+    // Without a kind it is the one the two usually have.
+    expect(connectUseCase(SHOP, "order", "User")).toBe(`${SHOP}\n  order --> User`);
+    expect(connectUseCase(SHOP, "order", "browse")).toBe(`${SHOP}\n  order ..> : include browse`);
+    expect(connectUseCase(SHOP, "Admin", "User")).toBe(`${SHOP}\n  Admin --|> User`);
   });
 
   it("hangs a note on the element it is connected to", () => {
@@ -165,9 +246,13 @@ describe("editing a use case diagram as text", () => {
     expect(renameUseCase(bare, "b", "Bee")).toBe(
       "usecase-beta\n  actor A\n  A --> b(Bee)\n  b --> c",
     );
-    // An empty name leaves the id as the name.
+    // An empty name leaves the id as the name, and so does the id itself.
     expect(renameUseCase(SHOP, "browse", " ")).toContain("    browse\n");
     expect(renameUseCase(SHOP, "shop", "")).toContain("  systemBoundary shop\n");
+    expect(renameUseCase(actor, "User", "User")).toBe(SHOP);
+    expect(renameUseCase(SHOP, "User", " User ")).toBe(SHOP);
+    expect(renameUseCase(SHOP, "browse", "browse")).toContain("    browse\n");
+    expect(renameUseCase(SHOP, "shop", "shop")).toContain("  systemBoundary shop\n");
     expect(renameUseCase(SHOP, "nobody", "x")).toBe(SHOP);
   });
 
@@ -229,6 +314,14 @@ describe("editing a use case diagram as text", () => {
     expect(labelUseCaseRelation(SHOP, "r1", ">= 1 - 2")).toContain(
       "  User -- #gt;= 1 #45; 2 --> browse\n",
     );
+    // Both angle brackets are written as codes, whatever stands between them; a line break stays.
+    expect(renameUseCase(SHOP, "User", 'Käufer "VIP" (web) [x] <T>')).toContain(
+      '  actor User("Käufer #quot;VIP#quot; (web) [x] #lt;T#gt;")\n',
+    );
+    expect(renameUseCase(SHOP, "browse", "a < b > c\n<br>d")).toContain(
+      "    browse(a #lt; b #gt; c<br><br>d)\n",
+    );
+    expect(renameUseCase(MIXED, "note1", "x <y> z")).toContain('  note for pay "x #lt;y#gt; z"\n');
   });
 
   it("labels associations and takes labels away", () => {
@@ -259,22 +352,28 @@ describe("editing a use case diagram as text", () => {
   });
 
   it("makes a relation one of another kind", () => {
-    const include = relinkUseCase(MIXED, "r2", "include");
-    expect(include).toContain("  Guest ..> : include enter\n");
-    expect(changed(MIXED, include)).toEqual(["  Guest -- asks --> enter"]);
-    expect(relinkUseCase(MIXED, "r4", "extend")).toContain("  enter ..> : extend pay\n");
-    expect(relinkUseCase(MIXED, "r4", "association")).toContain("  enter --> pay\n");
-    expect(relinkUseCase(MIXED, "r5", "association")).toContain('  "Log out" --> enter\n');
-    expect(relinkUseCase(MIXED, "r1", "generalization")).toContain("  actor Owner --|> pay\n");
-    expect(relinkUseCase(MIXED, "r6", "include")).toContain("  bot ..> : include late(Remind)\n");
+    const extend = relinkUseCase(MIXED, "r4", "extend");
+    expect(extend).toContain("  enter ..> : extend pay\n");
+    expect(changed(MIXED, extend)).toEqual(["  enter ..> : include pay"]);
+    expect(relinkUseCase(MIXED, "r4", "generalization")).toContain("  enter --|> pay\n");
+    expect(relinkUseCase(MIXED, "r5", "include")).toContain('  "Log out" ..> : include enter\n');
+    expect(relinkUseCase(MIXED, "r1", "undirected")).toContain("  actor Owner -- pay\n");
+    expect(relinkUseCase(MIXED, "r6", "undirected")).toContain("  bot -- late(Remind)\n");
+    // With a mark at its end it is an association already.
+    expect(relinkUseCase(MIXED, "r6", "association")).toBe(MIXED);
     // An arrow that points back is written from its source, so the relation keeps its ends.
-    const back = relinkUseCase(MIXED, "r3", "generalization");
-    expect(back).toContain("  Member --|> enter\n");
-    expect(relations(back)[2]).toBe("Member>enter:generalization");
+    const back = relinkUseCase(MIXED, "r3", "undirected");
+    expect(back).toContain("  Member -- enter\n");
+    expect(relations(back)[2]).toBe("Member>enter:association");
     const declared = "usecase-beta\n  actor A, B <-- c(See)";
-    expect(relinkUseCase(declared, "r1", "extend")).toBe(
-      "usecase-beta\n  actor A, B\n  c(See) ..> : extend A",
+    expect(relinkUseCase(declared, "r1", "undirected")).toBe(
+      "usecase-beta\n  actor A, B\n  c(See) -- A",
     );
+    // What UML does not have between the two is not written.
+    expect(relinkUseCase(MIXED, "r2", "include")).toBe(MIXED);
+    expect(relinkUseCase(MIXED, "r1", "generalization")).toBe(MIXED);
+    expect(relinkUseCase(MIXED, "r4", "association")).toBe(MIXED);
+    expect(relinkUseCase(MIXED, "r5", "undirected")).toBe(MIXED);
     // The kind it has, an unknown kind, an unknown relation: nothing changes.
     expect(relinkUseCase(MIXED, "r2", "association")).toBe(MIXED);
     expect(relinkUseCase(MIXED, "r2", "wavy")).toBe(MIXED);
@@ -361,8 +460,16 @@ describe("a use case diagram as a structure", () => {
     expect(
       pieces.map((piece) => `${piece.kind}:${piece.joins ?? ""}:${piece.group ?? false}`),
     ).toEqual(["usecase:after:false", "actor:before:false", "boundary::true", "note:before:false"]);
+    // A piece is joined only to what it has a relation with: never two actors or two use cases.
+    expect(pieces.map((piece) => piece.joinsTo)).toEqual([
+      ["actor"],
+      ["usecase"],
+      undefined,
+      ["usecase", "actor"],
+    ]);
     expect(links.map((link) => link.kind)).toEqual([
       "association",
+      "undirected",
       "include",
       "extend",
       "generalization",
@@ -408,8 +515,8 @@ describe("a use case diagram as a structure", () => {
       target: "usecase1",
       kind: "association",
     });
-    const extend = usecaseStructure.relink(joined, "r4", "extend");
-    expect(usecaseStructure.read(extend).edges.at(-1)).toMatchObject({ kind: "extend" });
+    const plain = usecaseStructure.relink(joined, "r4", "undirected");
+    expect(usecaseStructure.read(plain).edges.at(-1)).toMatchObject({ kind: "undirected" });
     const labelled = usecaseStructure.label(joined, "r4", "pays");
     expect(usecaseStructure.read(labelled).edges.at(-1)!.label).toBe("pays");
     const renamed = usecaseStructure.rename(labelled, "usecase1", "Pay now");
@@ -445,7 +552,11 @@ describe("a use case diagram as a structure", () => {
     await inScene(MIXED);
     // What the edits add is there under the id they return.
     for (const piece of pieces) {
-      const added = usecaseStructure.add(MIXED, { kind: piece.kind, label: "New", parent: "Club" });
+      const added = usecaseStructure.add(MIXED, {
+        kind: piece.kind,
+        label: "New",
+        parent: piece.kind === "note" ? "enter" : "Club",
+      });
       const { nodes } = await inScene(added.source);
       expect(nodes.find((node) => node.id === added.id)).toMatchObject({
         kind: piece.kind,
@@ -483,11 +594,24 @@ describe("a use case diagram as a structure", () => {
         expect(left.nodes.map((node) => node.id).toSorted()).toEqual(
           nodes.map((node) => node.id).toSorted(),
         );
+        // A relation becomes every kind UML has between its two elements, and no other.
+        const [from, to] = [edge.source, edge.target].map(
+            (id) => nodes.find((node) => node.id === id)!.kind,
+          ),
+          fits = (kind: string) =>
+            kind === "include" || kind === "extend"
+              ? from === "usecase" && to === "usecase"
+              : kind === "generalization"
+                ? from === to
+                : from !== to;
         for (const link of links) {
           const relinked = usecaseStructure.relink(source, edge.id, link.kind);
-          expect(
-            usecaseStructure.read(relinked).edges.find((item) => item.id === edge.id),
-          ).toMatchObject({ source: edge.source, target: edge.target, kind: link.kind });
+          if (!fits(link.kind) && link.kind !== edge.kind) expect(relinked).toBe(source);
+          else
+            expect(
+              usecaseStructure.read(relinked).edges.find((item) => item.id === edge.id),
+              `${name}: ${edge.id} ${link.kind}`,
+            ).toMatchObject({ source: edge.source, target: edge.target, kind: link.kind });
         }
       }
       for (const node of nodes) {
@@ -498,6 +622,387 @@ describe("a use case diagram as a structure", () => {
         ).toBe("Other (name)");
       }
       await inScene(usecaseStructure.remove(source, [nodes[0].id, edges.at(-1)!.id]));
+    }
+  });
+
+  /** A join without its line. */
+  const unlined = ({ line: _line, ...rest }: UseCaseEdge) => rest;
+
+  const FLYER = USECASE_EXAMPLES.find(([name]) => name.includes("TAM flyer"))![1];
+
+  it("reads an association without an arrow as a kind of its own, and keeps it one", () => {
+    const edges = usecaseStructure.read(FLYER).edges;
+    expect(edges.map((edge) => edge.kind)).toEqual([
+      "undirected",
+      "undirected",
+      "undirected",
+      "association",
+      "association",
+      "undirected",
+    ]);
+    // There and back again: the line is plain as before.
+    const directed = relinkUseCase(FLYER, "r6", "association");
+    expect(changed(FLYER, directed)).toEqual(["  process -- svc"]);
+    expect(directed).toContain("  process --> svc");
+    expect(relinkUseCase(directed, "r6", "undirected")).toBe(FLYER);
+    // The text of an association stays when its arrow goes or comes.
+    const plain = relinkUseCase(MIXED, "r2", "undirected");
+    expect(plain).toContain("  Guest -- asks -- enter\n");
+    expect(usecaseStructure.read(plain).edges[1]).toMatchObject({
+      kind: "undirected",
+      label: "asks",
+    });
+    expect(relinkUseCase(plain, "r2", "association")).toBe(MIXED);
+    expect(labelUseCaseRelation(plain, "r2", "begs")).toContain("  Guest -- begs -- enter\n");
+    expect(labelUseCaseRelation(plain, "r2", "")).toContain("  Guest -- enter\n");
+    // A mark at an end makes it an association.
+    expect(usecaseStructure.read(MIXED).edges.map((edge) => edge.kind)).toEqual([
+      "association",
+      "association",
+      "association",
+      "include",
+      "generalization",
+      "association",
+    ]);
+  });
+
+  it("marks the joins whose label is not to edit", () => {
+    const edges: UseCaseEdge[] = usecaseStructure.read(MIXED).edges;
+    expect(edges.map((edge) => edge.fixedLabel ?? false)).toEqual([
+      false,
+      false,
+      false,
+      true,
+      true,
+      false,
+    ]);
+    for (const edge of edges)
+      if (edge.fixedLabel) expect(usecaseStructure.label(MIXED, edge.id, "text")).toBe(MIXED);
+      else expect(usecaseStructure.label(MIXED, edge.id, "text")).not.toBe(MIXED);
+  });
+
+  it("gives a new part its first name as its id", async () => {
+    const { retitle } = usecaseStructure;
+    const added = usecaseStructure.add(SHOP, { kind: "usecase", parent: "shop" }),
+      joined = usecaseStructure.connect(added.source, "Admin", added.id),
+      named = retitle!(joined, added.id, "Archive Item");
+    expect(named.id).toBe("archiveItem");
+    expect(named.source).toBe(
+      `${SHOP.replace("  end\n", "    archiveItem(Archive Item)\n  end\n")}\n  Admin --> archiveItem`,
+    );
+    await inScene(named.source);
+    // One word is id and name at once.
+    const actor = usecaseStructure.add(SHOP, { kind: "actor" });
+    expect(retitle!(actor.source, actor.id, "Clerk")).toEqual({
+      source: SHOP.replace("  actor Admin\n", "  actor Admin\n  actor Clerk\n"),
+      id: "Clerk",
+    });
+    expect(retitle!(added.source, added.id, " pay ").source).toContain("    pay\n  end\n");
+    expect(retitle!(added.source, added.id, "Pay!").source).toContain("    Pay(Pay!)\n  end\n");
+    expect(retitle!(added.source, added.id, "CRM sync-job").source).toContain(
+      "    CRMSyncJob(CRM sync-job)\n",
+    );
+    const boundary = usecaseStructure.add(SHOP, { kind: "boundary" });
+    expect(retitle!(boundary.source, boundary.id, "Core Banking")).toMatchObject({
+      id: "coreBanking",
+    });
+    expect(retitle!(boundary.source, boundary.id, "Core Banking").source).toContain(
+      "  systemBoundary coreBanking[Core Banking]\n  end\n",
+    );
+    expect(retitle!(boundary.source, boundary.id, "Bank").source).toContain(
+      "  systemBoundary Bank\n  end\n",
+    );
+    // A name that is taken, is a word of the syntax or has no word for an id is the label.
+    expect(retitle!(actor.source, actor.id, "User")).toEqual({
+      source: actor.source.replace("actor1(Actor)", "actor1(User)"),
+      id: "actor1",
+    });
+    expect(retitle!(actor.source, actor.id, "shop").id).toBe("actor1");
+    expect(retitle!(added.source, added.id, "end")).toEqual({
+      source: added.source.replace("usecase1(Use case)", "usecase1(end)"),
+      id: "usecase1",
+    });
+    expect(retitle!(actor.source, actor.id, "店員 Müller")).toEqual({
+      source: actor.source.replace("actor1(Actor)", "actor1(店員 Müller)"),
+      id: "actor1",
+    });
+    expect(retitle!(actor.source, actor.id, "?!")).toMatchObject({ id: "actor1" });
+    // A note has no id to give: it gets its text.
+    expect(retitle!(MIXED, "note1", "Twice")).toEqual({
+      source: MIXED.replace("only once", "Twice"),
+      id: "note1",
+    });
+    expect(retitle!(SHOP, "nobody", "Name")).toEqual({ source: SHOP, id: "nobody" });
+    for (const [name, source] of USECASE_EXAMPLES)
+      for (const piece of pieces.filter((piece) => piece.kind !== "note")) {
+        const fresh = usecaseStructure.add(source, { kind: piece.kind }),
+          titled = retitle!(fresh.source, fresh.id, "Brand New Thing");
+        expect(titled.id, name).toBe("brandNewThing");
+        expect(
+          usecaseStructure.read(titled.source).nodes.find((node) => node.id === titled.id),
+        ).toMatchObject({ label: "Brand New Thing", kind: piece.kind });
+        expect(changed(source, titled.source), name).toEqual([]);
+      }
+  });
+
+  it("renames an id wherever the source names it", async () => {
+    const order = renameUsecaseId(SHOP, "order", "checkout");
+    expect(changed(SHOP, order)).toEqual(["    order(Place Order)", "  User --> order"]);
+    expect(order).toContain("    checkout(Place Order)\n");
+    expect(order).toContain("  User --> checkout\n");
+    const fee = renameUsecaseId(MIXED, "pay", "fee");
+    expect(changed(MIXED, fee)).toEqual([
+      "      pay[Pay fee]",
+      "  actor Owner --> pay",
+      "  enter ..> : include pay",
+      '  note for pay "only once"',
+      "  style pay fill:#eee",
+    ]);
+    expect(fee).toContain(
+      '  enter ..> : include fee\n  "Log out" --|> enter\n  bot --o late(Remind)\n  note for fee "only once"\n  style fee fill:#eee\n',
+    );
+    expect(relations(fee)).toEqual(relations(MIXED).map((text) => text.replace("pay", "fee")));
+    await inScene(fee);
+    // In a list of actors, and in a list of styled elements.
+    expect(renameUsecaseId(MIXED, "Member", "Patron")).toContain(
+      '  actor Guest, Patron("Club member") <<human>>, bot("Robot") <<system>>\n',
+    );
+    expect(renameUsecaseId(MIXED, "Member", "Patron")).toContain("  enter <-- Patron\n");
+    const classed = "usecase-beta\n  a(A)\n  ab(B)\n  classDef hot fill:#f00\n  class a, ab hot";
+    expect(renameUsecaseId(classed, "a", "x")).toBe(
+      "usecase-beta\n  x(A)\n  ab(B)\n  classDef hot fill:#f00\n  class x, ab hot",
+    );
+    // An element without a label is shown under its id; a quoted name stays the name.
+    const user = renameUsecaseId(SHOP, "User", "Customer");
+    expect(user).toContain("  actor Customer\n");
+    expect(relations(user).slice(0, 2)).toEqual([
+      "Customer>browse:association",
+      "Customer>order:association",
+    ]);
+    const quoted = renameUsecaseId(`${MIXED}  Guest --> "Log out"\n`, "Log out", "logOut");
+    expect(quoted).toContain("  logOut(Log out) --|> enter\n");
+    expect(quoted).toContain("  Guest --> logOut\n");
+    expect(element(quoted, "logOut")!.label).toBe("Log out");
+    const club = renameUsecaseId(MIXED, "Club", "club");
+    expect(club).toContain("  systemBoundary club[Club]\n");
+    expect(element(club, "enter")!.boundary).toBe("club");
+    expect(renameUsecaseId(SHOP, "shop", "store")).toContain("  systemBoundary store[Web Shop]\n");
+    // An id that is taken, is no id or is a word of the syntax is refused.
+    for (const name of ["browse", "shop", "User", "order", "two words", "", "a-b", "end", "actor"])
+      expect(renameUsecaseId(SHOP, "order", name), name).toBe(SHOP);
+    expect(renameUsecaseId(MIXED, "pay", "note1")).toBe(MIXED);
+    expect(renameUsecaseId(SHOP, "nobody", "somebody")).toBe(SHOP);
+    expect(renameUsecaseId(MIXED, "note1", "remark")).toBe(MIXED);
+    for (const [name, source] of USECASE_EXAMPLES) {
+      const { nodes, edges } = usecaseStructure.read(source);
+      for (const node of nodes.filter((node) => node.kind !== "note")) {
+        const renamed = renameUsecaseId(source, node.id, "renamed9"),
+          swap = (id: string | null) => (id === node.id ? "renamed9" : id),
+          now = usecaseStructure.read(renamed);
+        expect(now.nodes.map((other) => other.id).toSorted(), `${name}: ${node.id}`).toEqual(
+          nodes.map((other) => swap(other.id)).toSorted(),
+        );
+        expect(now.nodes.find((other) => other.id === "renamed9")).toMatchObject({
+          kind: node.kind,
+          parent: node.parent,
+          label: node.label === node.id ? "renamed9" : node.label,
+        });
+        expect(now.edges).toEqual(
+          edges.map((edge) => ({
+            ...edge,
+            source: swap(edge.source),
+            target: swap(edge.target),
+          })),
+        );
+        expect(now.nodes.filter((other) => other.parent === "renamed9")).toHaveLength(
+          nodes.filter((other) => other.parent === node.id).length,
+        );
+      }
+      await inScene(renameUsecaseId(source, nodes[0].id, "renamed9"));
+    }
+  });
+
+  it("turns a relation round", () => {
+    const first = reverseUsecaseRelation(SHOP, "r1");
+    expect(changed(SHOP, first)).toEqual(["  User --> browse"]);
+    expect(first).toContain("  browse --> User\n");
+    expect(reverseUsecaseRelation(first, "r1")).toBe(SHOP);
+    // A line that declares keeps its declaration; text and marks stay.
+    expect(reverseUsecaseRelation(MIXED, "r1")).toContain("  actor Owner\n  pay --> Owner\n");
+    expect(reverseUsecaseRelation(MIXED, "r2")).toContain("  enter -- asks --> Guest\n");
+    expect(reverseUsecaseRelation(MIXED, "r3")).toContain("  enter --> Member\n");
+    expect(reverseUsecaseRelation(MIXED, "r4")).toContain("  pay ..> : include enter\n");
+    expect(reverseUsecaseRelation(MIXED, "r5")).toContain('  enter --|> "Log out"\n');
+    expect(reverseUsecaseRelation(MIXED, "r6")).toContain("  late(Remind) --o bot\n");
+    expect(reverseUsecaseRelation(MIXED, "r9")).toBe(MIXED);
+    for (const [name, source] of [["mixed", MIXED], ...USECASE_EXAMPLES]) {
+      const { nodes, edges } = usecaseStructure.read(source);
+      for (const edge of edges) {
+        const now = usecaseStructure.read(reverseUsecaseRelation(source, edge.id));
+        expect(now.edges.map(unlined), `${name}: ${edge.id}`).toEqual(
+          edges
+            .map(unlined)
+            .map((rest) =>
+              rest.id === edge.id ? { ...rest, source: rest.target, target: rest.source } : rest,
+            ),
+        );
+        expect(
+          now.nodes
+            .map((node) => `${node.id}:${node.kind}:${node.parent}:${node.label}`)
+            .toSorted(),
+        ).toEqual(
+          nodes.map((node) => `${node.id}:${node.kind}:${node.parent}:${node.label}`).toSorted(),
+        );
+      }
+    }
+  });
+
+  it("copies an actor or a use case without its relations", async () => {
+    const browse = duplicateUsecasePart(SHOP, "browse");
+    expect(browse.id).toBe("browse2");
+    expect(browse.source).toBe(
+      SHOP.replace("(Browse Products)\n", "(Browse Products)\n    browse2(Browse Products)\n"),
+    );
+    expect(element(browse.source, "browse2")).toMatchObject({ boundary: "shop", kind: "usecase" });
+    expect(duplicateUsecasePart(browse.source, "browse").id).toBe("browse3");
+    expect(duplicateUsecasePart(SHOP, "User")).toEqual({
+      source: SHOP.replace("  actor User\n", "  actor User\n  actor User2\n"),
+      id: "User2",
+    });
+    // Label, shape and stereotype come along.
+    const bot = duplicateUsecasePart(MIXED, "bot");
+    expect(bot.source).toContain("<<system>>\n  actor bot2(Robot) <<system>>\n");
+    expect(element(bot.source, "bot2")).toMatchObject({
+      kind: "actor",
+      shape: "box",
+      label: "Robot",
+      stereotype: "system",
+      boundary: null,
+    });
+    const pay = duplicateUsecasePart(MIXED, "pay");
+    expect(pay.source).toContain("      pay[Pay fee]\n      pay2[Pay fee]\n  end\n");
+    expect(element(pay.source, "pay2")).toMatchObject({ shape: "rect", boundary: "Club" });
+    // One that a relation's line declares stands where its kind does.
+    const late = duplicateUsecasePart(MIXED, "late");
+    expect(late.source).toContain("  end\n  late2(Remind)\n  actor Owner --> pay\n");
+    const quoted = duplicateUsecasePart(MIXED, "Log out");
+    expect(quoted.id).toBe("logOut2");
+    expect(element(quoted.source, "logOut2")!.label).toBe("Log out");
+    for (const copy of [browse, bot, pay, late, quoted]) {
+      expect(relations(copy.source)).toEqual(relations(copy === browse ? SHOP : MIXED));
+      await inScene(copy.source);
+    }
+    // A boundary and a note are no elements to copy.
+    expect(duplicateUsecasePart(SHOP, "shop")).toEqual({ source: SHOP, id: "" });
+    expect(duplicateUsecasePart(MIXED, "note1")).toEqual({ source: MIXED, id: "" });
+    for (const [name, source] of USECASE_EXAMPLES) {
+      const { nodes, edges } = usecaseStructure.read(source);
+      for (const node of nodes.filter((node) => node.kind === "actor" || node.kind === "usecase")) {
+        const copy = duplicateUsecasePart(source, node.id),
+          now = usecaseStructure.read(copy.source);
+        expect(
+          now.nodes.find((other) => other.id === copy.id),
+          `${name}: ${node.id}`,
+        ).toMatchObject({
+          kind: node.kind,
+          parent: node.parent,
+          label: node.label === node.id ? copy.id : node.label,
+        });
+        expect(now.nodes).toHaveLength(nodes.length + 1);
+        expect(now.edges.map(unlined)).toEqual(edges.map(unlined));
+        expect(changed(source, copy.source)).toEqual([]);
+      }
+    }
+  });
+
+  it("moves a use case into a boundary and out of it", async () => {
+    const out = moveUsecaseInto(SHOP, "order", null);
+    expect(out).toBe(
+      SHOP.replace("    order(Place Order)\n", "").replace(
+        "  User --> browse\n",
+        "  order(Place Order)\n  User --> browse\n",
+      ),
+    );
+    expect(element(out, "order")).toMatchObject({ boundary: null, label: "Place Order" });
+    const back = moveUsecaseInto(out, "order", "shop");
+    expect(back).toContain("    manage(Manage Catalog)\n    order(Place Order)\n  end\n");
+    expect(element(back, "order")!.boundary).toBe("shop");
+    expect(relations(back)).toEqual(relations(SHOP));
+    // From one boundary into another.
+    const two = USECASE_EXAMPLES.find(([name]) => name.includes("two systems"))![1],
+      moved = moveUsecaseInto(two, "book", "clinic");
+    expect(changed(two, moved)).toEqual([]);
+    expect(moved).toContain("    order(Order test)\n    book(Book appointment)\n  end\n");
+    expect(moved).toContain("  systemBoundary portal[Patient portal]\n    results(View results)\n");
+    expect(element(moved, "book")!.boundary).toBe("clinic");
+    await inScene(moved);
+    // A use case that relations only mention, or that one of them gives its label, is declared there.
+    const bare = "usecase-beta\n  actor A\n  systemBoundary s\n    x(X)\n  end\n  A --> y";
+    expect(moveUsecaseInto(bare, "y", "s")).toBe(
+      "usecase-beta\n  actor A\n  systemBoundary s\n    x(X)\n    y\n  end\n  A --> y",
+    );
+    const late = moveUsecaseInto(MIXED, "late", "Club");
+    expect(late).toContain("      pay[Pay fee]\n      late\n  end\n");
+    expect(element(late, "late")).toMatchObject({ boundary: "Club", label: "Remind" });
+    expect(moveUsecaseInto(late, "late", null)).toBe(MIXED);
+    await inScene(late);
+    // Out of a boundary, a use case that a relation names needs no line of its own.
+    expect(moveUsecaseInto(moveUsecaseInto(bare, "y", "s"), "y", null)).toBe(bare);
+    // Actors stand outside; where it is already, an unknown boundary, an unknown element: nothing changes.
+    expect(moveUsecaseInto(SHOP, "User", "shop")).toBe(SHOP);
+    expect(moveUsecaseInto(SHOP, "order", "shop")).toBe(SHOP);
+    expect(moveUsecaseInto(out, "order", null)).toBe(out);
+    expect(moveUsecaseInto(SHOP, "order", "bank")).toBe(SHOP);
+    expect(moveUsecaseInto(SHOP, "nobody", "shop")).toBe(SHOP);
+    for (const [name, source] of USECASE_EXAMPLES) {
+      const { nodes, edges } = usecaseStructure.read(source),
+        groups = [null, ...nodes.filter((node) => node.group).map((node) => node.id)];
+      for (const node of nodes.filter((node) => node.kind === "usecase"))
+        for (const group of groups) {
+          const result = moveUsecaseInto(source, node.id, group),
+            now = usecaseStructure.read(result);
+          expect(
+            now.nodes.find((other) => other.id === node.id),
+            `${name}: ${node.id}`,
+          ).toMatchObject({ parent: group, label: node.label, kind: node.kind });
+          expect(now.nodes).toHaveLength(nodes.length);
+          expect(now.edges.map(unlined)).toEqual(edges.map(unlined));
+        }
+    }
+  });
+
+  it("removes a boundary and keeps what it holds", async () => {
+    expect(ungroupUsecaseBoundary(SHOP, "shop")).toBe(`usecase-beta
+  direction LR
+  actor User
+  actor Admin
+  browse(Browse Products)
+  order(Place Order)
+  manage(Manage Catalog)
+  User --> browse
+  User --> order
+  Admin --> manage`);
+    const club = ungroupUsecaseBoundary(MIXED, "Club");
+    expect(club).toContain(
+      "  %% what they do\n  enter(Enter)\n  %% inside\n  pay[Pay fee]\n  actor Owner --> pay\n",
+    );
+    expect(relations(club)).toEqual(relations(MIXED));
+    expect(ungroupUsecaseBoundary(SHOP, "order")).toBe(SHOP);
+    expect(ungroupUsecaseBoundary(SHOP, "bank")).toBe(SHOP);
+    for (const [name, source] of USECASE_EXAMPLES) {
+      const { nodes, edges } = usecaseStructure.read(source);
+      for (const group of nodes.filter((node) => node.group)) {
+        const open = ungroupUsecaseBoundary(source, group.id),
+          now = usecaseStructure.read(open);
+        expect(now.nodes.map((node) => `${node.id}:${node.parent}`).toSorted(), name).toEqual(
+          nodes
+            .filter((node) => node.id !== group.id)
+            .map((node) => `${node.id}:${node.parent === group.id ? null : node.parent}`)
+            .toSorted(),
+        );
+        expect(now.edges.map(unlined)).toEqual(edges.map(unlined));
+        await inScene(open);
+      }
     }
   });
 });

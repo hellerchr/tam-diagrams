@@ -15,7 +15,10 @@ export interface StructureNode {
   line: number;
   /** Whether it holds other parts. */
   group: boolean;
-  /** The kind of piece it is, one of the structure's `pieces`. */
+  /**
+   * The kind of part it is: one of the structure's `pieces`, or a kind that is only read, such as
+   * the fragment of a sequence diagram.
+   */
   kind: string;
 }
 
@@ -26,8 +29,13 @@ export interface StructureEdge {
   target: string;
   label?: string;
   line: number;
-  /** The kind of join it is, one of the structure's `links`. */
+  /**
+   * The kind of join it is: one of the structure's `links`, or a kind that is only read and
+   * cannot be chosen, such as the line from a note to its class.
+   */
   kind: string;
+  /** Whether the join carries no label to edit: its text says what kind it is. */
+  fixedLabel?: boolean;
 }
 
 /** A piece the canvas adds: a kind of part. */
@@ -69,6 +77,18 @@ export interface Structure {
   ): { source: string; id: string };
   /** Joins two parts; with the usual kind of join when none is given. */
   connect(source: string, from: string, to: string, kind?: string): string;
+  /**
+   * Joins two parts as `connect` does and says which join it wrote: ids of joins are often their
+   * position, so the new one is not always the last. With `after`, in a diagram whose joins are
+   * ordered, the new one follows that join. No edge is returned when nothing was written.
+   */
+  join?(
+    source: string,
+    from: string,
+    to: string,
+    kind?: string,
+    after?: string,
+  ): { source: string; edge: string };
   /** Gives a part another name. */
   rename(source: string, id: string, label: string): string;
   /**
@@ -83,4 +103,14 @@ export interface Structure {
   relink(source: string, edge: string, kind: string): string;
   /** Removes parts with their joins, groups with what they hold, and joins, by id. */
   remove(source: string, ids: string[]): string;
+  /** Swaps the ends of a join; what hangs on each end stays with its part. */
+  reverse?(source: string, edge: string): string;
+  /** Copies a part with what it holds and says, without its joins; returns the copy's id. */
+  copy?(source: string, id: string): { source: string; id: string };
+  /** Moves a part into a group, or out of every group with null. */
+  moveInto?(source: string, id: string, group: string | null): string;
+  /** Removes a group and keeps what it holds. */
+  ungroup?(source: string, id: string): string;
+  /** Gives a part another id, at every mention; the source stays as it is when the id is taken or no id. */
+  reid?(source: string, id: string, next: string): string;
 }

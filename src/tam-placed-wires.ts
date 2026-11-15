@@ -1,82 +1,75 @@
 /**
  * TAM layout by hand, second step: the wires between the placed elements. Every pair of elements
- * gets the simplest line that passes no other element (straight, one corner, or two; a detour
- * around what is in the way where none of those is free), the wires that end on one side of an
- * element keep apart, and each channel's circle sits on its wire's longest run with its label
- * beside it.
+ * gets the cheapest line through the field of what stands around it (tam-placed-field.ts): one of
+ * the simple lines of tam-placed-lines.ts, or a way around from tam-placed-detour.ts. The wires
+ * that end on one side of an element keep apart, and once every wire lies, each connection's
+ * circle and label take a free spot on it (tam-placed-marks.ts); a connection with no free spot
+ * on its wire gets another line.
  */
 
-import { type Box, centerOf, grow, overlaps, type Point, segmentHits } from "./scene.ts";
+import { type Box, centerOf, grow, type Point } from "./scene.ts";
 import type { TamEdge } from "./tam.ts";
 import type { Measure } from "./text.ts";
-import { smallSize } from "./labels.ts";
 import { outline } from "./route.ts";
+import { CHANNEL, LOOP_END, SHADOW, type TamGeometry, type TamGraph } from "./tam-graph.ts";
+import { lies, type PlacedElements, type Side, union } from "./tam-placed.ts";
+import { detour, type Line } from "./tam-placed-detour.ts";
 import {
-  ASSEMBLY,
-  BULGE,
-  CHANNEL,
-  containerInsets,
-  LOOP_END,
-  MARKER_GAP,
-  SHADOW,
-  type TamGeometry,
-  type TamGraph,
-} from "./tam-graph.ts";
-import { lies, type PlacedElements, type Side, sidePoint } from "./tam-placed.ts";
-import { detour, type Line, outward } from "./tam-placed-detour.ts";
+  ALONG,
+  fieldOf,
+  price,
+  runsOf,
+  type Scope,
+  scopeOf,
+  terrainOf,
+  THROUGH,
+  type Traveller,
+  TROUBLE,
+} from "./tam-placed-field.ts";
+import { beside, between, type End, lines, range, REACH, runLength } from "./tam-placed-lines.ts";
+import {
+  circled,
+  HIT,
+  type Mark,
+  marked,
+  placeMark,
+  type Surroundings,
+  thickness,
+} from "./tam-placed-marks.ts";
 
-const SIDES: Side[] = ["bottom", "top", "right", "left"];
-
-/** Where a side's line lies: the y of a top or bottom, the x of a left or right. */
-const level = (box: Box, side: Side) =>
-  side === "top"
-    ? box.y
-    : side === "bottom"
-      ? box.y + box.height
-      : side === "left"
-        ? box.x
-        : box.x + box.width;
-
-/** How far a point lies outside a box, past one of its sides. */
-const beyond = (box: Box, side: Side, point: Point) =>
-  outward(side) * ((lies(side) ? point.y : point.x) - level(box, side));
-
-/** Wire ends on one side keep this far apart; a corner keeps CLEAR from the elements it joins. */
+/** Wires of a bundle keep this far apart, wire ends on one side half of it, and TIGHT where a side is full. */
 const APART = 18,
-  CLEAR = 12;
+  TIGHT = 6;
 
-/** The least gap between two elements for a wire to step sideways in, and how far around them a wire runs. */
-const STEP = 20,
-  AROUND = 24;
+/** A circle on the run that leaves a side keeps the wire ends beside it this much further off. */
+const CIRCLE = 6;
 
 /** A wire's run with a channel's circle or a label on it is at least this long. */
 const ROOM = 44;
 
 /**
- * What a line costs: a corner counts like BEND pixels of wire, an element in the way more than any
- * detour, a foreign container's border less. SHORT is a line too short for its circle, CROWDED a
- * side with more wire ends than fit.
+ * What a line costs beside what it meets: a corner counts like BEND pixels of wire. SHORT is a line
+ * too short for the label at its circle, CRAMPED one too short for the circle itself, CROWDED a side
+ * with more wire ends than fit, TAKEN a spot on a side another straight wire ends at. A line that
+ * leaves or enters across the diagram's direction pays SIDEWAYS, one off the middle of a side
+ * OFF_MIDDLE. A mark that covers something counts like COVER pixels for each point it covers.
  */
 const BEND = 70,
   LENGTH = 0.25,
-  THROUGH = 1000,
-  ACROSS = 200,
   SHORT = 90,
+  CRAMPED = 600,
   CROWDED = 120,
-  OFF_MIDDLE = 150;
+  TAKEN = 300,
+  SIDEWAYS = 80,
+  OFF_MIDDLE = 150,
+  COVER = 60;
 
-/** Where along a side a bent line may leave: the middle first. */
-const SHARES = [0.5, 0.25, 0.75];
-
-/** One end of a connection: an element with its box and the radius of its rounded corners. */
-interface End {
-  id: string;
-  box: Box;
-  radius: number;
-}
+/** A connection whose marks cover something gets the best of this many other lines. */
+const OTHERS = 5;
 
 /** The connections between one pair of elements run side by side as a bundle, along one line. */
 interface Bundle extends Line {
+  key: string;
   a: End;
   b: End;
   members: TamEdge[];
@@ -84,138 +77,17 @@ interface Bundle extends Line {
   nested: boolean;
   /** Each member's distance from the bundle's line, to its left. */
   offsets: number[];
-  /** Half of the room the bundle takes across. */
+  /** Half of the room the bundle takes across, with what its members carry. */
   half: number;
+  /** Half of the room its wires alone take, where they end on a side. */
+  reach: number;
+  traveller: Traveller;
+  /** The key of each side of each end, for what the side holds. */
+  sides: Record<"a" | "b", Record<Side, string>>;
+  /** Each member's line, and its circle and label. */
+  laid: Point[][];
+  marks: (Mark | undefined)[];
 }
-
-/** The part of a side wires end on: clear of the corners, and of the steep part of round ones. */
-function range(end: End, side: Side): [number, number] {
-  const start = lies(side) ? end.box.x : end.box.y,
-    extent = lies(side) ? end.box.width : end.box.height;
-  const inset = Math.min(
-    extent / 4,
-    end.radius ? Math.max(0.4 * Math.min(end.radius, extent / 2), 6) : 8,
-  );
-  return [start + inset, start + extent - inset];
-}
-
-const share = ([low, high]: [number, number], of: number) => low + (high - low) * of;
-
-/** The lines two elements can be joined by with at most two corners; `part` is the one the other holds. */
-function lines(a: End, b: End, part?: End): Line[] {
-  const found: Line[] = [];
-  if (part) {
-    // From the border of the outer element straight in to its part, on the same side of both.
-    for (const side of SIDES) {
-      const at = share(range(part, side), 0.5);
-      found.push({
-        from: side,
-        to: side,
-        points: [sidePoint(a.box, side, at), sidePoint(b.box, side, at)],
-      });
-    }
-    return found;
-  }
-  for (const from of SIDES)
-    for (const to of SIDES) {
-      const ra = range(a, from),
-        rb = range(b, to);
-      if (from !== to && lies(from) === lies(to)) {
-        // Facing sides: straight where they overlap.
-        const low = Math.max(ra[0], rb[0]),
-          high = Math.min(ra[1], rb[1]);
-        if (high >= low && outward(from) * (level(b.box, to) - level(a.box, from)) >= 0) {
-          const at = (low + high) / 2;
-          found.push({ from, to, points: [sidePoint(a.box, from, at), sidePoint(b.box, to, at)] });
-        }
-      }
-      for (const sa of SHARES)
-        for (const sb of SHARES) {
-          const off = +(sa !== 0.5) + +(sb !== 0.5);
-          const p = sidePoint(a.box, from, share(ra, sa)),
-            q = sidePoint(b.box, to, share(rb, sb));
-          if (lies(from) !== lies(to)) {
-            // One corner, clear of both elements.
-            const corner = lies(from) ? { x: p.x, y: q.y } : { x: q.x, y: p.y };
-            if (beyond(a.box, from, corner) >= CLEAR && beyond(b.box, to, corner) >= CLEAR)
-              found.push({ from, to, points: [p, corner, q], off });
-            continue;
-          }
-          let mid: number;
-          if (from !== to) {
-            // Facing sides: a step in the gap between them.
-            const gap = outward(from) * (level(b.box, to) - level(a.box, from));
-            if (gap < STEP || Math.abs(share(ra, sa) - share(rb, sb)) < CLEAR) continue;
-            mid = (level(a.box, from) + level(b.box, to)) / 2;
-          } else {
-            // The same side of both: around them.
-            if (Math.abs(share(ra, sa) - share(rb, sb)) < CLEAR) continue;
-            const far =
-              outward(from) > 0
-                ? Math.max(level(a.box, from), level(b.box, to))
-                : Math.min(level(a.box, from), level(b.box, to));
-            mid = far + outward(from) * AROUND;
-          }
-          found.push({
-            from,
-            to,
-            points: lies(from)
-              ? [p, { x: p.x, y: mid }, { x: q.x, y: mid }, q]
-              : [p, { x: mid, y: p.y }, { x: mid, y: q.y }, q],
-            off,
-          });
-        }
-    }
-  return found;
-}
-
-/** The longest run of a line; of equal ones a run between two corners. */
-function longest(points: Point[]): number {
-  let best = 0,
-    most = -1;
-  for (let index = 0; index < points.length - 1; index++) {
-    const length =
-      Math.abs(points[index + 1].x - points[index].x) +
-      Math.abs(points[index + 1].y - points[index].y);
-    // A run between corners wins a tie: a circle on it leaves the elements clear.
-    const centered = index > 0 && index < points.length - 2 ? 0.5 : 0;
-    if (length + centered > most) {
-      most = length + centered;
-      best = index;
-    }
-  }
-  return best;
-}
-
-const runsUpright = (points: Point[], index: number) =>
-  Math.abs(points[index].x - points[index + 1].x) < 0.5;
-
-/** An orthogonal line moved `distance` to its left; a corner moves with both runs that meet at it. */
-function beside(points: Point[], distance: number): Point[] {
-  if (!distance) return points.map((point) => ({ ...point }));
-  const normal = (from: Point, to: Point) => {
-    const length = Math.hypot(to.x - from.x, to.y - from.y) || 1;
-    return { x: -(to.y - from.y) / length, y: (to.x - from.x) / length };
-  };
-  return points.map((point, index) => {
-    const before = index > 0 ? normal(points[index - 1], point) : { x: 0, y: 0 },
-      after = index < points.length - 1 ? normal(point, points[index + 1]) : { x: 0, y: 0 };
-    return {
-      x: point.x + (before.x + after.x) * distance,
-      y: point.y + (before.y + after.y) * distance,
-    };
-  });
-}
-
-/** The room a connection takes to either side of its wire: a loop's two lines, a circle. */
-const thickness = (edge: TamEdge) =>
-  edge.kind === "modify"
-    ? LOOP_END + BULGE
-    : edge.kind === "channel"
-      ? CHANNEL / 2
-      : edge.kind === "assembly"
-        ? ASSEMBLY / 2
-        : 0;
 
 /** The wires, channel circles and label rooms of a layout placed by hand, added to the placed elements. */
 export function placedGeometry(
@@ -223,7 +95,7 @@ export function placedGeometry(
   placed: PlacedElements,
   measure: Measure,
 ): TamGeometry {
-  const { chain, channelLabels, diagram, shapes, vertical } = prepared;
+  const { chain, diagram, shapes, vertical } = prepared;
   const boxes = new Map(placed.boxes),
     routes = new Map(placed.stubs),
     nodeLabels = new Map(placed.labels),
@@ -246,343 +118,489 @@ export function placedGeometry(
       round.set(id, 18);
   }
   const end = (id: string): End => ({ id, box: boxes.get(id)!, radius: round.get(id) ?? 0 });
-  const circles = [...placed.stubs.keys()].flatMap((edge) => {
-    const target = diagram.edges.find((item) => item.id === edge)?.target;
-    return target && boxes.has(target) ? [{ id: target, box: boxes.get(target)! }] : [];
-  });
-  /** What a wire keeps out of: every element and interface circle but its ends and what holds them. */
-  const obstacles = [
-    ...elements.map((id) => ({ id, box: boxes.get(id)!, container: shapes.get(id)!.container })),
-    ...circles.map((circle) => ({ ...circle, container: false })),
-  ];
-  const solid = obstacles.filter((obstacle) => !obstacle.container);
-  // A container's title is crossed like a border: only where no other line is as simple.
-  for (const id of elements) {
-    const shape = shapes.get(id)!,
-      box = boxes.get(id)!;
-    if (!shape.container || !shape.lines.length) continue;
-    const { top } = containerInsets(shape.node, shape.lines, shape.textWidth, measure);
-    obstacles.push({
-      id: `${id}#title`,
-      box: {
-        x: box.x + box.width / 2 - shape.textWidth / 2 - 4,
-        y: box.y + 2,
-        width: shape.textWidth + 8,
-        height: top - 8,
-      },
-      container: true,
-    });
+
+  const field = fieldOf(prepared, placed, elements, measure);
+  const markers = new Set<string>();
+  /** The wire ends each side of each element holds, as bundles choose their lines and ends move apart. */
+  const taken = new Map<string, { at: number; half: number; key: string }[]>();
+  // An interface's line takes its place on the side it leaves, like any wire end.
+  for (const [edge, stub] of placed.stubs) {
+    const { source, target } = diagram.edges.find((item) => item.id === edge) ?? {};
+    if (!source || !target || !boxes.has(target) || !boxes.has(source)) continue;
+    markers.add(target);
+    const up = Math.abs(stub[0].x - stub[1].x) < 0.5,
+      side: Side = up
+        ? stub[1].y > stub[0].y
+          ? "bottom"
+          : "top"
+        : stub[1].x > stub[0].x
+          ? "right"
+          : "left",
+      key = `${source}\u0000${side}`;
+    taken.set(key, [
+      ...(taken.get(key) ?? []),
+      { at: up ? stub[0].x : stub[0].y, half: CHANNEL / 2, key: edge },
+    ]);
   }
+
+  /** The innermost container that holds both elements; the outer one where it holds the other. */
+  const homeOf = (a: string, b: string) => {
+    const around = new Set(chain(b));
+    const id = chain(a).find(
+      (id) => around.has(id) && !id.endsWith("#row") && shapes.get(id)?.container,
+    );
+    return id ? boxes.get(id) : undefined;
+  };
+
+  const sidesOf = (id: string) =>
+    Object.fromEntries(
+      (["top", "bottom", "left", "right"] as Side[]).map((side) => [side, `${id}\u0000${side}`]),
+    ) as Record<Side, string>;
 
   // Connections between one pair of elements share a line.
   const bundles = new Map<string, Bundle>();
+  const bundle = (key: string, a: End, b: End, members: TamEdge[]): Bundle => {
+    const nested = chain(a.id).includes(b.id) || chain(b.id).includes(a.id);
+    return {
+      key,
+      a,
+      b,
+      members,
+      from: "bottom",
+      to: "top",
+      points: [],
+      nested,
+      offsets: [0],
+      half: 0,
+      reach: 0,
+      traveller: {
+        key,
+        own: new Set([...chain(a.id), ...chain(b.id)]),
+        ends: nested ? [] : [a.box, b.box],
+        home: homeOf(a.id, b.id),
+        half: 0,
+      },
+      sides: { a: sidesOf(a.id), b: sidesOf(b.id) },
+      laid: [],
+      marks: [],
+    };
+  };
   for (const edge of diagram.edges) {
     if (edge.kind === "provided" || edge.kind === "required") continue;
     if (!boxes.has(edge.source) || !boxes.has(edge.target)) continue;
     const key = [edge.source, edge.target].toSorted().join("\u0000");
-    const bundle = bundles.get(key);
-    if (bundle) bundle.members.push(edge);
-    else
-      bundles.set(key, {
-        a: end(edge.source),
-        b: end(edge.target),
-        members: [edge],
-        from: "bottom",
-        to: "top",
-        points: [],
-        nested:
-          chain(edge.source).includes(edge.target) || chain(edge.target).includes(edge.source),
-        offsets: [0],
-        half: 0,
-      });
+    const found = bundles.get(key);
+    if (found) found.members.push(edge);
+    else bundles.set(key, bundle(key, end(edge.source), end(edge.target), [edge]));
   }
-  const marked = (edge: TamEdge) =>
-    edge.kind === "channel" || edge.kind === "assembly" || !!edge.label;
+
+  /** Where the members of a bundle run beside its line, by what each carries: a loop's width, a circle. */
+  const places = (members: TamEdge[]) => {
+    const found = [0];
+    for (let index = 1; index < members.length; index++)
+      found.push(
+        found[index - 1] +
+          Math.max(APART, thickness(members[index - 1]) + thickness(members[index]) + 8),
+      );
+    return found;
+  };
+  /** The room a loop's two lines take beside the bundle's own where it ends. */
+  const loop = (item: Bundle) =>
+    item.members.some((edge) => edge.kind === "modify") ? LOOP_END : 0;
+  /** The room a side leaves a bundle that ends on it. */
+  const room = (item: Bundle, line: Line = item) =>
+    Math.min(
+      ...[range(item.a, line.from), range(item.b, line.to)].map(([low, high]) => high - low),
+    );
+  /** Spreads the members of a bundle across its line; one wider than the sides it ends on is pressed together to fit them. */
+  const arrange = (item: Bundle) => {
+    const found = places(item.members),
+      width = found.at(-1)!,
+      fits = room(item),
+      press = width > fits && width > 0 ? Math.max(fits, (found.length - 1) * 6) / width : 1;
+    item.offsets = found.map((place) => (place - width / 2) * press);
+    item.reach = (width * press) / 2 + loop(item);
+    item.half = (width * press) / 2 + Math.max(...item.members.map(thickness)) / 2;
+    item.traveller.half = item.half;
+  };
 
   /** The bundles that end on each side of each element, as they choose their lines. */
   const ends = new Map<string, Bundle[]>();
-  const sideKey = (bundle: Bundle, which: "a" | "b", line: Line = bundle) =>
-    `${bundle[which].id}\u0000${which === "a" ? line.from : line.to}`;
+  const sideKey = (item: Bundle, which: "a" | "b", line: Line = item) =>
+    item.sides[which][which === "a" ? line.from : line.to];
+  const at = (item: Bundle, which: "a" | "b", line: Line = item) => {
+    const point = which === "a" ? line.points[0] : line.points.at(-1)!;
+    return lies(which === "a" ? line.from : line.to) ? point.x : point.y;
+  };
 
-  /** What a line costs: elements in its way, corners, length, no room for a circle, a crowded side. */
-  const cost = (bundle: Bundle, line: Line) => {
+  /**
+   * Half of the room a bundle takes where one of its ends meets its side: its wires, and the circle
+   * of a channel where the run that leaves the side is the longest, the one the circle stands on.
+   */
+  const reachAt = (item: Bundle, which: "a" | "b", line: Line = item) => {
     const { points } = line,
-      own = new Set([...chain(bundle.a.id), ...chain(bundle.b.id)]);
+      lengths = points.slice(1).map((point, index) => runLength(points[index], point)),
+      own = which === "a" ? lengths[0] : lengths.at(-1)!;
+    return item.reach + (item.members.some(circled) && own >= Math.max(...lengths) ? CIRCLE : 0);
+  };
+
+  /** What a line costs before what it meets: corners, length, no room for a circle, a crowded side. */
+  const plain = (item: Bundle, line: Line) => {
+    const { points } = line;
     let total = (points.length - 2) * BEND,
       most = 0;
     for (let index = 0; index < points.length - 1; index++) {
-      const p = points[index],
-        q = points[index + 1],
-        length = Math.abs(q.x - p.x) + Math.abs(q.y - p.y);
+      const length = runLength(points[index], points[index + 1]);
       total += length * LENGTH;
       most = Math.max(most, length);
-      for (const obstacle of obstacles)
-        if (
-          !own.has(obstacle.id) &&
-          segmentHits(p, q, grow(obstacle.box, obstacle.container ? 0 : 4))
-        )
-          total += obstacle.container ? ACROSS : THROUGH;
-      // A line never runs through the elements it joins.
-      if (!bundle.nested)
-        for (const item of [bundle.a, bundle.b])
-          if (segmentHits(p, q, grow(item.box, -1))) total += THROUGH;
     }
-    if (line.from === line.to && !bundle.nested) total += BEND;
+    if (line.from === line.to && !item.nested) total += BEND;
     // A line leaves the middle of a side unless something stands in its way there.
     total += (line.off ?? 0) * OFF_MIDDLE;
-    if (most < ROOM && bundle.members.some(marked)) total += SHORT;
-    // Of equal lines, the one that leaves along the diagram's direction.
-    if (lies(line.from) !== vertical) total += 4;
+    if (item.members.some(circled) && most < CHANNEL + 8) total += CRAMPED;
+    else if (most < ROOM && item.members.some(marked)) total += SHORT;
+    // Of equal lines, the one that leaves and enters along the diagram's direction.
+    if (lies(line.from) !== vertical) total += SIDEWAYS;
+    if (lies(line.to) !== vertical) total += SIDEWAYS;
     for (const which of ["a", "b"] as const) {
-      const others = ends.get(sideKey(bundle, which, line)) ?? [];
+      const key = sideKey(item, which, line),
+        spot = at(item, which, line);
+      // A straight line stays where it is: its spot on the side is free or it is no line to take.
+      if (
+        points.length === 2 &&
+        (taken.get(key) ?? []).some(
+          (other) =>
+            other.key !== item.key &&
+            Math.abs(other.at - spot) < other.half + reachAt(item, which, line) + APART / 2,
+        )
+      )
+        total += TAKEN;
+      const others = (ends.get(key) ?? []).filter((other) => other !== item);
       if (!others.length) continue;
-      const [low, high] = range(bundle[which], which === "a" ? line.from : line.to);
+      const [low, high] = range(item[which], which === "a" ? line.from : line.to);
       const needed =
-        others.reduce((sum, other) => sum + 2 * other.half + APART, 0) +
-        (bundle.members.length - 1) * APART;
+        others.reduce((sum, other) => sum + 2 * other.reach + APART, 0) +
+        (item.members.length - 1) * APART;
       total += needed > high - low ? CROWDED : 12;
     }
     return total;
   };
 
+  const windowOf = (item: Bundle, by: number) => grow(union([item.a.box, item.b.box]), by);
+
+  /** The cheapest `count` lines for a bundle in the field as it is, cheapest first, with what each costs; of several, each between other sides. */
+  const cheapest = (item: Bundle, count: number): { line: Line; cost: number }[] => {
+    const part = !item.nested ? undefined : chain(item.a.id).includes(item.b.id) ? item.a : item.b;
+    const scope = scopeOf(field, item.traveller, windowOf(item, REACH + item.half + 8));
+    const found: { line: Line; cost: number; met: number }[] = [];
+    const consider = (line: Line, cost: number, within: Scope) => {
+      if (found.length === count && cost >= found.at(-1)!.cost) return;
+      const met = price(within, line.points),
+        total = cost + met;
+      // Of the lines between one pair of sides, only the cheapest is one of several to choose from.
+      const same = found.findIndex(
+        (other) => other.line.from === line.from && other.line.to === line.to,
+      );
+      if (count > 1 && same >= 0) {
+        if (found[same].cost <= total) return;
+        found.splice(same, 1);
+      }
+      const index = found.findIndex((other) => total < other.cost);
+      if (index < 0 && found.length === count) return;
+      found.splice(index < 0 ? found.length : index, 0, { line, cost: total, met });
+      if (found.length > count) found.pop();
+    };
+    for (const { line, cost } of lines(item.a, item.b, part, item.members.some(marked))
+      .map((line) => ({ line, cost: plain(item, line) }))
+      .toSorted((p, q) => p.cost - q.cost))
+      consider(line, cost, scope);
+    // Something stands in every simple line's way: around it, in the container of both ends first.
+    const best = found[0];
+    if (!item.nested && (!best || best.met >= TROUBLE || best.cost >= TROUBLE + 2 * OFF_MIDDLE)) {
+      const { home } = item.traveller;
+      for (const window of [home ? grow(home, 16) : windowOf(item, 180), undefined]) {
+        const wide = scopeOf(field, item.traveller, window),
+          { blocked, terrain } = terrainOf(wide),
+          way = detour(item.a.box, item.b.box, blocked, terrain);
+        if (way) consider(way, plain(item, way), wide);
+        // A way that still runs into something may find a better one further out.
+        if (way && price(wide, way.points) < ALONG) break;
+      }
+    }
+    // The elements lie on each other: a line between their middles is all there is.
+    if (!found.length)
+      found.push({ cost: Infinity, met: Infinity, line: between(item.a.box, item.b.box) });
+    return found;
+  };
+
+  /** Lays a bundle along a line: its members beside it, and its runs into the field. */
+  const lay = (item: Bundle, line: Line) => {
+    item.from = line.from;
+    item.to = line.to;
+    item.points = line.points;
+    arrange(item);
+    item.laid = item.offsets.map((offset) => beside(item.points, offset));
+    field.wires.set(item.key, runsOf(item.points, item.half));
+  };
+
+  const take = (item: Bundle, which: "a" | "b") => {
+    const list = taken.get(sideKey(item, which)) ?? [];
+    taken.set(sideKey(item, which), list);
+    list.push({ at: at(item, which), half: reachAt(item, which), key: item.key });
+  };
+
   // Each bundle takes the cheapest line; near pairs choose first, so far ones leave by the sides still free.
-  const span = (bundle: Bundle) => {
-    const ca = centerOf(bundle.a.box),
-      cb = centerOf(bundle.b.box);
+  const span = (item: Bundle) => {
+    const ca = centerOf(item.a.box),
+      cb = centerOf(item.b.box);
     return Math.abs(ca.x - cb.x) + Math.abs(ca.y - cb.y);
   };
-  for (const bundle of [...bundles.values()].toSorted((p, q) => span(p) - span(q))) {
-    const part = !bundle.nested
-      ? undefined
-      : chain(bundle.a.id).includes(bundle.b.id)
-        ? bundle.a
-        : bundle.b;
-    let best = Infinity,
-      chosen: Line | undefined;
-    const consider = (line: Line | undefined) => {
-      const price = line ? cost(bundle, line) : Infinity;
-      if (price < best) {
-        best = price;
-        chosen = line;
-      }
-    };
-    lines(bundle.a, bundle.b, part).forEach(consider);
-    // Something stands in every simple line's way: around it.
-    if (best >= THROUGH && !bundle.nested)
-      consider(
-        detour(
-          bundle.a.box,
-          bundle.b.box,
-          solid.filter((item) => item.id !== bundle.a.id && item.id !== bundle.b.id),
-        ),
+  const queue = [...bundles.values()].toSorted((p, q) => span(p) - span(q));
+  for (let index = 0; index < queue.length; index++) {
+    const item = queue[index];
+    item.reach = places(item.members).at(-1)! / 2 + loop(item);
+    item.half = item.traveller.half =
+      places(item.members).at(-1)! / 2 + Math.max(...item.members.map(thickness)) / 2;
+    const [{ line }] = cheapest(item, 1);
+    // Circles side by side need their room: the channels a side has no room for take a line of their own.
+    const fit = places(item.members).findLastIndex((place) => place <= room(item, line)) + 1;
+    if (fit < item.members.length && item.members.some(circled)) {
+      const rest = bundle(
+        `${item.key}\u0000${index}`,
+        item.a,
+        item.b,
+        item.members.splice(Math.max(1, fit)),
       );
-    if (!chosen) {
-      // The elements lie on each other: a line between their middles is all there is.
-      const ca = centerOf(bundle.a.box),
-        cb = centerOf(bundle.b.box),
-        across = Math.abs(cb.x - ca.x) >= Math.abs(cb.y - ca.y);
-      chosen = {
-        from: across ? (cb.x >= ca.x ? "right" : "left") : cb.y >= ca.y ? "bottom" : "top",
-        to: across ? (cb.x >= ca.x ? "left" : "right") : cb.y >= ca.y ? "top" : "bottom",
-        points: across
-          ? [ca, { x: (ca.x + cb.x) / 2, y: ca.y }, { x: (ca.x + cb.x) / 2, y: cb.y }, cb]
-          : [ca, { x: ca.x, y: (ca.y + cb.y) / 2 }, { x: cb.x, y: (ca.y + cb.y) / 2 }, cb],
-      };
+      queue.splice(index + 1, 0, rest);
     }
-    Object.assign(bundle, chosen);
-    // Members keep apart by what each carries: a loop's width, a circle.
-    const places = [0];
-    for (let index = 1; index < bundle.members.length; index++)
-      places.push(
-        places[index - 1] +
-          Math.max(
-            APART,
-            thickness(bundle.members[index - 1]) + thickness(bundle.members[index]) + 8,
-          ),
-      );
-    // A bundle wider than the sides it ends on is pressed together to fit them.
-    const sides = [range(bundle.a, bundle.from), range(bundle.b, bundle.to)],
-      room = Math.min(...sides.map(([low, high]) => high - low)),
-      width = places.at(-1)!,
-      press = width > room && width > 0 ? Math.max(room, (places.length - 1) * 6) / width : 1;
-    bundle.offsets = places.map((place) => (place - width / 2) * press);
-    bundle.half = (width * press) / 2 + Math.max(...bundle.members.map(thickness)) / 2;
+    lay(item, line);
     for (const which of ["a", "b"] as const) {
-      const key = sideKey(bundle, which);
-      ends.set(key, [...(ends.get(key) ?? []), bundle]);
+      const key = sideKey(item, which);
+      ends.set(key, [...(ends.get(key) ?? []), item]);
+      // A straight line stays where it is, so it takes its spots on both sides at once.
+      if (item.points.length === 2 && !item.nested) take(item, which);
     }
   }
 
-  // Wire ends on one side of an element keep apart: straight lines stay, the others move along the side.
-  const taken = new Map<string, { at: number; half: number }[]>();
-  const at = (bundle: Bundle, which: "a" | "b") => {
-    const point = which === "a" ? bundle.points[0] : bundle.points.at(-1)!;
-    return lies(which === "a" ? bundle.from : bundle.to) ? point.x : point.y;
+  /** How far the element a bundle leads to lies along the side one of its ends is on. */
+  const far = (item: Bundle, which: "a" | "b") => {
+    const other = centerOf(item[which === "a" ? "b" : "a"].box),
+      side = which === "a" ? item.from : item.to;
+    return (lies(side) ? other.x : other.y) - at(item, which);
   };
-  const take = (bundle: Bundle, which: "a" | "b") => {
-    const list = taken.get(sideKey(bundle, which)) ?? [];
-    taken.set(sideKey(bundle, which), list);
-    list.push({ at: at(bundle, which), half: bundle.half });
-  };
-  const bent = [...bundles.values()].filter((bundle) => bundle.points.length > 2);
-  for (const bundle of bundles.values())
-    if (bundle.points.length === 2 && !bundle.nested)
-      (["a", "b"] as const).forEach((which) => take(bundle, which));
-  for (const which of ["a", "b"] as const) {
-    // Nearest first: a wire to a near element keeps the middle, wires to far ones leave beside it.
-    const far = (bundle: Bundle) => {
-      const other = centerOf(bundle[which === "a" ? "b" : "a"].box),
-        side = which === "a" ? bundle.from : bundle.to;
-      return (lies(side) ? other.x : other.y) - at(bundle, which);
+  /**
+   * Moves one end of a bent line along its side, with the run that leaves it, to the nearest spot
+   * that is free of the ends the side holds already and where that run meets no new trouble.
+   */
+  const spread = (item: Bundle, which: "a" | "b") => {
+    const side = which === "a" ? item.from : item.to,
+      [low, high] = range(item[which], side),
+      others = (taken.get(sideKey(item, which)) ?? []).filter((other) => other.key !== item.key);
+    const free = (spot: number, gap: number, circle: boolean) =>
+      others.every(
+        (other) =>
+          Math.abs(other.at - spot) >=
+          (circle
+            ? other.half + reachAt(item, which)
+            : Math.min(other.half, LOOP_END) + item.reach) +
+            gap,
+      );
+    const toward = Math.sign(far(item, which)) || 1,
+      start = at(item, which);
+    const axis = lies(side) ? "x" : "y",
+      [first, second] = which === "a" ? [0, 1] : [item.points.length - 1, item.points.length - 2];
+    const moved = (spot: number) =>
+      item.points.map((point, index) =>
+        index === first || index === second ? { ...point, [axis]: spot } : point,
+      );
+    let scope: Scope | undefined,
+      met = 0;
+    const passes = (spot: number) => {
+      if (!scope) {
+        scope = scopeOf(field, item.traveller, windowOf(item, 200));
+        met = price(scope, item.points);
+      }
+      return price(scope, moved(spot)) < met + TROUBLE;
     };
-    for (const bundle of bent.toSorted((p, q) => Math.abs(far(p)) - Math.abs(far(q)))) {
-      const side = which === "a" ? bundle.from : bundle.to,
-        [low, high] = range(bundle[which], side),
-        others = taken.get(sideKey(bundle, which)) ?? [];
-      const free = (spot: number) =>
-        others.every((other) => Math.abs(other.at - spot) >= other.half + bundle.half + APART / 2);
-      const toward = Math.sign(far(bundle)) || 1,
-        start = at(bundle, which);
-      let found: number | undefined;
+    // On a side with more ends than fit APART / 2 apart, they move closer together, at last without room for circles.
+    let found: number | undefined;
+    for (const [gap, circle] of [
+      [APART / 2, true],
+      [TIGHT, true],
+      [TIGHT, false],
+    ] as const)
       for (let step = 0; found === undefined && step <= high - low; step += 3)
         for (const spot of [start + toward * step, start - toward * step])
-          if (found === undefined && spot >= low && spot <= high && free(spot)) found = spot;
-      if (found !== undefined && found !== start) {
-        // The end moves along its side with the run that leaves it.
-        const axis = lies(side) ? "x" : "y",
-          [first, second] =
-            which === "a" ? [0, 1] : [bundle.points.length - 1, bundle.points.length - 2];
-        bundle.points = bundle.points.map((point, index) =>
-          index === first || index === second ? { ...point, [axis]: found } : point,
-        );
-      }
-      take(bundle, which);
+          if (
+            found === undefined &&
+            spot >= low &&
+            spot <= high &&
+            free(spot, gap, circle) &&
+            (spot === start || passes(spot))
+          )
+            found = spot;
+    if (found !== undefined && found !== start) lay(item, { ...item, points: moved(found) });
+  };
+
+  // Wire ends on one side of an element keep apart: straight lines stay, the others move along the side.
+  const bent = queue.filter((item) => item.points.length > 2);
+  for (const which of ["a", "b"] as const)
+    // Nearest first: a wire to a near element keeps the middle, wires to far ones leave beside it.
+    for (const item of bent.toSorted((p, q) => Math.abs(far(p, which)) - Math.abs(far(q, which)))) {
+      spread(item, which);
+      take(item, which);
     }
+
+  // Every wire lies: circles and labels take their spots, on the shortest wires first.
+  const around: Surroundings = {
+    solids: field.solids.map((wall) => wall.box),
+    containers: field.containers.map((wall) => wall.box),
+    titles: field.titles.map((wall) => wall.box),
+    wires: [],
+    placed: [],
+    boundaries: [],
+  };
+  const stubs = [...placed.stubs].flatMap(([owner, points]) =>
+    points.slice(1).map((point, index) => ({ owner, a: points[index], b: point })),
+  );
+  const piece = (edge: TamEdge, a: Point, b: Point) => ({
+    owner: edge.id,
+    a,
+    b,
+    half: edge.kind === "modify" ? thickness(edge) : 0,
+  });
+  /** Every wire but the bundle's own, for its marks to keep off. */
+  const wiresBut = (item?: Bundle) => [
+    ...stubs,
+    ...queue
+      .filter((other) => other !== item)
+      .flatMap((other) =>
+        other.laid.flatMap((points, member) =>
+          points.slice(1).map((point, index) => piece(other.members[member], points[index], point)),
+        ),
+      ),
+  ];
+  /** Places the marks of a bundle on its wires as they lie and returns how much they cover. */
+  const mark = (item: Bundle, others: Surroundings["wires"]) => {
+    const count = item.members.length,
+      own = item.laid.map((points, member) =>
+        points.slice(1).map((point, index) => piece(item.members[member], points[index], point)),
+      );
+    const mine: Surroundings["placed"] = [];
+    let hits = 0;
+    item.marks = item.members.map((edge, index) => {
+      // The outer wires of a bundle carry their labels on their outer side; circles stand along it one after the other.
+      const found = placeMark(
+        edge,
+        item.laid[index],
+        {
+          share: count > 1 ? (index + 1) / (count + 1) : 0.5,
+          outer:
+            count > 1 && Math.abs(item.offsets[index]) > 0.5 ? Math.sign(item.offsets[index]) : 0,
+        },
+        { ...around, wires: [...others, ...own.flat()], placed: [...around.placed, ...mine] },
+        prepared,
+        measure,
+      );
+      if (found) {
+        hits += found.hits;
+        mine.push(...found.drawn.map((box) => ({ owner: edge.id, box })));
+      }
+      return found;
+    });
+    return { hits, mine };
+  };
+  const commit = (item: Bundle, mine: Surroundings["placed"]) => {
+    around.placed.push(...mine);
+    item.members.forEach((edge, index) => {
+      const found = item.marks[index];
+      if (found && edge.protocol && circled(edge))
+        around.boundaries.push({
+          owner: edge.id,
+          protocol: edge.protocol,
+          up: found.up,
+          level: found.up ? found.spot.y : found.spot.x,
+          at: found.up ? found.spot.x : found.spot.y,
+        });
+    });
+    field.marks.set(
+      item.key,
+      mine.map((entry) => entry.box),
+    );
+  };
+  const longest = (item: Bundle) =>
+    Math.max(...item.points.slice(1).map((point, index) => runLength(item.points[index], point)));
+  const troubled: Bundle[] = [];
+  const all = wiresBut();
+  for (const item of queue.toSorted((p, q) => longest(p) - longest(q))) {
+    if (!item.members.some(marked)) continue;
+    const owners = new Set(item.members.map((edge) => edge.id));
+    const { hits, mine } = mark(
+      item,
+      all.filter((wire) => !owners.has(wire.owner)),
+    );
+    commit(item, mine);
+    if (hits >= HIT) troubled.push(item);
   }
 
-  const markers = new Set(circles.map((circle) => circle.id));
-  /** What a circle or label keeps off: the elements, and the circles and labels placed before it. */
-  const occupied: Box[] = obstacles
-    .filter((item) => !item.container || item.id.endsWith("#title"))
-    .map((item) => item.box);
-  const covered = (box: Box) => occupied.filter((other) => overlaps(box, other, 1)).length;
-  for (const bundle of bundles.values()) {
-    const center = bundle.points,
-      host = longest(center),
-      up = runsUpright(center, host);
-    /** A point on the host run of a line, `share` of the way along it. */
-    const along = (points: Point[], share: number): Point => ({
-      x: points[host].x + (points[host + 1].x - points[host].x) * share,
-      y: points[host].y + (points[host + 1].y - points[host].y) * share,
-    });
-    const length =
-      Math.abs(center[host + 1].x - center[host].x) + Math.abs(center[host + 1].y - center[host].y);
-    const count = bundle.members.length;
-    bundle.members.forEach((edge, index) => {
-      let points = beside(center, bundle.offsets[index]);
-      // Circles and labels of a bundle stand along its run one after the other where it is long
-      // enough; a single wire's stand in the middle, or off it where the middle is taken.
-      const shares =
-        count > 1
-          ? [length >= count * ROOM ? (index + 1) / (count + 1) : 0.5]
-          : length >= 3 * ROOM
-            ? [0.5, 0.35, 0.65, 0.22, 0.78]
-            : [0.5];
-      // The outer wires of a bundle carry their labels on their outer side; a single wire's stand where there is room.
-      const off = along(points, 0.5)[up ? "x" : "y"] - along(center, 0.5)[up ? "x" : "y"],
-        outer = count > 1 && Math.abs(off) > 0.5 ? Math.sign(off) : 0,
-        sides = outer ? [outer] : count > 1 ? [0] : [0, -1, 1];
+  // A connection whose circle or label covers something takes another line, where one leaves them room.
+  for (const item of troubled) {
+    const owners = new Set(item.members.map((edge) => edge.id)),
+      others = wiresBut(item);
+    around.placed = around.placed.filter((entry) => !owners.has(entry.owner));
+    around.boundaries = around.boundaries.filter((entry) => !owners.has(entry.owner));
+    field.marks.delete(item.key);
+    field.wires.delete(item.key);
+    for (const list of taken.values())
+      for (let index = list.length - 1; index >= 0; index--)
+        if (list[index].key === item.key) list.splice(index, 1);
+    const current: Line = { from: item.from, to: item.to, points: item.points };
+    let best: { line: Line; total: number } | undefined;
+    const options = cheapest(item, OTHERS);
+    const scope = scopeOf(field, item.traveller);
+    for (const option of [current, ...options.map((option) => option.line)]) {
+      lay(item, option);
+      if (option !== current && option.points.length > 2)
+        (["a", "b"] as const).forEach((which) => spread(item, which));
+      const line: Line = { from: item.from, to: item.to, points: item.points, off: option.off },
+        met = price(scope, line.points);
+      if (option !== current && met >= THROUGH) continue;
+      const total = plain(item, line) + met + mark(item, others).hits * COVER;
+      if (!best || total < best.total) best = { line, total };
+    }
+    lay(item, best!.line);
+    if (!item.nested || item.points.length > 2)
+      (["a", "b"] as const).forEach((which) => take(item, which));
+    commit(item, mark(item, others).mine);
+  }
+
+  for (const item of queue) {
+    item.members.forEach((edge, index) => {
+      let points = item.laid[index].map((point) => ({ ...point }));
+      const found = item.marks[index];
       // Every end on a rounded shape meets its curved outline.
-      const ends = [
-        outline(points[0], points[1], bundle.a.box, bundle.nested ? 0 : bundle.a.radius),
-        outline(points.at(-1)!, points.at(-2)!, bundle.b.box, bundle.nested ? 0 : bundle.b.radius),
-      ];
-      const mark = edge.kind === "channel" || edge.kind === "assembly",
-        size = !mark ? 0 : edge.kind === "assembly" ? ASSEMBLY : CHANNEL,
-        labels = mark ? channelLabels(edge, up) : [];
-      /** The circle and the rooms beside it at a spot, with everything on `side` of the wire (0: as ELK has it). */
-      const rooms = (spot: Point, side: number): Box[] => {
-        if (!mark) {
-          if (!edge.label) return [];
-          // A label stands beside the run: right of one that runs up or down, above one across.
-          const { width, height } = smallSize(edge.label, measure),
-            half = thickness(edge);
-          return [
-            up
-              ? {
-                  x: side < 0 ? spot.x - half - 6 - width : spot.x + half + 6,
-                  y: spot.y - height / 2,
-                  width,
-                  height,
-                }
-              : {
-                  x: spot.x - width / 2,
-                  y: side > 0 ? spot.y + half + 4 : spot.y - half - 4 - height,
-                  width,
-                  height,
-                },
-          ];
-        }
-        const box = { x: spot.x - size / 2, y: spot.y - size / 2, width: size, height: size };
-        // Beside an upright wire everything stands in one room, right of it or left; at a wire across,
-        // the label above and the marker below, or both on one side.
-        let above = box.y - MARKER_GAP,
-          below = box.y + size + MARKER_GAP;
-        const found: Box[] = [];
-        // On one side the marker stands next to the circle and the label beyond it.
-        const order = labels.map((_, at) => at);
-        if (side && !edge.protocol) order.reverse();
-        for (const at of order) {
-          const where = labels[at].layoutOptions?.["elk.nodeLabels.placement"] ?? "",
-            width = labels[at].width!,
-            height = labels[at].height!;
-          if (where.includes("H_RIGHT")) {
-            found[at] = {
-              x: side < 0 ? box.x - MARKER_GAP - width : box.x + size + MARKER_GAP,
-              y: spot.y - height / 2,
-              width,
-              height,
-            };
-            continue;
-          }
-          const over = side && !edge.protocol ? side < 0 : where.includes("V_TOP");
-          found[at] = { x: spot.x - width / 2, y: over ? above - height : below, width, height };
-          if (over) above -= height + 2;
-          else below += height + 2;
-        }
-        return [...found, box];
-      };
-      let best: { spot: Point; rooms: Box[]; cost: number } | undefined;
-      for (const share of shares)
-        for (const side of sides) {
-          const spot = along(points, share),
-            taken = rooms(spot, side),
-            cost = taken.reduce((sum, box) => sum + covered(box), 0);
-          if (!best || cost < best.cost) best = { spot, rooms: taken, cost };
-          if (!cost) break;
-        }
-      const { spot } = best!;
-      occupied.push(...best!.rooms);
-      points[0] = ends[0];
-      points[points.length - 1] = ends[1];
-      let cut = host;
-      if (edge.source !== bundle.a.id) {
+      const first = outline(points[0], points[1], item.a.box, item.nested ? 0 : item.a.radius),
+        last = outline(points.at(-1)!, points.at(-2)!, item.b.box, item.nested ? 0 : item.b.radius);
+      points[0] = first;
+      points[points.length - 1] = last;
+      let cut = found?.host ?? 0;
+      if (edge.source !== item.a.id) {
         points = points.toReversed();
-        cut = points.length - 2 - host;
+        cut = points.length - 2 - cut;
       }
-      if (mark) {
-        // The circle sits on the longest run, its label and marker beside it.
+      if (found && circled(edge)) {
+        // The circle sits on its run, its label and marker beside it.
         const id = `${edge.id}#node`;
-        boxes.set(id, best!.rooms.at(-1)!);
+        boxes.set(id, found.rooms.at(-1)!);
         markers.add(id);
-        upright.set(id, up);
-        routes.set(`${edge.id}:a`, [...points.slice(0, cut + 1), spot]);
-        routes.set(`${edge.id}:b`, [spot, ...points.slice(cut + 1)]);
-        if (labels.length) nodeLabels.set(id, best!.rooms.slice(0, -1));
+        upright.set(id, found.up);
+        routes.set(`${edge.id}:a`, [...points.slice(0, cut + 1), found.spot]);
+        routes.set(`${edge.id}:b`, [found.spot, ...points.slice(cut + 1)]);
+        if (found.rooms.length > 1) nodeLabels.set(id, found.rooms.slice(0, -1));
         return;
       }
       routes.set(edge.id, points);
-      if (edge.label) edgeLabels.set(edge.id, best!.rooms[0]);
+      if (found) edgeLabels.set(edge.id, found.rooms[0]);
     });
   }
   return {

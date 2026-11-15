@@ -47,20 +47,12 @@ export interface ShapeGroup {
 /** A diagram to start from: its name and its source. */
 export type Example = [name: string, source: string];
 
-/**
- * The examples to offer of a list of samples: without the ones that are test fixtures, and named
- * without the prefix that sorts them.
- */
-function examples(samples: [string, string][]): Example[] {
-  return samples
-    .filter(([name]) => !/^(variant|challenge|stress|error):/.test(name))
-    .map(([name, source]) => {
-      const plain = name.replace(
-        /^(reference|class|state|flowchart|swimlane|sequence|usecase):\s*/,
-        "",
-      );
-      return [plain[0].toUpperCase() + plain.slice(1), source];
-    });
+/** The examples to offer of a list of samples: a few that show the type well, under names for a reader. */
+function examples(samples: [string, string][], names: Record<string, string>): Example[] {
+  return Object.entries(names).flatMap(([name, shown]) => {
+    const found = samples.find(([sample]) => sample === name);
+    return found ? [[shown, found[1]] as Example] : [];
+  });
 }
 
 export interface TypeInfo {
@@ -144,7 +136,14 @@ export const TYPES: TypeInfo[] = [
         ],
       },
     ],
-    examples: examples(TAM_EXAMPLES),
+    examples: examples(TAM_EXAMPLES, {
+      "flyer: web service landscape": "Web service landscape",
+      "standard figure 2-1: web server": "Web server",
+      "protocols, data flow and dependencies": "Protocols, data flow and dependencies",
+      "design level: components and interfaces": "Components and interfaces",
+      "package dependencies": "Package dependencies",
+      "reference: SAP blog online shop": "Online shop",
+    }),
     about: "Agents, storages and the channels between them (SAP TAM, FMC)",
     starter: "",
     snippets: [],
@@ -156,7 +155,9 @@ export const TYPES: TypeInfo[] = [
     icon: "class",
     mode: "text",
     palette: [],
-    examples: examples(CLASS_EXAMPLES),
+    examples: examples(CLASS_EXAMPLES, {
+      "class: harness session (mermaid-demo)": "Session, kernel and agent",
+    }),
     about: "Classes with members, inheritance and associations",
     starter: `classDiagram
   class Order {
@@ -193,7 +194,14 @@ export const TYPES: TypeInfo[] = [
     icon: "usecase",
     mode: "text",
     palette: [],
-    examples: examples(USECASE_EXAMPLES),
+    examples: examples(USECASE_EXAMPLES, {
+      "usecase: purchasing (docs/tam.md)": "Purchasing",
+      "usecase: TAM flyer": "Web shop",
+      "usecase: library TB with notes": "Library with notes",
+      "usecase: actors and generalization": "Actors and generalization",
+      "usecase: two systems": "Two systems",
+      "usecase: bank (large)": "Bank",
+    }),
     about: "Actors and what they do with a system",
     starter: `usecase-beta
   direction LR
@@ -226,7 +234,13 @@ export const TYPES: TypeInfo[] = [
     icon: "flowchart",
     mode: "text",
     palette: [],
-    examples: examples(FLOWCHART_EXAMPLES),
+    examples: examples(FLOWCHART_EXAMPLES, {
+      "flowchart: harness turn (mermaid-demo)": "Agent turn",
+      "flowchart: login decisions": "Login decisions",
+      "flowchart: node shapes": "Node shapes",
+      "flowchart: nested subgraphs LR": "Nested groups",
+      "flowchart: CI pipeline (large)": "CI pipeline",
+    }),
     about: "Steps and decisions of a flow",
     starter: `flowchart TB
   start((Start)) --> check{In stock?}
@@ -269,7 +283,12 @@ export const TYPES: TypeInfo[] = [
     icon: "swimlane",
     mode: "text",
     palette: [],
-    examples: examples(SWIMLANE_EXAMPLES),
+    examples: examples(SWIMLANE_EXAMPLES, {
+      "swimlane: TAM flyer activity": "Order handling",
+      "swimlane: request and response (docs/tam.md)": "Request and response",
+      "swimlane: order fulfilment LR": "Order fulfilment",
+      "swimlane: incident handling (large)": "Incident handling",
+    }),
     about: "A flow across the agents that carry it out",
     starter: `swimlane-beta TB
   subgraph Customer
@@ -309,7 +328,14 @@ export const TYPES: TypeInfo[] = [
     icon: "state",
     mode: "text",
     palette: [],
-    examples: examples(STATE_EXAMPLES),
+    examples: examples(STATE_EXAMPLES, {
+      "state: TAM flyer": "Document approval",
+      "state: composite and nested (Mermaid docs)": "Composite states",
+      "state: choice, fork and join": "Choice, fork and join",
+      "state: concurrency (Mermaid docs)": "Concurrency",
+      "state: notes and descriptions LR": "Notes and descriptions",
+      "state: order lifecycle (large)": "Order lifecycle",
+    }),
     about: "The states of a thing and what moves it between them",
     starter: `stateDiagram-v2
   [*] --> Draft
@@ -337,7 +363,14 @@ export const TYPES: TypeInfo[] = [
     icon: "sequence",
     mode: "text",
     palette: [],
-    examples: examples(SEQUENCE_EXAMPLES),
+    examples: examples(SEQUENCE_EXAMPLES, {
+      "sequence: harness turn (mermaid-demo)": "Agent turn",
+      "sequence: TAM flyer": "Web shop order",
+      "sequence: fragments (Mermaid docs)": "Fragments",
+      "sequence: arrows, notes and self messages": "Arrows, notes and self messages",
+      "sequence: groups with boxes": "Groups with boxes",
+      "sequence: checkout (large)": "Checkout",
+    }),
     about: "Messages between participants over time",
     starter: `sequenceDiagram
   participant U as User
@@ -386,7 +419,13 @@ export function withUmlTitle(source: string, title: string): string {
   const name = title.trim().replace(/\s+/g, " "),
     front = source.match(/^\s*---[ \t]*\n([\s\S]*?)\n---[ \t]*\n?/),
     kept = (front?.[1].split("\n") ?? []).filter((line) => !/^title:/.test(line)),
-    lines = name ? [`title: ${name}`, ...kept] : kept,
+    // As YAML reads it: plain where that is safe, else in quotes.
+    quoted = /^[\p{L}\p{N}][^:#"']*$/u.test(name)
+      ? name
+      : !/["\\]/.test(name)
+        ? `"${name}"`
+        : `'${name.replace(/'/g, "''")}'`,
+    lines = name ? [`title: ${quoted}`, ...kept] : kept,
     body = front ? source.slice(front[0].length) : source;
   return lines.length ? `---\n${lines.join("\n")}\n---\n${body}` : body;
 }

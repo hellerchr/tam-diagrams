@@ -45,6 +45,27 @@ const NOTE = new RegExp(`^note\\s+(left|right)\\s+of\\s+${ID}\\s*(?::\\s*(.*))?$
 const NOTE_HEAD = new RegExp(`^(note\\s+(?:left|right)\\s+of\\s+)${ID}`, "iu");
 const BARE = new RegExp(`^${ID}$`, "u");
 
+/** An id with the `:::class` that may follow it, each on its own. */
+const NAME = '(\\[\\*\\]|[^:\\s\\-{}"]+)((?::::[\\w-]+)?)';
+const FIRST = new RegExp(`^${NAME}`, "u");
+/** The two ends of a transition with the arrow between them, as they are written. */
+const ENDS = new RegExp(`^${NAME}(\\s*-->\\s*)${NAME}`, "u");
+/** What stands before the id of a statement that says something of one state. */
+const BEFORE_ID: Partial<Record<Statement["kind"], RegExp>> = {
+  special: /^state\s+/,
+  declare: /^state\s+/,
+  alias: /^state\s+"[^"]*"\s+as\s+/,
+  note: /^note\s+(?:left|right)\s+of\s+/i,
+  bare: /^/,
+  description: /^/,
+};
+
+/** A name that can be the id of a state as it is typed. */
+const PLAIN = /^[A-Za-z_]\w*$/;
+
+/** The ids new states and composite states get when their name cannot be one. */
+const GENERATED = /^(?:state|composite)\d+(?:_\d+)?$/;
+
 /** The initial or a final state of a scope, as the parser names it: `root#initial`, `Edit#final2`. */
 const PSEUDO = /^(.*)#(initial|final\d+)$/;
 
@@ -207,11 +228,40 @@ interface Place {
   indent: string;
 }
 
-/** The end of the source: after the last line with text. */
+/**
+ * The end of the source: after the last line with text, and before the styling (`classDef`,
+ * `class`, `style`) a source closes with, with the comments that stand right above it.
+ */
 function rootPlace(model: Model): Place {
-  let at = model.lines.length;
-  while (at > 0 && !model.lines[at - 1].trim()) at--;
+  const { lines, outline } = model,
+    styling = new Set(
+      outline.statements.filter((item) => item.kind === "styling").map((item) => item.index),
+    );
+  let end = lines.length;
+  while (end > 0 && !lines[end - 1].trim()) end--;
+  let at = end;
+  while (at > 0 && styling.has(at - 1)) at--;
+  if (at < end) {
+    while (at > 0 && lines[at - 1].trim().startsWith("%%")) at--;
+    while (at > 0 && !lines[at - 1].trim()) at--;
+    // Only the header above: the styling is all the source holds, and stays where it is.
+    if (!outline.statements.some((item) => item.index < at)) at = end;
+  }
   return { at, indent: rootIndent(model) };
+}
+
+/**
+ * Where a note of a state is added: after the notes the state has, or else after the statement
+ * that names the state first, behind its block when that statement opens one.
+ */
+function notePlace(model: Model, state: UmlState): Place {
+  const { lines, outline } = model,
+    noted = outline.statements.findLast((item) => item.kind === "note" && item.ids[0] === state.id),
+    first = outline.statements.find((item) => item.index === state.line - 1),
+    host = noted ?? first;
+  if (!host) return rootPlace(model);
+  const block = outline.blocks.find((item) => item.open === host.index);
+  return { at: (block ? block.close : host.last) + 1, indent: indentOf(lines[host.index]) };
 }
 
 /**
@@ -333,18 +383,27 @@ function insertAt(model: Model, parent: string | null | undefined, texts: string
     }
   }
   const place = placeIn(model, scopeAt(model, parent)) ?? rootPlace(model);
-  lines.splice(place.at, 0, ...texts.map((text) => place.indent + text));
+  lines.splice(place.at, 0, ...texts.map((text) => (text ? place.indent + text : "")));
   return lines;
 }
 
 /**
- * Adds a state, a composite state, a choice, a fork or join bar, a note or a region; inside a
- * composite state or region when given. Returns the id it got, empty when the diagram cannot take
- * the piece (a fork in a diagram of the conceptual level, a note without a state to stand beside).
+ * Adds a state, a composite state, a choice or a fork or join bar, inside the composite state or
+ * region `parent` when given, and returns the id it got. The id is empty and the source unchanged
+ * when the diagram cannot take the piece: a fork in a diagram of the conceptual level, a note or a
+ * region without the part it belongs to.
+ *
+ * A note stands beside a state, so its `parent` is that state (a state, a composite state, a
+ * choice or a bar): the note is written after the line that names the state first. A region is a
+ * part of a composite state, so its `parent` is that composite state or one of its regions.
  *
  * An initial or final state is written only as the `[*]` end of a transition, so adding a start or
- * an end changes nothing yet: it returns the id the pseudo-state gets once `connectStates` joins
- * it to a state.
+ * an end changes nothing yet: it returns the id the pseudo-state gets once `connectState` joins it
+ * to a state of the scope `parent`. A caller adds it with `add(source, {kind, parent})` and then
+ * joins it: `connect(made, at)` for a start, `connect(at, made)` for an end. With a composite state
+ * as both `parent` and `at`, the transition is written beside the composite state (`[*] -->
+ * Composite`, `Composite --> [*]`), and the pseudo-state is the one of the scope that holds it;
+ * `connectState` returns the transition, whose end is then the pseudo-state to select.
  */
 export function addStatePiece(
   source: string,
@@ -381,46 +440,22 @@ export function addStatePiece(
       return done(id);
     }
     case "note": {
-      // A note stands beside a state: the part it is added at, or the last state of that group.
-      const parent = piece.parent ? diagram.states.get(piece.parent) : undefined,
-        among = [...diagram.states.values()].filter(
-          (state) => state.kind === "state" && (!parent || state.parent === parent.id),
-        ),
-        target = isReal(parent) ? parent : among.at(-1);
-      if (!target) return { source, id: "" };
-      const place = rootPlace(model),
+      const target = piece.parent ? diagram.states.get(piece.parent) : undefined;
+      if (!isReal(target)) return { source, id: "" };
+      const place = notePlace(model, target),
         text = escapeText(piece.label ?? "", false) || "Note";
       lines.splice(place.at, 0, `${place.indent}note right of ${target.id} : ${text}`);
-      return done(`note${diagram.notes.length + 1}`);
+      // Notes are numbered in the order of the source.
+      return done(`note${diagram.notes.filter((note) => note.line - 1 < place.at).length + 1}`);
     }
     case "region": {
-      // The composite state the region is added to: the one at or around the part it is added at.
-      let holder: string | null = piece.parent ?? null;
-      while (holder && !lastBlock(outline, holder))
-        holder = diagram.states.get(holder)?.parent ?? null;
-      const inner = freshId(diagram, "state");
-      if (holder) {
-        const block = lastBlock(outline, holder)!,
-          indent = placeIn(model, block.regions.at(-1) ?? holder)!.indent;
-        lines.splice(block.close, 0, `${indent}--`, `${indent}state "State" as ${inner}`);
-      } else {
-        // No composite state there: a new one, in two regions.
-        const place = rootPlace(model),
-          step = indentStep(model),
-          other = freshId(diagram, `${inner}_`);
-        holder = freshId(diagram, "composite");
-        lines.splice(
-          place.at,
-          0,
-          ...[
-            `state "Composite" as ${holder} {`,
-            `${step}state "State" as ${other}`,
-            `${step}--`,
-            `${step}state "State" as ${inner}`,
-            "}",
-          ].map((text) => place.indent + text),
-        );
-      }
+      const parent = piece.parent ? diagram.states.get(piece.parent) : undefined,
+        holder = parent?.kind === "region" ? parent.parent : (parent?.id ?? null),
+        block = holder ? lastBlock(outline, holder) : undefined;
+      if (!holder || !block) return { source, id: "" };
+      const inner = freshId(diagram, "state"),
+        indent = placeIn(model, block.regions.at(-1) ?? holder)!.indent;
+      lines.splice(block.close, 0, `${indent}--`, `${indent}state "State" as ${inner}`);
       const result = lines.join("\n");
       if (!parses(result)) return { source, id: "" };
       return { source: result, id: lastBlock(outlineOf(result), holder)!.regions.at(-1)! };
@@ -480,35 +515,62 @@ function moveNote(model: Model, note: string, target: string): string {
   return lines.join("\n");
 }
 
+/** Whether a scope is a composite state itself or one of its regions. */
+const scopeWithin = (outline: Outline, scope: string, id: string) =>
+  scope === id || segmentOf(outline, scope)?.block.id === id;
+
 /**
- * Connects two states with a transition, labelled when a label is given. From an initial state it
- * writes `[*] --> target`, to a final state `source --> [*]`, on a line in the composite state the
- * pseudo-state belongs to; each such line is a final state of its own, as the syntax has it. A note
- * as one end moves the note beside the state at the other. What the syntax cannot say (a transition
- * out of a final state, into an initial state, from or to a region) leaves the source as it is.
+ * Connects two states with a transition, labelled when a label is given, and returns the source
+ * with the id the transition has in it: transitions are numbered in the order of the source, so
+ * one written in the middle takes the number of the one that stood there.
+ *
+ * From an initial state it writes `[*] --> target`, to a final state `source --> [*]`, on a line
+ * in the composite state the pseudo-state belongs to. The syntax has no way to name a final state:
+ * each `--> [*]` line is a final state of its own, so a transition drawn to a final state that is
+ * there already gets a new one beside it, and the transition returned is how a caller finds it.
+ * With a composite state as one end and a pseudo-state of its own scope as the other, the line
+ * stands beside the composite state, in the scope that holds it: `[*] --> Composite`,
+ * `Composite --> [*]`.
+ *
+ * A transition that is there already, between the same states with the same label (to any final
+ * state of the same scope), is not written twice: the source stays as it is and the transition
+ * returned is the one there. A note as one end moves the note beside the state at the other, and
+ * no transition is returned. What the syntax cannot say (a transition out of a final state, into
+ * an initial state, from or to a region) leaves the source as it is, with no transition.
  */
-export function connectStates(source: string, from: string, to: string, label?: string): string {
+export function connectState(
+  source: string,
+  from: string,
+  to: string,
+  label?: string,
+): { source: string; edge: string } {
   const model = modelOf(source),
-    { diagram, lines, outline } = model;
+    { diagram, lines, outline } = model,
+    refused = { source, edge: "" };
   const isNote = (id: string) =>
     !diagram.states.has(id) && diagram.notes.some((note) => note.id === id);
   if (isNote(from) || isNote(to)) {
     const moved = isNote(to) ? moveNote(model, to, from) : moveNote(model, from, to);
-    return parses(moved) ? moved : source;
+    return { source: parses(moved) ? moved : source, edge: "" };
   }
   const start = endOf(model, from),
     end = endOf(model, to);
-  if (!start || !end || start.kind === "final" || end.kind === "initial") return source;
+  if (!start || !end || start.kind === "final" || end.kind === "initial") return refused;
   const text = escapeText(label ?? "", false),
     statement = `${start.text} --> ${end.text}${text ? ` : ${text}` : ""}`,
-    pseudo = start.scope ?? end.scope,
-    scope =
-      pseudo ??
-      (start.state!.parent === end.state!.parent ? scopeAt(model, start.state!.parent) : "root");
+    other = start.state ?? end.state;
+  let pseudo = start.scope ?? end.scope;
+  // The pseudo-state of a composite state's own scope, joined to that composite state.
+  if (pseudo && other && scopeWithin(outline, pseudo, other.id))
+    pseudo = scopeAt(model, other.parent);
+  const scope =
+    pseudo ??
+    (start.state!.parent === end.state!.parent ? scopeAt(model, start.state!.parent) : "root");
   // A line before the one that names a state first would move the state into its scope.
   const after = (place: Place | null) =>
     !!place && [start, end].every((item) => !item.state || item.state.line - 1 < place.at);
-  let place = placeIn(model, scope);
+  let place = placeIn(model, scope),
+    written: number;
   if (!after(place)) {
     const block = lastBlock(outline, scope),
       root = rootPlace(model);
@@ -523,18 +585,40 @@ export function connectStates(source: string, from: string, to: string, label?: 
         `${root.indent}}`,
       );
       place = null;
-    } else return source;
+      written = root.at + 1;
+    } else return refused;
   }
   if (place) lines.splice(place.at, 0, place.indent + statement);
+  written ??= place!.at;
   const result = lines.join("\n");
-  return parses(result) ? result : source;
+  if (!parses(result)) return refused;
+  const read = parseStateDiagram(result),
+    made = read.transitions.find((item) => item.line - 1 === written);
+  if (!made) return refused;
+  // The same transition as one that is there: the same ends, a final state of the same scope.
+  const landed = read.states.get(made.target),
+    twin = diagram.transitions.find((item) => {
+      const target = diagram.states.get(item.target);
+      return (
+        item.source === made.source &&
+        (item.label ?? "") === (made.label ?? "") &&
+        (item.target === made.target ||
+          (landed?.kind === "final" && target?.kind === "final" && target.parent === landed.parent))
+      );
+    });
+  return twin ? { source, edge: twin.id } : { source: result, edge: made.id };
 }
+
+/** Connects two states as `connectState` does, and returns the source alone. */
+export const connectStates = (source: string, from: string, to: string, label?: string) =>
+  connectState(source, from, to, label).source;
 
 /**
  * Gives a state, a composite state or a note another name. A state keeps its id, which its
  * transitions use: the name is written as `state "Name" as id`, in place of that line when the
- * source has one, else before the line that names the state first. A note gets the name as its
- * text. Pseudo-states, choices, bars and regions show no name and stay as they are.
+ * source has one, else before the line that names the state first. A name that is the id, or an
+ * empty one, needs no such line: the state is then written by its id alone. A note gets the name
+ * as its text. Pseudo-states, choices, bars and regions show no name and stay as they are.
  */
 export function renameState(source: string, id: string, label: string): string {
   const { diagram, lines, outline } = modelOf(source),
@@ -561,7 +645,11 @@ export function renameState(source: string, id: string, label: string): string {
       outline.statements.filter((item) => item.kind === kind && item.ids[0] === id),
     alias = own("alias").at(-1),
     declared = own("declare")[0];
-  if (alias) {
+  if (alias && name === id) {
+    for (const item of own("alias"))
+      lines[item.index] =
+        indentOf(lines[item.index]) + (item.text.endsWith("{") ? `state ${id} {` : declareText(id));
+  } else if (alias) {
     const index = alias.index;
     lines[index] = lines[index].replace(/"[^"]*"/, () => `"${name}"`);
   } else if (name === id) return source;
@@ -652,6 +740,405 @@ export function removeStates(source: string, ids: Iterable<string>): string {
   return parses(result) ? result : source;
 }
 
+/** A statement with one state id written as another, wherever it stands as an id. */
+function withId(statement: Statement, from: string, to: string): string {
+  const { text, kind } = statement,
+    swap = (id: string) => (id === from ? to : id);
+  if (kind === "transition") {
+    const ends = text.match(ENDS);
+    if (!ends) return text;
+    const [all, first, firstClass, arrow, second, secondClass] = ends;
+    return swap(first) + firstClass + arrow + swap(second) + secondClass + text.slice(all.length);
+  }
+  if (kind === "styling") {
+    const styled = text.match(/^((?:class|style)\s+)(\S+)(.*)$/);
+    return styled ? styled[1] + styled[2].split(",").map(swap).join(",") + styled[3] : text;
+  }
+  const head = text.match(BEFORE_ID[kind] ?? /^/)![0],
+    rest = text.slice(head.length),
+    found = rest.match(FIRST);
+  if (found?.[1] !== from) return text;
+  const tail = rest.slice(from.length);
+  return kind === "bare" ? declareText(to) + tail : head + to + tail;
+}
+
+/** Whether a text can be the id of a state: one word the parser reads as an id and nothing else. */
+const canBeId = (id: string) =>
+  new RegExp(`^${NAME}$`, "u").test(id) &&
+  !/[#*[\]]/.test(id) &&
+  !id.includes(":::") &&
+  !/^note\d+$/.test(id) &&
+  declareText(id) === id;
+
+/**
+ * Gives a state another id, on every line that mentions it: its declaration, its transitions, its
+ * descriptions and notes, and the `class` and `style` lines that name it. The source stays as it
+ * is when the id cannot be one or another state has it.
+ */
+export function renameStateId(source: string, id: string, newId: string): string {
+  const { diagram, lines, outline } = modelOf(source);
+  if (!isReal(diagram.states.get(id)) || !canBeId(newId) || diagram.states.has(newId))
+    return source;
+  for (const statement of outline.statements)
+    if (statement.kind === "styling" || statement.ids.includes(id))
+      lines[statement.index] = indentOf(lines[statement.index]) + withId(statement, id, newId);
+  const result = lines.join("\n");
+  try {
+    const read = parseStateDiagram(result);
+    return read.states.has(newId) && !read.states.has(id) ? result : source;
+  } catch {
+    return source;
+  }
+}
+
+/**
+ * Gives a part that was just added its first name. A state or composite state that was added
+ * under a generated id (`state1`, `composite1`) takes the name as its id where the name can be one
+ * and no state has it, on every line that mentions it: `Paid` rather than `state "Paid" as
+ * state1`. Any other name is written as `renameState` writes it, and the id stays. Returns the id
+ * the part has afterwards.
+ */
+export function retitleState(
+  source: string,
+  id: string,
+  name: string,
+): { source: string; id: string } {
+  const { diagram } = modelOf(source),
+    title = name.trim();
+  if (diagram.states.get(id)?.kind === "state" && GENERATED.test(id) && PLAIN.test(title)) {
+    const renamed = renameStateId(source, id, title);
+    if (renamed !== source) return { source: renameState(renamed, title, title), id: title };
+  }
+  return { source: renameState(source, id, name), id };
+}
+
+/** The description of a state, the text of its `State : text` lines, one line each. */
+export function stateDescription(source: string, id: string): string {
+  return parseStateDiagram(source).states.get(id)?.descriptions.join("\n") ?? "";
+}
+
+/**
+ * Gives a state another description: one `State : text` line for each line of the text, in place
+ * of the ones it has, or else after the line that names the state first. An empty text removes
+ * them. A composite state has a name only, and stays as it is.
+ */
+export function setStateDescription(source: string, id: string, text: string): string {
+  const { diagram, lines, outline } = modelOf(source),
+    state = diagram.states.get(id);
+  if (state?.kind !== "state" || state.children.length || lastBlock(outline, id)) return source;
+  const old = outline.statements.filter(
+      (item) => item.kind === "description" && item.ids[0] === id,
+    ),
+    first = outline.statements.find((item) => item.index === state.line - 1),
+    at = old[0]?.index ?? (first ? first.last + 1 : lines.length),
+    indent = indentOf(lines[old[0]?.index ?? first?.index ?? 0]),
+    written = text
+      .split("\n")
+      .map((line) => escapeText(line, false))
+      .filter(Boolean)
+      .map((line) => `${indent}${id} : ${line}`);
+  // A description that names the state first keeps it in its composite state: the id stays there.
+  if (!written.length && old[0] && old[0].index === state.line - 1)
+    written.push(indent + declareText(id));
+  const cut = new Set(old.map((item) => item.index)),
+    result = lines
+      .flatMap((line, index) => [
+        ...(index === at ? written : []),
+        ...(cut.has(index) ? [] : [line]),
+      ])
+      .concat(at >= lines.length ? written : [])
+      .join("\n");
+  return parses(result) ? result : source;
+}
+
+/** Puts a note on the other side of its state. */
+export function setNoteSide(source: string, note: string, side: "left" | "right"): string {
+  const { diagram, lines } = modelOf(source),
+    found = diagram.notes.find((item) => item.id === note);
+  if (!found || found.side === side) return source;
+  const index = found.line - 1;
+  lines[index] = lines[index].replace(
+    /^(\s*note\s+)(?:left|right)/i,
+    (_, head: string) => head + side,
+  );
+  const result = lines.join("\n");
+  return parses(result) ? result : source;
+}
+
+/** Lines with the indentation of the first one replaced by another. */
+function reindent(texts: string[], indent: string): string[] {
+  const base = indentOf(texts.find((text) => text.trim()) ?? "");
+  return texts.map((text) =>
+    text.trim() ? indent + (text.startsWith(base) ? text.slice(base.length) : text.trim()) : "",
+  );
+}
+
+/**
+ * The lines that are a state's own, as ranges of line indexes: its declarations, its descriptions
+ * and the blocks it holds its states in. Its transitions and notes are not among them.
+ */
+function ownRanges({ outline }: Model, id: string): [number, number][] {
+  const blocks = outline.blocks.filter((block) => block.id === id),
+    within = (index: number) => blocks.some((block) => block.open < index && index <= block.close);
+  return outline.statements
+    .filter(
+      (item) =>
+        ["alias", "declare", "special", "bare", "description"].includes(item.kind) &&
+        item.ids[0] === id &&
+        !within(item.index),
+    )
+    .map((item): [number, number] => [
+      item.index,
+      blocks.find((block) => block.open === item.index)?.close ?? item.last,
+    ]);
+}
+
+/**
+ * Where a state stands, in words that stay the same when regions and final states are numbered
+ * anew: `root`, the composite state that holds it, or that with the place of its region.
+ */
+function homeOf(diagram: StateDiagram, id: string): string {
+  const parent = diagram.states.get(diagram.states.get(id)?.parent ?? "");
+  if (!parent) return "root";
+  if (parent.kind !== "region") return parent.id;
+  const holder = diagram.states.get(parent.parent!)!;
+  return `${holder.id}/${holder.children.indexOf(parent.id)}`;
+}
+
+/** The states that can be named, each with where it stands. */
+const homes = (diagram: StateDiagram) =>
+  new Map(
+    [...diagram.states.values()]
+      .filter(isReal)
+      .map((state) => [state.id, homeOf(diagram, state.id)]),
+  );
+
+/**
+ * Adds a copy of a state beside it, in the same composite state: its name, its kind and its
+ * descriptions, and for a composite state the states and transitions it holds, each state under a
+ * new id. Transitions to and from the state and its notes are not copied. Returns the id of the
+ * copy, empty for what cannot be copied (a pseudo-state, a region, a note).
+ */
+export function duplicateState(source: string, id: string): { source: string; id: string } {
+  const model = modelOf(source),
+    { diagram, lines, outline } = model,
+    state = diagram.states.get(id),
+    none = { source, id: "" };
+  if (!isReal(state)) return none;
+  // The state and the states it holds, each with the id of its copy: the next number that is free.
+  const names = new Map<string, string>(),
+    taken = new Set(diagram.states.keys());
+  const name = (old: string) => {
+    const base = old.replace(/\d+$/, "");
+    for (let count = 2; ; count++)
+      if (!taken.has(`${base}${count}`)) {
+        taken.add(`${base}${count}`);
+        return `${base}${count}`;
+      }
+  };
+  const collect = (item: UmlState) => {
+    if (isReal(item)) names.set(item.id, name(item.id));
+    for (const child of item.children) collect(diagram.states.get(child)!);
+  };
+  collect(state);
+  const copy = names.get(id)!,
+    statements = new Map(outline.statements.map((item) => [item.index, item])),
+    texts: string[] = [];
+  for (const [from, to] of ownRanges(model, id)) {
+    const range = lines.slice(from, to + 1).map((line, offset) => {
+      const statement = statements.get(from + offset);
+      if (!statement || statement.kind === "styling") return line;
+      let text = statement.text;
+      for (const [old, fresh] of names)
+        if (statement.ids.includes(old)) text = withId({ ...statement, text }, old, fresh);
+      return indentOf(line) + text;
+    });
+    texts.push(...reindent(range, ""));
+  }
+  if (!texts.length) texts.push(declareText(copy));
+  const place = placeIn(model, scopeAt(model, state.parent)) ?? rootPlace(model);
+  lines.splice(place.at, 0, ...texts.map((text) => (text ? place.indent + text : text)));
+  const result = lines.join("\n");
+  try {
+    const read = parseStateDiagram(result);
+    return homeOf(read, copy) === homeOf(diagram, id) ? { source: result, id: copy } : none;
+  } catch {
+    return none;
+  }
+}
+
+/** The first line a scope can take a statement on, with its indentation. */
+function startIn(model: Model, scope: string): Place | null {
+  const { lines, outline } = model;
+  if (scope === "root") {
+    const first = outline.statements[0];
+    return first ? { at: first.index, indent: indentOf(lines[first.index]) } : rootPlace(model);
+  }
+  const block = outline.blocks.find((item) => item.id === scope),
+    found = segmentOf(outline, scope) ?? (block ? { block, segment: 0 } : null),
+    end = placeIn(model, scope);
+  if (!found || !end) return null;
+  return {
+    at: [found.block.open, ...found.block.separators][found.segment] + 1,
+    indent: end.indent,
+  };
+}
+
+/**
+ * Moves a state with what it holds into a composite state or one of its regions, or with null out
+ * of every composite state. A state stands where the line that names it first stands, so its own
+ * lines (its declaration, its descriptions, its block) are moved to where they come before every
+ * transition that names it: the end of the composite state, else its start, else a block of the
+ * composite state opened at the top. A plain state that takes one becomes a composite state. The
+ * source stays as it is when the state is there already, when the composite state is the state or
+ * inside it, and when no place leaves every other state where it is.
+ */
+export function moveStateInto(source: string, id: string, into: string | null): string {
+  const model = modelOf(source),
+    { diagram, lines } = model,
+    state = diagram.states.get(id),
+    target = into === null ? null : diagram.states.get(into);
+  if (!isReal(state) || (into !== null && target?.kind !== "state" && target?.kind !== "region"))
+    return source;
+  for (let at = into; at; at = diagram.states.get(at)?.parent ?? null) if (at === id) return source;
+  // Where the state is to stand, as `homeOf` says it: in the last region of a composite state.
+  const regions = target?.children.filter((child) => diagram.states.get(child)?.kind === "region"),
+    wanted = !target
+      ? "root"
+      : target.kind === "region"
+        ? `${target.parent}/${diagram.states.get(target.parent!)!.children.indexOf(target.id)}`
+        : regions?.length
+          ? `${target.id}/${target.children.indexOf(regions.at(-1)!)}`
+          : target.id,
+    before = homes(diagram);
+  if (before.get(id) === wanted) return source;
+  const ranges = ownRanges(model, id),
+    own = new Set(
+      ranges.flatMap(([from, to]) => lines.slice(from, to + 1).map((_, at) => from + at)),
+    ),
+    texts = ranges.length
+      ? ranges.flatMap(([from, to]) => reindent(lines.slice(from, to + 1), ""))
+      : [declareText(id)],
+    rest = lines.filter((_, index) => !own.has(index)).join("\n");
+  if (!parses(rest)) return source;
+  const put = (place: Place | null, wrap?: string) => {
+    if (!place) return null;
+    const fresh = linesOf(rest),
+      step = indentStep(pruned),
+      inner = wrap ? [`state ${wrap} {`, ...texts.map((text) => step + text), "}"] : texts;
+    fresh.splice(place.at, 0, ...inner.map((text) => (text.trim() ? place.indent + text : "")));
+    return fresh.join("\n");
+  };
+  const pruned = modelOf(rest),
+    scope = scopeAt(pruned, into);
+  const candidates: (() => string | null)[] = [
+    () =>
+      pruned.diagram.states.has(into ?? "") || !into
+        ? insertAt(modelOf(rest), into, texts).join("\n")
+        : null,
+    () => (scope === "root" && into ? null : put(startIn(pruned, scope))),
+    () => (into && target?.kind === "state" ? put(startIn(pruned, "root"), into) : null),
+  ];
+  for (const candidate of candidates) {
+    const result = candidate();
+    if (!result) continue;
+    try {
+      const read = parseStateDiagram(result),
+        after = homes(read);
+      if (
+        after.get(id) === wanted &&
+        after.size === before.size &&
+        read.transitions.length === diagram.transitions.length &&
+        [...before].every(([other, home]) => other === id || after.get(other) === home)
+      )
+        return result;
+    } catch {
+      // This place does not read: the next one.
+    }
+  }
+  return source;
+}
+
+/**
+ * Takes a composite state away and keeps what it holds: the lines of its blocks stand where the
+ * blocks stood, one step less indented, in the composite state around it. The composite state
+ * goes with its transitions, its notes and the `--` between its regions; the initial and final
+ * states it held are then those of the scope around it.
+ */
+export function ungroupComposite(source: string, id: string): string {
+  const { diagram, lines, outline } = modelOf(source),
+    blocks = outline.blocks.filter((block) => block.id === id);
+  if (diagram.states.get(id)?.kind !== "state" || !blocks.length) return source;
+  const cut = new Set<number>();
+  for (const block of blocks) {
+    const outer = indentOf(lines[block.open]),
+      inside = lines.slice(block.open + 1, block.close).find((line) => line.trim()),
+      inner = inside ? indentOf(inside) : outer;
+    for (const index of [block.open, block.close, ...block.separators]) cut.add(index);
+    if (inner.length > outer.length && inner.startsWith(outer))
+      for (let index = block.open + 1; index < block.close; index++)
+        if (lines[index].startsWith(inner)) lines[index] = outer + lines[index].slice(inner.length);
+  }
+  const open = lines.filter((_, index) => !cut.has(index)).join("\n");
+  if (!parses(open)) return source;
+  const result = parseStateDiagram(open).states.has(id) ? removeStates(open, [id]) : open;
+  try {
+    const read = homes(parseStateDiagram(result)),
+      before = homes(diagram);
+    return !read.has(id) && read.size === before.size - 1 ? result : source;
+  } catch {
+    return source;
+  }
+}
+
+/**
+ * Turns a transition round: its ends change places, its label stays. An initial state at its
+ * start becomes a final state at its end and the other way round, as `[*]` reads. The source
+ * stays as it is where the syntax cannot say the result.
+ */
+export function reverseTransition(source: string, edge: string): string {
+  const { diagram, lines } = modelOf(source),
+    found = diagram.transitions.find((item) => item.id === edge);
+  if (!found || found.source === found.target) return source;
+  const index = found.line - 1,
+    text = lines[index].trim(),
+    ends = text.match(ENDS);
+  if (!ends) return source;
+  const [all, first, firstClass, arrow, second, secondClass] = ends;
+  lines[index] =
+    indentOf(lines[index]) +
+    second +
+    secondClass +
+    arrow +
+    first +
+    firstClass +
+    text.slice(all.length);
+  const result = lines.join("\n");
+  try {
+    const read = parseStateDiagram(result),
+      before = homes(diagram),
+      after = homes(read);
+    return [...before].every(([id, home]) => after.get(id) === home) ? result : source;
+  } catch {
+    return source;
+  }
+}
+
+/** What a part that carries no name of its own is called: a pseudo-state, a choice, a bar. */
+const UNNAMED: Partial<Record<UmlState["kind"], string>> = {
+  initial: "Start",
+  final: "End",
+  choice: "Choice",
+  fork: "Fork",
+  join: "Join",
+};
+
+/** The kinds of part a transition can end at or start from: states and the parts that stand for one. */
+const STATES = ["state", "composite", "choice", "fork", "join"];
+
+/** The kinds of part a new state follows: those, and the start of a machine. */
+const FOLLOWED = [...STATES, "start"];
+
 const KINDS: Record<UmlState["kind"], string> = {
   state: "state",
   initial: "start",
@@ -667,6 +1154,8 @@ const KINDS: Record<UmlState["kind"], string> = {
  * shapes: states and composite states by their own id, the initial and final states of a scope as
  * `root#initial`, `Edit#final2` (final states numbered through the whole source in the order of
  * their transitions), the regions of a composite state as `Active#region1`, notes as `note1`.
+ * A part that carries no name is labelled by what it is: `Start`, `End`, `Choice`, `Fork`, `Join`,
+ * `Region 2`; `rename` leaves such a part as it is.
  */
 export const stateStructure: Structure = {
   pieces: [
@@ -675,6 +1164,7 @@ export const stateStructure: Structure = {
       name: "State",
       about: "A condition the machine stays in",
       joins: "after",
+      joinsTo: FOLLOWED,
       named: true,
     },
     {
@@ -684,17 +1174,43 @@ export const stateStructure: Structure = {
       group: true,
       named: true,
     },
-    { kind: "start", name: "Start", about: "Where the machine begins", joins: "before" },
-    { kind: "end", name: "End", about: "Where the machine ends", joins: "after" },
-    { kind: "choice", name: "Choice", about: "A branch by guards", joins: "after" },
-    { kind: "fork", name: "Fork", about: "A bar that splits into parallel paths", joins: "after" },
+    {
+      kind: "start",
+      name: "Start",
+      about: "Where the machine begins",
+      joins: "before",
+      joinsTo: STATES,
+    },
+    { kind: "end", name: "End", about: "Where the machine ends", joins: "after", joinsTo: STATES },
+    {
+      kind: "choice",
+      name: "Choice",
+      about: "A branch by guards",
+      joins: "after",
+      joinsTo: FOLLOWED,
+    },
+    {
+      kind: "fork",
+      name: "Fork",
+      about: "A bar that splits into parallel paths",
+      joins: "after",
+      joinsTo: FOLLOWED,
+    },
     {
       kind: "join",
       name: "Join",
       about: "A bar that brings parallel paths together",
       joins: "after",
+      joinsTo: FOLLOWED,
     },
-    { kind: "note", name: "Note", about: "A remark beside a state", joins: "after", named: true },
+    {
+      kind: "note",
+      name: "Note",
+      about: "A remark beside a state",
+      joins: "after",
+      joinsTo: STATES,
+      named: true,
+    },
     {
       kind: "region",
       name: "Region",
@@ -709,9 +1225,13 @@ export const stateStructure: Structure = {
     const collect = (id: string) => {
       const state = diagram.states.get(id)!,
         holds = state.kind === "state" && (!!state.children.length || !!lastBlock(outline, id));
+      const regions = state.parent ? diagram.states.get(state.parent)!.children : [];
       nodes.push({
         id,
-        label: state.label,
+        label:
+          state.kind === "region"
+            ? `Region ${regions.indexOf(id) + 1}`
+            : (UNNAMED[state.kind] ?? state.label),
         parent: state.parent,
         line: state.line,
         group: holds || state.kind === "region",
@@ -742,8 +1262,9 @@ export const stateStructure: Structure = {
     };
   },
   add: (source, piece) => addStatePiece(source, { ...piece, kind: piece.kind as StatePiece }),
-  connect: (source, from, to) => connectStates(source, from, to),
+  connect: (source, from, to) => connectState(source, from, to).source,
   rename: renameState,
+  retitle: retitleState,
   label: labelTransition,
   // A state diagram has one kind of join.
   relink: (source) => source,

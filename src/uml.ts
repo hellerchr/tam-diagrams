@@ -83,7 +83,13 @@ export function scan(source: string): { lines: SourceLine[]; title?: string; lev
     if (close > first) {
       for (const text of all.slice(first + 1, close)) {
         const match = text.match(/^title:\s*(.+)$/);
-        if (match) title = match[1].trim().replace(/^(["'])(.*)\1$/, "$2");
+        // A quoted title stands without its quotes; in single quotes a doubled quote is one.
+        if (match) {
+          const value = match[1].trim();
+          title = /^'.*'$/.test(value)
+            ? value.slice(1, -1).replace(/''/g, "'")
+            : value.replace(/^"(.*)"$/, "$1");
+        }
       }
       start = close + 1;
     }

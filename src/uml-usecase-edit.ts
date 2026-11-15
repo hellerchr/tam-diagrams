@@ -3,11 +3,21 @@
  * cases, system boundaries and notes, the way uml-activity-edit.ts edits flowcharts. Each function
  * returns the source with one change made. A line that loses an element or its relation is written
  * anew from what it still says; every other line stays as it was. The layout stays automatic.
+ *
+ * The edits write what UML has: an association between an actor and a use case, «include» and
+ * «extend» between two use cases, a generalization between two actors or two use cases. A source
+ * that says more is read as it is.
  */
 
-import type { Structure, StructureNode } from "./structure.ts";
+import type { Structure, StructureEdge, StructureNode } from "./structure.ts";
 import { accessibilityLines, labelText, scan } from "./uml.ts";
 import { parseUseCaseDiagram, type UseCaseDiagram, type UseCaseRelation } from "./uml-usecase.ts";
+
+/** A join of a use case diagram as `read` gives it. */
+export interface UseCaseEdge extends StructureEdge {
+  /** Whether the join carries no label to edit: every relation but an association. */
+  fixedLabel?: boolean;
+}
 
 /** What a canvas adds to a use case diagram. */
 export type UseCasePiece = "usecase" | "actor" | "boundary" | "note";
@@ -42,6 +52,7 @@ const LABELLED = /^(<--|o--|x--|--)\s+(?!>)([^-]+?)\s+(-->|--o|--x|--)(?!-)/;
 /** The arrow each kind of relation is written with. */
 const ARROWS: Record<string, string> = {
   association: "-->",
+  undirected: "--",
   include: "..> : include",
   extend: "..> : extend",
   generalization: "--|>",
@@ -156,41 +167,59 @@ function statement(line: string, index: number): Statement {
   };
 }
 
-/** A source as its diagram, its lines, and its statements with their places. */
-function model(source: string) {
-  const diagram = parseUseCaseDiagram(source),
-    lines = linesOf(source),
+/** A source as its lines and its statements with their places; it need not be one the parser reads. */
+function statementsOf(source: string) {
+  const lines = linesOf(source),
     skipped = accessibilityLines();
   const statements = scan(source)
     .lines.slice(1)
     .flatMap(({ text, line }) => (skipped(text) ? [] : [statement(lines[line - 1], line - 1)]));
-  return { diagram, lines, statements };
+  return { lines, statements };
 }
 
-/** A text as a label holds it: line breaks as `<br>`, and what the parser would decode or drop as entity codes. */
+/** A source as its diagram, its lines, and its statements with their places. */
+function model(source: string) {
+  return { diagram: parseUseCaseDiagram(source), ...statementsOf(source) };
+}
+
+/** A source as its diagram, or nothing when the parser does not read it. */
+function reads(source: string): UseCaseDiagram | undefined {
+  try {
+    return parseUseCaseDiagram(source);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * A text as a label holds it: line breaks as `<br>`, and what the parser would decode or drop as
+ * entity codes, angle brackets among them.
+ */
 const escaped = (label: string) =>
   label
     .trim()
     .replace(/\s*\n\s*/g, "<br>")
     .replace(/[#&](?=\w+;)/g, (mark) => (mark === "#" ? "#35;" : "#amp;"))
     .replace(/"/g, "#quot;")
-    .replace(/<(?!br\s*\/?>)(?=\/?[a-z])/gi, "#lt;");
+    .split(/(<br\s*\/?>)/i)
+    .map((part, index) => (index % 2 ? part : part.replace(/</g, "#lt;").replace(/>/g, "#gt;")))
+    .join("");
 
 /** A label between the brackets of an element or boundary: in quotes when it has a mark of the syntax. */
 const nameText = (label: string) => {
   const text = escaped(label);
-  return /[()[\]{}<>,:@]/.test(text.replace(/<br>/g, "")) ? `"${text}"` : text;
+  return /[()[\]{},:@]/.test(text) ? `"${text}"` : text;
 };
 
 /** The text of an association: hyphens are what ends it, so they are written as codes. */
-const relationText = (label: string) => escaped(label).replace(/-/g, "#45;").replace(/^>/, "#gt;");
+const relationText = (label: string) => escaped(label).replace(/-/g, "#45;");
 
 /** An element as a relation refers to it: by its id, or by its quoted name when that is its id. */
 const ref = (id: string) => (/^\w+$/.test(id) ? id : `"${escaped(id)}"`);
 
-/** An id no element or boundary has yet. */
-function freshId(diagram: UseCaseDiagram, base: string): string {
-  for (let count = 1; ; count++) {
+/** An id no element or boundary has yet: a base with a number, counted from `from`. */
+function freshId(diagram: UseCaseDiagram, base: string, from = 1): string {
+  for (let count = from; ; count++) {
     const id = `${base}${count}`;
     if (!diagram.elements.has(id) && !diagram.boundaries.has(id)) return id;
   }
@@ -220,10 +249,68 @@ function insertAt(lines: string[], statements: Statement[], boundary?: { line: n
 }
 
 /**
+ * Where a new part that stands in no boundary goes: an actor after the last line that declares
+ * actors, a use case after the last one declared outside the boundaries, a boundary after the
+ * last boundary, and each before the first relation where its kind is missing; a note after the
+ * last note. Else, and when that is not below the line `after`, after the last line with text.
+ */
+function place(lines: string[], statements: Statement[], kind: UseCasePiece, after = -1) {
+  const indent = statements.length ? indentOf(lines[statements[0].index]) : "  ";
+  let end = lines.length;
+  while (end > 0 && !lines[end - 1].trim()) end--;
+  const root: Statement[] = [];
+  let open = false;
+  for (const item of statements) {
+    if (item.kind === "boundary") open = true;
+    else if (item.kind === "end") open = false;
+    if (!open) root.push(item);
+  }
+  // The notes are numbered in their order: a new one is the last, also of those in a boundary.
+  const note = statements.findLast((item) => item.kind === "note"),
+    last =
+      kind === "note"
+        ? note && root.includes(note)
+          ? note
+          : undefined
+        : kind === "boundary"
+          ? root.findLast((item) => item.kind === "end")
+          : root.findLast(
+              (item) => item.kind === (kind === "actor" ? "actors" : "element") && !item.arrow,
+            );
+  let at = last ? last.index + 1 : undefined;
+  if (at === undefined && kind !== "note") {
+    at = root.find((item) => item.arrow)?.index;
+    // A comment above the first relation stays with it.
+    while (at && lines[at - 1].trim().startsWith("%%")) at--;
+  }
+  return { at: at === undefined || at <= after ? end : at, indent };
+}
+
+/** The lines with a note for an element, which becomes the last note of the source. */
+function withNote(
+  lines: string[],
+  statements: Statement[],
+  target: { id: string; line: number },
+  text: string,
+): string {
+  const { at, indent } = place(lines, statements, "note", target.line - 1);
+  lines.splice(at, 0, `${indent}note for ${target.id} "${escaped(text || "Note")}"`);
+  return lines.join("\n");
+}
+
+/** Whether a note can be written for an element: the statement names it by a plain id. */
+const notable = (id: string) => /^\w+$/.test(id);
+
+/**
  * Adds a use case, an actor, a system boundary or a note, and returns the id it got. A use case
- * goes inside the boundary given as parent; actors stand outside, and boundaries do not nest. A
- * note needs an element to hang on: the last one of the parent, or of the diagram; without any
- * element nothing is added and the id is empty.
+ * goes inside the boundary given as parent; actors stand outside, and boundaries do not nest.
+ * Outside the boundaries each stands with its kind: an actor after the actors, a use case after
+ * the use cases, before the relations.
+ *
+ * A note is always the note of an actor or a use case. With that element as the parent it is
+ * written at once. Without one the source comes back unchanged with the id the note is going to
+ * have, and `connectUseCase` of that id with an element writes it; nothing is added until then.
+ * The id is empty when the diagram has no element a note can be for.
  */
 export function addUseCasePiece(
   source: string,
@@ -233,19 +320,20 @@ export function addUseCasePiece(
     label = piece.label?.trim() ? piece.label : "",
     parent = piece.parent ? diagram.boundaries.get(piece.parent) : undefined;
   if (piece.kind === "note") {
-    const elements = [...diagram.elements.values()].filter((item) => /^\w+$/.test(item.id)),
-      target =
-        (parent && elements.findLast((item) => item.boundary === parent.id)) || elements.at(-1);
-    if (!target) return { source, id: "" };
-    const { at, indent } = insertAt(lines, statements);
-    lines.splice(at, 0, `${indent}note for ${target.id} "${escaped(label || "Note")}"`);
-    return { source: lines.join("\n"), id: `note${diagram.notes.length + 1}` };
+    const target = piece.parent ? diagram.elements.get(piece.parent) : undefined,
+      id = `note${diagram.notes.length + 1}`;
+    if (target && notable(target.id))
+      return { source: withNote(lines, statements, target, label), id };
+    return { source, id: [...diagram.elements.keys()].some(notable) ? id : "" };
   }
   const id = freshId(
     diagram,
     piece.kind === "boundary" ? "system" : piece.kind === "actor" ? "actor" : "usecase",
   );
-  const { at, indent } = insertAt(lines, statements, piece.kind === "usecase" ? parent : undefined);
+  const { at, indent } =
+    piece.kind === "usecase" && parent
+      ? insertAt(lines, statements, parent)
+      : place(lines, statements, piece.kind);
   const text =
     piece.kind === "boundary"
       ? [`systemBoundary ${id}[${nameText(label || "System")}]`, "end"]
@@ -256,13 +344,41 @@ export function addUseCasePiece(
   return { source: lines.join("\n"), id };
 }
 
+/** What a relation is as a join: its kind, and `undirected` for an association without a mark at either end. */
+const kindOf = (relation: UseCaseRelation): string =>
+  relation.kind === "association" && !relation.start && !relation.end
+    ? "undirected"
+    : relation.kind;
+
 /**
- * Joins two elements with a relation of a kind, an association when none is given. A note joined
- * to an element hangs on that element from then on.
+ * Whether UML has a relation of a kind between two elements: «include» and «extend» between two
+ * use cases, a generalization between two actors or two use cases, an association between an
+ * actor and a use case.
+ */
+function fits(diagram: UseCaseDiagram, from: string, to: string, kind: string): boolean {
+  const first = diagram.elements.get(from),
+    second = diagram.elements.get(to);
+  if (!first || !second) return false;
+  if (kind === "include" || kind === "extend")
+    return first.kind === "usecase" && second.kind === "usecase";
+  return kind === "generalization" ? first.kind === second.kind : first.kind !== second.kind;
+}
+
+/**
+ * Joins two elements with a relation of a kind. Without a kind it is the usual one for the two:
+ * an association between an actor and a use case, «include» between two use cases, a
+ * generalization between two actors. A kind UML does not have between the two leaves the source
+ * unchanged. A note joined to an element hangs on that element from then on; the id a note was
+ * promised by `addUseCasePiece` writes that note for the element.
  */
 export function connectUseCase(source: string, from: string, to: string, kind?: string): string {
   const { diagram, lines, statements } = model(source),
-    note = diagram.notes.find((item) => item.id === from || item.id === to);
+    note = diagram.notes.find((item) => item.id === from || item.id === to),
+    promised = `note${diagram.notes.length + 1}`;
+  if (!note && (from === promised) !== (to === promised) && !diagram.elements.has(promised)) {
+    const target = diagram.elements.get(from === promised ? to : from);
+    return target && notable(target.id) ? withNote(lines, statements, target, "") : source;
+  }
   if (note) {
     const target = diagram.elements.get(note.id === from ? to : from),
       found = statements.find((item) => item.index === note.line - 1)?.note;
@@ -277,13 +393,19 @@ export function connectUseCase(source: string, from: string, to: string, kind?: 
     }
     return lines.join("\n");
   }
-  if (!diagram.elements.has(from) || !diagram.elements.has(to)) return source;
+  const first = diagram.elements.get(from),
+    second = diagram.elements.get(to);
+  if (!first || !second) return source;
+  const wanted =
+    kind ??
+    (first.kind !== second.kind
+      ? "association"
+      : first.kind === "actor"
+        ? "generalization"
+        : "include");
+  if (!ARROWS[wanted] || !fits(diagram, from, to, wanted)) return source;
   const { at, indent } = insertAt(lines, statements);
-  lines.splice(
-    at,
-    0,
-    `${indent}${ref(from)} ${ARROWS[kind ?? ""] ?? ARROWS.association} ${ref(to)}`,
-  );
+  lines.splice(at, 0, `${indent}${ref(from)} ${ARROWS[wanted]} ${ref(to)}`);
   return lines.join("\n");
 }
 
@@ -291,8 +413,8 @@ export function connectUseCase(source: string, from: string, to: string, kind?: 
  * Gives an element, a boundary or a note another name. The id stays, so every relation still
  * holds: the name is the label beside the id (`User` becomes `User(Customer)`), written where the
  * element has its label, or where it first stands when it has none. Only an element whose quoted
- * name is its id (`"Log in"`) is renamed wherever it stands. An empty name takes the label away,
- * which leaves the id as the name.
+ * name is its id (`"Log in"`) is renamed wherever it stands. An empty name, and one that is
+ * the id itself, takes the label away, which leaves the id as the name.
  */
 export function renameUseCase(source: string, id: string, label: string): string {
   const { diagram, lines, statements } = model(source),
@@ -331,7 +453,7 @@ export function renameUseCase(source: string, id: string, label: string): string
       put(index, mention.start, mention.idEnd, `"${escaped(label)}"`);
     return lines.join("\n");
   }
-  if (!text) {
+  if (!text || label.trim() === id) {
     for (const { index, mention } of places.toReversed())
       if (mention.label) put(index, mention.idEnd, mention.nameEnd, "");
     return lines.join("\n");
@@ -402,14 +524,265 @@ export function labelUseCaseRelation(source: string, edge: string, label: string
   return lines.join("\n");
 }
 
-/** Makes a relation one of another kind: association, include, extend or generalization. */
+/**
+ * Makes a relation one of another kind: an association with an arrow or as a plain line, include,
+ * extend or generalization. A kind UML does not have between its two elements leaves the source
+ * unchanged. An association keeps its text when it gets or loses its arrow.
+ */
 export function relinkUseCase(source: string, edge: string, kind: string): string {
   const { diagram, lines, statements } = model(source),
     relation = diagram.relations.find((item) => item.id === edge),
     found = relation && statementOf(statements, relation);
-  if (!relation || !found || !ARROWS[kind] || relation.kind === kind) return source;
-  rearrow(lines, found, ARROWS[kind], found.arrow!.backward);
+  if (!relation || !found || !ARROWS[kind] || kindOf(relation) === kind) return source;
+  if (!fits(diagram, relation.source, relation.target, kind)) return source;
+  const plain = kind === "association" || kind === "undirected",
+    text = plain && relation.kind === "association" && relation.label;
+  rearrow(
+    lines,
+    found,
+    text ? `-- ${relationText(text)} ${ARROWS[kind]}` : ARROWS[kind],
+    found.arrow!.backward,
+  );
   return lines.join("\n");
+}
+
+/**
+ * Turns a relation round: its two elements change places, and its arrow, kind and text stay. A
+ * line that declares its first element keeps the declaration, and the relation follows it.
+ */
+export function reverseUsecaseRelation(source: string, edge: string): string {
+  const { diagram, lines, statements } = model(source),
+    relation = diagram.relations.find((item) => item.id === edge),
+    found = relation && statementOf(statements, relation);
+  if (!found) return source;
+  const { start, end, backward } = found.arrow!,
+    arrow = lines[found.index].slice(start, end);
+  // An arrow that points back at the first element points on to the second with its mark there.
+  if (backward)
+    rearrow(
+      lines,
+      found,
+      arrow.replace(
+        /^([<ox])(-+)$/,
+        (_, mark: string, stroke: string) => stroke + (mark === "<" ? ">" : mark),
+      ),
+      false,
+    );
+  else rearrow(lines, found, arrow, true);
+  return lines.join("\n");
+}
+
+/** Words that open a statement: no element goes by one of them. */
+const RESERVED =
+  /^(actor|end|note|direction|systemBoundary|class|classDef|style|json|title|accTitle|accDescr)$/;
+
+/**
+ * Gives an actor, a use case or a system boundary another id, wherever the source names it: in
+ * its declarations, relations, notes and styling lines. An element that has no label is shown
+ * under its id, so it shows the new one; one whose quoted name is its id (`"Log out"`) keeps that
+ * name as its label. The source comes back unchanged when the new id is not a word of letters,
+ * digits and underscores, is a word of the syntax, or is taken.
+ */
+export function renameUsecaseId(source: string, id: string, newId: string): string {
+  const { diagram, lines, statements } = model(source),
+    name = newId.trim(),
+    element = diagram.elements.get(id),
+    boundary = element ? undefined : diagram.boundaries.get(id);
+  if (
+    (!element && !boundary) ||
+    name === id ||
+    !/^\w+$/.test(name) ||
+    RESERVED.test(name) ||
+    /^note\d+$/.test(name) ||
+    diagram.elements.has(name) ||
+    diagram.boundaries.has(name)
+  )
+    return source;
+  const places: { index: number; start: number; end: number; quoted: boolean }[] = [];
+  const plain = (index: number, start: number) =>
+    places.push({ index, start, end: start + id.length, quoted: false });
+  for (const item of statements) {
+    const line = lines[item.index];
+    if (boundary ? item.kind === "boundary" : item.kind === "actors" || item.kind === "element")
+      for (const mention of [...item.mentions, ...(item.target ? [item.target] : [])])
+        if (mention.id === id)
+          places.push({
+            index: item.index,
+            start: mention.start,
+            end: mention.idEnd,
+            quoted: mention.quoted,
+          });
+    if (boundary) continue;
+    if (item.note && line.slice(item.note.id.start, item.note.id.end) === id)
+      plain(item.index, item.note.id.start);
+    // `style id fill:…` and `class id, other name`.
+    const styled = item.kind === "other" && line.match(/^(\s*style\s+)(\w+)/),
+      classed = item.kind === "other" && line.match(/^(\s*class\s+)(.+?)\s+[\w-]+\s*$/);
+    if (styled && styled[2] === id) plain(item.index, styled[1].length);
+    if (classed)
+      for (const word of classed[2].matchAll(/\w+/g))
+        if (word[0] === id) plain(item.index, classed[1].length + word.index);
+  }
+  // The first quoted name carries the name on as the label.
+  const shown = (element ?? boundary)!.label,
+    labelled = places.find((place) => place.quoted && shown === id),
+    [open, close] = boundary ? "[]" : "()";
+  // From the right, so the places before keep their columns.
+  for (const found of places.toSorted((a, b) => b.index - a.index || b.start - a.start))
+    lines[found.index] =
+      lines[found.index].slice(0, found.start) +
+      name +
+      (found === labelled ? `${open}${nameText(shown)}${close}` : "") +
+      lines[found.index].slice(found.end);
+  const result = lines.join("\n"),
+    now = reads(result);
+  return now &&
+    (boundary ? now.boundaries.has(name) : now.elements.has(name)) &&
+    !now.elements.has(id) &&
+    !now.boundaries.has(id) &&
+    now.elements.size === diagram.elements.size &&
+    now.boundaries.size === diagram.boundaries.size &&
+    now.relations.length === diagram.relations.length &&
+    now.notes.length === diagram.notes.length
+    ? result
+    : source;
+}
+
+/**
+ * A name as an id: one word as it is (`Clerk`), several as one in camel case (`Archive Item` is
+ * `archiveItem`). Empty for a name with letters an id cannot have.
+ */
+function idWord(name: string): string {
+  if (/[^\s -~]/.test(name)) return "";
+  const [first, ...rest] = name.split(/\W+/).filter(Boolean);
+  if (!first || !rest.length) return first ?? "";
+  // An abbreviation keeps its capitals.
+  const head = /^[A-Z]{2}/.test(first) ? first : first[0].toLowerCase() + first.slice(1);
+  return head + rest.map((word) => word[0].toUpperCase() + word.slice(1)).join("");
+}
+
+/**
+ * Gives an actor, a use case or a boundary that was just added its first name: the id follows the
+ * name wherever the source names it (`Archive Item` makes `archiveItem(Archive Item)`, `Clerk`
+ * makes `actor Clerk`), unless the name has no word an id can be or the id is taken; then the id
+ * stays and the name is its label. A note gets its text. Returns the id the part has afterwards.
+ */
+export function retitleUseCase(
+  source: string,
+  id: string,
+  name: string,
+): { source: string; id: string } {
+  const diagram = parseUseCaseDiagram(source),
+    word = idWord(name),
+    has = (found: UseCaseDiagram, key: string) =>
+      found.elements.has(key) || found.boundaries.has(key);
+  let next = id;
+  if (word && word !== id && has(diagram, id) && !has(diagram, word)) {
+    const renamed = renameUsecaseId(source, id, word);
+    if (has(parseUseCaseDiagram(renamed), word)) [source, next] = [renamed, word];
+  }
+  return { source: renameUseCase(source, next, name), id: next };
+}
+
+/**
+ * Adds a copy of an actor or a use case: its name, shape and stereotype under an id of its own
+ * (`browse2`), beside the element where a line of its own declares it and else where its kind
+ * stands, in its boundary, with none of its relations. Returns the id of the copy, empty for what
+ * is no element.
+ */
+export function duplicateUsecasePart(source: string, id: string): { source: string; id: string } {
+  const { diagram, lines, statements } = model(source),
+    item = diagram.elements.get(id);
+  if (!item) return { source, id: "" };
+  const copy = freshId(
+      diagram,
+      notable(id) ? id : idWord(id) || (item.kind === "actor" ? "actor" : "usecase"),
+      2,
+    ),
+    [open, close] = item.shape === "rect" ? "[]" : "()",
+    // A box is one by the brackets of its label.
+    bare = item.label === id && notable(id) && item.shape !== "rect",
+    name = `${copy}${bare ? "" : `${open}${nameText(item.label)}${close}`}${item.stereotype ? ` <<${item.stereotype}>>` : ""}`,
+    declared = statements.find((found) => found.index === item.line - 1),
+    boundary = item.boundary ? diagram.boundaries.get(item.boundary) : undefined;
+  const { at, indent } =
+    declared && !declared.arrow && (declared.kind === "actors" || declared.kind === "element")
+      ? { at: declared.index + 1, indent: indentOf(lines[declared.index]) }
+      : boundary
+        ? insertAt(lines, statements, boundary)
+        : place(lines, statements, item.kind);
+  lines.splice(at, 0, indent + (item.kind === "actor" ? `actor ${name}` : name));
+  return { source: lines.join("\n"), id: copy };
+}
+
+/**
+ * Moves a use case into a system boundary, or out of every boundary with null: the lines that
+ * declare it go, and one declares it at the end of the boundary, or where the use cases stand
+ * outside. A use case that relations only mention is declared there. Actors stand outside the
+ * boundaries and are not moved.
+ */
+export function moveUsecaseInto(source: string, id: string, boundary: string | null): string {
+  const { diagram, lines, statements } = model(source),
+    item = diagram.elements.get(id);
+  if (!item || item.kind !== "usecase" || item.boundary === boundary) return source;
+  if (boundary !== null && !diagram.boundaries.has(boundary)) return source;
+  const declarations = statements.filter(
+      (found) => found.kind === "element" && !found.arrow && found.mentions[0].id === id,
+    ),
+    // The declaration that says most: the last with a label, or the first.
+    said =
+      declarations.findLast(({ mentions: [mention] }) => mention.end > mention.idEnd) ??
+      declarations[0],
+    text = said ? lines[said.index].trim() : ref(id),
+    gone = new Set(declarations.map((found) => found.index)),
+    rest = statementsOf(lines.filter((_, index) => !gone.has(index)).join("\n"));
+  const named = rest.statements.some(
+      (found) =>
+        found.kind !== "boundary" &&
+        [...found.mentions, ...(found.target ? [found.target] : [])].some(
+          (mention) => mention.id === id,
+        ),
+    ),
+    into = rest.statements.find(
+      (found) => found.kind === "boundary" && found.mentions[0].id === boundary,
+    );
+  // Outside, a use case that a relation still names needs no line of its own.
+  if (into || !named || text !== ref(id)) {
+    const { at, indent } = into
+      ? insertAt(rest.lines, rest.statements, { line: into.index + 1 })
+      : place(rest.lines, rest.statements, "usecase");
+    rest.lines.splice(at, 0, indent + text);
+  }
+  const result = rest.lines.join("\n"),
+    now = reads(result);
+  return now?.elements.get(id)?.boundary === boundary &&
+    now.elements.size === diagram.elements.size &&
+    now.elements.get(id)!.label === item.label
+    ? result
+    : source;
+}
+
+/** Removes a system boundary and keeps what it holds: its use cases stand where it stood, one level out. */
+export function ungroupUsecaseBoundary(source: string, id: string): string {
+  const { diagram, lines, statements } = model(source),
+    boundary = diagram.boundaries.get(id);
+  if (!boundary) return source;
+  const start = boundary.line - 1,
+    end = blockEnd(statements, start, lines),
+    indent = indentOf(lines[start]),
+    first = statements.find((item) => item.index > start && item.index < end),
+    inner = first ? indentOf(lines[first.index]) : indent;
+  return lines
+    .flatMap((line, index) =>
+      index === start || index === end
+        ? []
+        : [
+            index > start && index < end && inner.length > indent.length && line.startsWith(inner)
+              ? indent + line.slice(inner.length)
+              : line,
+          ],
+    )
+    .join("\n");
 }
 
 /**
@@ -494,6 +867,9 @@ export function removeUseCase(source: string, ids: Iterable<string>): string {
  * boundaries and notes under the ids of their shapes; its joins are the relations under the ids
  * of their wires (`r1`, `r2`… in the order of the source). The dashed line from a note to its
  * element is no join of its own: it comes and goes with the note.
+ *
+ * A piece added at a part is joined to it only where the two have a relation of their own: a use
+ * case to an actor, an actor to a use case, a note to its element.
  */
 export const usecaseStructure: Structure = {
   pieces: [
@@ -502,6 +878,7 @@ export const usecaseStructure: Structure = {
       name: "Use case",
       about: "Something the system does for an actor",
       joins: "after",
+      joinsTo: ["actor"],
       named: true,
     },
     {
@@ -509,6 +886,7 @@ export const usecaseStructure: Structure = {
       name: "Actor",
       about: "Someone or something that uses the system",
       joins: "before",
+      joinsTo: ["usecase"],
       named: true,
     },
     {
@@ -523,11 +901,13 @@ export const usecaseStructure: Structure = {
       name: "Note",
       about: "A remark on an actor or a use case",
       joins: "before",
+      joinsTo: ["usecase", "actor"],
       named: true,
     },
   ],
   links: [
     { kind: "association", name: "Association" },
+    { kind: "undirected", name: "Association, no arrow" },
     { kind: "include", name: "Include" },
     { kind: "extend", name: "Extend" },
     { kind: "generalization", name: "Generalization" },
@@ -566,19 +946,22 @@ export const usecaseStructure: Structure = {
       );
     return {
       nodes,
-      edges: diagram.relations.map((item) => ({
+      edges: diagram.relations.map((item): UseCaseEdge => ({
         id: item.id,
         source: item.source,
         target: item.target,
         label: item.label,
         line: item.line,
-        kind: item.kind,
+        kind: kindOf(item),
+        // «include» and «extend» are named by their kind, a generalization carries no text.
+        ...(item.kind === "association" ? {} : { fixedLabel: true }),
       })),
     };
   },
   add: (source, piece) => addUseCasePiece(source, { ...piece, kind: piece.kind as UseCasePiece }),
   connect: connectUseCase,
   rename: renameUseCase,
+  retitle: retitleUseCase,
   label: labelUseCaseRelation,
   relink: relinkUseCase,
   remove: (source, ids) => removeUseCase(source, ids),

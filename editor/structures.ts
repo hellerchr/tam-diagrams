@@ -5,19 +5,73 @@
 
 import type { Structure } from "../src/structure.ts";
 import { flowStructure } from "../src/uml-activity-edit.ts";
-import { classStructure } from "../src/uml-class-edit.ts";
-import { sequenceStructure } from "../src/uml-sequence-edit.ts";
-import { stateStructure } from "../src/uml-state-edit.ts";
-import { usecaseStructure } from "../src/uml-usecase-edit.ts";
+import {
+  classStructure,
+  duplicateClass,
+  moveClassInto,
+  renameClassId,
+  reverseClassRelation,
+  ungroupClassPackage,
+} from "../src/uml-class-edit.ts";
+import {
+  connectSequence,
+  renameParticipantId,
+  sequenceStructure,
+  unwrapFragment,
+} from "../src/uml-sequence-edit.ts";
+import {
+  connectState,
+  duplicateState,
+  moveStateInto,
+  renameStateId,
+  reverseTransition,
+  stateStructure,
+  ungroupComposite,
+} from "../src/uml-state-edit.ts";
+import {
+  duplicateUsecasePart,
+  moveUsecaseInto,
+  renameUsecaseId,
+  reverseUsecaseRelation,
+  ungroupUsecaseBoundary,
+  usecaseStructure,
+} from "../src/uml-usecase-edit.ts";
 import type { IconName } from "./icons.ts";
 
 const STRUCTURES: Record<string, Structure | undefined> = {
   flowchart: flowStructure,
   swimlane: flowStructure,
-  class: classStructure,
-  usecase: usecaseStructure,
-  state: stateStructure,
-  sequence: sequenceStructure,
+  class: {
+    ...classStructure,
+    reverse: reverseClassRelation,
+    copy: duplicateClass,
+    moveInto: moveClassInto,
+    ungroup: ungroupClassPackage,
+    reid: renameClassId,
+  },
+  usecase: {
+    ...usecaseStructure,
+    reverse: reverseUsecaseRelation,
+    copy: duplicateUsecasePart,
+    moveInto: moveUsecaseInto,
+    ungroup: ungroupUsecaseBoundary,
+    reid: renameUsecaseId,
+  },
+  state: {
+    ...stateStructure,
+    join: (source, from, to) => connectState(source, from, to),
+    reverse: reverseTransition,
+    copy: duplicateState,
+    moveInto: moveStateInto,
+    ungroup: ungroupComposite,
+    reid: renameStateId,
+  },
+  sequence: {
+    ...sequenceStructure,
+    join: (source, from, to, kind, after) => connectSequence(source, from, to, kind, { after }),
+    ungroup: unwrapFragment,
+    reid: renameParticipantId,
+  },
 };
 
 /** The structure of a diagram type; undefined for a type edited another way. */
@@ -26,7 +80,9 @@ export const structureOf = (type: string): Structure | undefined => STRUCTURES[t
 /** The drawings of the pieces, by words their kinds contain: the most telling word first. */
 const ICONS: [RegExp, IconName][] = [
   [/interface/, "uml-interface"],
-  [/enum|abstract|class/, "class"],
+  [/abstract/, "uml-abstract"],
+  [/enum/, "uml-enum"],
+  [/class/, "class"],
   [/package|namespace/, "package"],
   [/actor|person/, "uml-actor"],
   [/usecase|use-case|case/, "uml-usecase"],
@@ -49,8 +105,12 @@ export const pieceIcon = (kind: string): IconName =>
 
 /** The drawings of the joins, by words their kinds contain. */
 const LINK_ICONS: [RegExp, IconName][] = [
-  [/inherit|general|extend(?!s?$)|realiz/, "uml-inherit"],
-  [/compos|aggreg/, "uml-compose"],
+  [/realiz/, "uml-realize"],
+  [/inherit|general/, "uml-inherit"],
+  [/aggreg/, "uml-aggregate"],
+  [/compos/, "uml-compose"],
+  [/dashed|dotted.?(line|both)?$/, "uml-dashed-link"],
+  [/^(link|line|undirected|lost|both)$/, "uml-link"],
   [/depend|include|extend|dotted|reply|return/, "uml-dashed"],
   [/message|call|sync/, "uml-message"],
 ];

@@ -222,7 +222,8 @@ function freshId(taken: Set<string>, name: string): string {
       .replace(/^_+|_+$/g, "")
       .replace(/^(\d)/, "_$1")
       .slice(0, 24) || "element";
-  let id = base;
+  // A name that is a word of the notation counts from one: `agent1`; any other stands as it is first.
+  let id = RESERVED.has(base) ? `${base}1` : base;
   for (let count = 2; taken.has(id) || RESERVED.has(id); count++) id = `${base}${count}`;
   taken.add(id);
   return id;

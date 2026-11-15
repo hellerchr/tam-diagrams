@@ -10,7 +10,8 @@ import type { ElementKind } from "../src/tam-edit.ts";
 import type { Editor } from "./editor.ts";
 import type { Arrangement } from "./guides.ts";
 import type { IconName } from "./icons.ts";
-import type { MenuEntry, MenuItem } from "./menu.ts";
+import type { Recent } from "./files.ts";
+import { type MenuEntry, type MenuItem, refusal } from "./menu.ts";
 import { kindName, TYPES, typeInfo } from "./types.ts";
 
 /** How the page follows light and dark: one of them, or the system's choice. */
@@ -19,10 +20,15 @@ export type ThemeChoice = "light" | "dark" | "system";
 /** What the page offers the panels: files, the theme and what is remembered across visits. */
 export interface Shell {
   openFile(): void;
+  /** Saves to the file the diagram was opened from or saved to last; asks for one when there is none. */
   saveFile(): void;
-  exportSvg(): void;
-  exportPng(): void;
+  /** Saves to a file the user names. */
+  saveFileAs(): void;
+  /** Opens the export dialog for a picture of the diagram. */
+  exportPicture(format: "svg" | "png"): void;
   copySource(): void;
+  /** The diagrams that were on show lately, the newest first, without the one on show. */
+  recents(): Recent[];
   /**
    * Shows another diagram in place of the current one, as a step that can be undone. Asks first
    * when there are unsaved changes, unless `sure` says the user was asked already.
@@ -46,6 +52,10 @@ export interface Bench {
   chooser(): void;
   help(): void;
   syntax(): void;
+  /** Opens the list of all commands, to pick one by typing. */
+  commands(): void;
+  readonly minimap: boolean;
+  toggleMinimap(): void;
   /** Lays the whole diagram out automatically, and says so. */
   autoLayout(): void;
   shows(panel: PanelName): boolean;
@@ -166,6 +176,26 @@ const ELEMENTS: ElementKind[] = TYPES[0].palette.flatMap((group) =>
   group.items.map((item) => item.kind),
 );
 
+/** A menu of the bar: its name, its rows, and why it is off when it does not apply. */
+export interface BarMenu {
+  name: string;
+  items: () => MenuEntry[];
+  off?: string;
+}
+
+/** A command as the list of all commands shows it: its name, the menus that lead to it, and its keys. */
+export interface Command {
+  name: string;
+  /** The menus it stands in, as "File ▸ Open example". */
+  path: string;
+  key?: string;
+  off?: string | boolean;
+  run(): void;
+}
+
+/** The zooms the menus offer, in percent. */
+const ZOOMS = [25, 50, 75, 100, 150, 200, 400];
+
 export class Menus {
   private readonly editor: Editor;
   private readonly shell: Shell;
@@ -177,15 +207,47 @@ export class Menus {
     this.bench = bench;
   }
 
-  /** The menus of the bar, in their order. A diagram edited as text has nothing to arrange. */
-  bar(): { name: string; items: () => MenuEntry[] }[] {
+  /** The menus of the bar, in their order. Arrange is off in a diagram that lays itself out. */
+  bar(): BarMenu[] {
+    const { editor } = this,
+      info = typeInfo(editor.type);
     return [
       { name: "File", items: () => this.file() },
       { name: "Edit", items: () => this.edit() },
       { name: "View", items: () => this.view() },
-      ...(this.editor.editable ? [{ name: "Arrange", items: () => this.arrange() }] : []),
+      {
+        name: "Arrange",
+        items: () => this.arrange(),
+        off: editor.editable
+          ? undefined
+          : editor.structural
+            ? `${info.plural} lay themselves out: there is nothing to arrange`
+            : `${info.plural} are edited as text`,
+      },
       { name: "Help", items: () => this.help() },
     ];
+  }
+
+  /** Every command of the bar's menus in one list, each with the menus that lead to it. */
+  commands(): Command[] {
+    const walk = (entries: MenuEntry[], path: string, off?: string | boolean): Command[] =>
+      entries.flatMap((entry): Command[] => {
+        if (!entry || entry === "line") return [];
+        const reason = off || refusal(entry);
+        if (entry.items) return walk(entry.items, `${path} ▸ ${entry.name}`, reason);
+        const run = entry.run;
+        return run ? [{ name: entry.name, path, key: entry.key, off: reason, run }] : [];
+      });
+    return this.bar().flatMap((menu) => walk(menu.items(), menu.name, menu.off));
+  }
+
+  /** Why there is nothing to save or to draw: the diagram is empty. Undefined when there is. */
+  private get nothing(): string | undefined {
+    const { doc } = this.editor;
+    if (!doc.source.trim()) return "The diagram is empty";
+    return doc.picture && !doc.picture.scene.shapes.length && !doc.problem
+      ? "The diagram is empty: there is nothing to draw"
+      : undefined;
   }
 
   /** Puts the selected elements on the clipboard, and removes them when they are cut. */
@@ -206,10 +268,19 @@ export class Menus {
 
   file(): MenuEntry[] {
     const { shell, bench } = this,
-      current = this.editor.type;
+      current = this.editor.type,
+      recents = shell.recents();
     return [
       { name: "New…", key: "Ctrl+Alt+N", run: () => bench.chooser() },
       { name: "Open…", key: "Ctrl+O", run: () => shell.openFile() },
+      {
+        name: "Open recent",
+        off: recents.length ? undefined : "No other diagram was on show lately",
+        items: recents.map(({ title, source }) => ({
+          name: title,
+          run: () => shell.replace(source),
+        })),
+      },
       {
         name: "Open example",
         // The examples of the type on show come first.
@@ -224,7 +295,18 @@ export class Menus {
           })),
       },
       "line",
-      { name: "Save", key: "Ctrl+S", run: () => shell.saveFile() },
+      {
+        name: "Save",
+        key: "Ctrl+S",
+        off: this.editor.doc.source.trim() ? undefined : "The diagram is empty",
+        run: () => shell.saveFile(),
+      },
+      {
+        name: "Save as…",
+        key: "Ctrl+Shift+S",
+        off: this.editor.doc.source.trim() ? undefined : "The diagram is empty",
+        run: () => shell.saveFileAs(),
+      },
       "line",
       ...this.exports(),
     ];
@@ -232,11 +314,15 @@ export class Menus {
 
   /** The ways out of the editor: pictures, and the source as text. */
   exports(): MenuEntry[] {
-    const { shell } = this;
+    const { shell, nothing } = this;
     return [
-      { name: "Export SVG", run: () => shell.exportSvg() },
-      { name: "Export PNG", run: () => shell.exportPng() },
-      { name: "Copy source", run: () => shell.copySource() },
+      { name: "Export SVG…", off: nothing, run: () => shell.exportPicture("svg") },
+      { name: "Export PNG…", off: nothing, run: () => shell.exportPicture("png") },
+      {
+        name: "Copy source",
+        off: this.editor.doc.source.trim() ? undefined : "The diagram is empty",
+        run: () => shell.copySource(),
+      },
     ];
   }
 
@@ -285,9 +371,10 @@ export class Menus {
   zoom(): MenuEntry[] {
     const { editor } = this;
     return [
-      ...[50, 100, 200].map((percent) => ({
+      ...ZOOMS.map((percent) => ({
         name: `${percent}%`,
         key: percent === 100 ? "Ctrl+0" : undefined,
+        checked: Math.round(editor.view.zoom * 100) === percent,
         run: () => editor.view.zoomTo(percent / 100),
       })),
       "line",
@@ -314,8 +401,8 @@ export class Menus {
       run: () => shell.setTheme(choice),
     });
     return [
-      { name: "Zoom in", key: "+", run: () => editor.view.zoomBy(1.25) },
-      { name: "Zoom out", key: "−", run: () => editor.view.zoomBy(0.8) },
+      { name: "Zoom in", key: "+", run: () => editor.view.zoomStep(1) },
+      { name: "Zoom out", key: "−", run: () => editor.view.zoomStep(-1) },
       { name: "100%", key: "Ctrl+0", run: () => editor.view.zoomTo(1) },
       { name: "Fit diagram", key: "1", run: () => editor.fit() },
       {
@@ -325,11 +412,13 @@ export class Menus {
         run: () => editor.fitSelection(),
       },
       "line",
-      { name: "Snap", checked: editor.snapping, run: () => bench.toggleSnap() },
+      // Only elements placed by hand snap to anything.
+      editor.editable && { name: "Snap", checked: editor.snapping, run: () => bench.toggleSnap() },
       { name: "Grid", checked: editor.view.grid, run: () => bench.toggleGrid() },
+      { name: "Minimap", checked: bench.minimap, run: () => bench.toggleMinimap() },
       "line",
-      panel("Shapes panel", "shapes"),
-      panel("Outline panel", "outline"),
+      panel("Shapes", "shapes"),
+      panel("Outline", "outline"),
       panel("Properties", "properties"),
       panel("Source", "source"),
       "line",
@@ -412,11 +501,41 @@ export class Menus {
     ];
   }
 
+  /** The two ways a block diagram is laid out, as a choice: by hand, or automatically. */
+  layoutMode(): MenuEntry[] {
+    const { editor, bench } = this,
+      { picture } = editor.doc,
+      placed = !!picture?.placed && picture.diagram.nodes.size > 0;
+    return [
+      {
+        name: "Manual positions",
+        checked: placed,
+        off: placed
+          ? undefined
+          : "Move an element: every element then stands where the source says",
+        run: () => {},
+      },
+      {
+        name: "Auto layout",
+        checked: !placed,
+        run: () => {
+          if (placed) bench.autoLayout();
+        },
+      },
+    ];
+  }
+
   help(): MenuEntry[] {
-    const { bench } = this;
+    const { bench, editor } = this,
+      info = typeInfo(editor.type);
     return [
       { name: "Keyboard and mouse", key: "?", run: () => bench.help() },
-      { name: "TAM syntax", run: () => bench.syntax() },
+      {
+        name: info.type === "tam" ? "TAM syntax" : `${info.name} syntax`,
+        run: () => bench.syntax(),
+      },
+      "line",
+      { name: "All commands…", key: "Ctrl+K", run: () => bench.commands() },
     ];
   }
 
@@ -445,22 +564,71 @@ export class Menus {
             run: () => editor.addPiece(piece.kind, at),
           }));
       if (!editor.selection.length) return [{ name: "Add", items: pieces(null) }, "line", ...fits];
-      if (elements.length === 1 && !wires.length)
+      const parts = editor.doc.picture?.parts,
+        // The groups a part can be moved into, and out of all with the last row.
+        groups = [...(parts?.values() ?? [])].filter((node) => node.group && node.id !== id);
+      if (elements.length === 1 && !wires.length) {
+        const part = parts?.get(id);
         return [
-          { name: "Rename", key: "F2", run: () => editor.rename(id) },
+          editor.nameable(id) && { name: "Rename", key: "F2", run: () => editor.rename(id) },
           { name: "Add here", items: pieces(id) },
+          editor.can("moveInto") &&
+            !part?.group &&
+            (groups.length > 0 || !!part?.parent) && {
+              name: "Move to",
+              items: [
+                ...groups.map((group) => ({
+                  name: group.label || group.id,
+                  checked: part?.parent === group.id,
+                  run: () => editor.moveElements([id], group.id),
+                })),
+                !!part?.parent && {
+                  name: "Out of its group",
+                  run: () => editor.moveElements([id], null),
+                },
+              ],
+            },
+          editor.can("copy") &&
+            !part?.group && {
+              name: "Duplicate",
+              key: "Ctrl+D",
+              run: () => editor.duplicateSelection(),
+            },
+          editor.can("ungroup") &&
+            !!part?.group && { name: "Ungroup", run: () => editor.ungroup(id) },
           "line",
           remove,
         ];
+      }
       if (wires.length === 1 && !elements.length)
         return [
-          structure.links.length > 1 && {
-            name: "Change kind",
-            items: structure.links.map((link) => ({
-              name: link.name,
-              checked: editor.linkKind(id) === link.kind,
-              run: () => editor.relink(id, link.kind),
-            })),
+          !!editor.wireLabel(id) && {
+            name: "Edit label",
+            run: () => {
+              const wire = editor.doc.picture?.scene.wires.find((item) => item.edge === id),
+                middle = wire?.points[Math.floor(wire.points.length / 2)];
+              if (middle) editor.rename(id, true, middle);
+            },
+          },
+          structure.links.length > 1 &&
+            structure.links.some((link) => link.kind === editor.linkKind(id)) && {
+              name: "Change kind",
+              items: structure.links.map((link) => ({
+                name: link.name,
+                checked: editor.linkKind(id) === link.kind,
+                run: () => editor.relink(id, link.kind),
+              })),
+            },
+          editor.can("reverse") && { name: "Reverse", run: () => editor.reverseJoin(id) },
+          editor.type === "sequence" && {
+            name: "Move earlier",
+            key: "↑",
+            run: () => editor.shift(-1),
+          },
+          editor.type === "sequence" && {
+            name: "Move later",
+            key: "↓",
+            run: () => editor.shift(1),
           },
           "line",
           remove,

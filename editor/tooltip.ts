@@ -11,13 +11,16 @@ const DELAY = 400;
 
 /** Starts the tooltips, and drops the clicks on controls that are off. */
 export function installTooltips() {
-  const tip = h("div", { class: "tooltip", role: "tooltip" });
+  // As a popover it lies over everything, an open dialog too.
+  const tip = h("div", { class: "tooltip", role: "tooltip", popover: "manual" });
   tip.hidden = true;
   document.body.append(tip);
   let timer: number | undefined, anchor: HTMLElement | undefined;
-  const hide = () => {
+  /** Hides the tooltip. With `stay`, its control keeps it hidden until the pointer left it and came back. */
+  const hide = (stay = false) => {
     window.clearTimeout(timer);
-    anchor = undefined;
+    if (!stay) anchor = undefined;
+    if (tip.hidePopover && tip.matches(":popover-open")) tip.hidePopover();
     tip.hidden = true;
   };
   const show = (control: HTMLElement) => {
@@ -26,7 +29,10 @@ export function installTooltips() {
     if (!text) return;
     tip.replaceChildren(h("span", {}, text));
     if (!isOff(control) && control.dataset.key) tip.append(h("kbd", {}, control.dataset.key));
+    // Measured at the corner of the window, where nothing narrows it.
+    tip.style.left = tip.style.top = "0px";
     tip.hidden = false;
+    if (tip.showPopover && !tip.matches(":popover-open")) tip.showPopover();
     const at = control.getBoundingClientRect(),
       { width, height } = tip.getBoundingClientRect(),
       side = control.dataset.side ?? "bottom",
@@ -50,17 +56,19 @@ export function installTooltips() {
   };
   document.addEventListener("pointerover", (event) => {
     const control =
-      (event.target as Element | null)?.closest?.<HTMLElement>("[data-tip]") ?? undefined;
+      (event.target as Element | null)?.closest?.<HTMLElement>("[data-tip], [data-why]") ??
+      undefined;
     if (control === anchor) return;
     hide();
     anchor = control;
     if (control && event.pointerType !== "touch")
       timer = window.setTimeout(() => show(control), DELAY);
   });
-  document.addEventListener("pointerdown", hide, true);
-  document.addEventListener("keydown", hide, true);
-  document.addEventListener("wheel", hide, { capture: true, passive: true });
-  document.documentElement.addEventListener("pointerleave", hide);
+  // A press on a control puts its tooltip away for as long as the pointer stays on it.
+  document.addEventListener("pointerdown", () => hide(true), true);
+  document.addEventListener("keydown", () => hide(), true);
+  document.addEventListener("wheel", () => hide(), { capture: true, passive: true });
+  document.documentElement.addEventListener("pointerleave", () => hide());
   // A control that is off takes no click, whatever listens on it.
   document.addEventListener(
     "click",

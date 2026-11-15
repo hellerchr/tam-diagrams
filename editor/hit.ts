@@ -18,7 +18,11 @@ export const contains = (box: Box, point: Point, slack = 0) =>
 
 /** The element a shape of the scene draws: a copy made for `...` is its original. Undefined for marks. */
 export function elementOf(diagram: TamDiagram, shape: string): string | undefined {
-  const node = diagram.nodes.get(shape);
+  // A layout may draw a part more than once (`done#2`), or draw a diamond of its own where flows
+  // meet or part at it (`gate#merge`): every drawing is the part.
+  const node =
+    diagram.nodes.get(shape) ??
+    diagram.nodes.get(shape.replace(/#(\d+|merge\d*|decision\d+)$/, ""));
   if (!node || !(ELEMENT_KINDS as readonly string[]).includes(node.kind) || shape.endsWith("#row"))
     return undefined;
   return node.origin ?? node.id;

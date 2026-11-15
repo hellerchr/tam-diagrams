@@ -15,8 +15,8 @@ import {
   StringStream,
 } from "@codemirror/language";
 import { insertNewlineAndIndent } from "@codemirror/commands";
-import { countColumn, type Extension, Prec } from "@codemirror/state";
-import type { Command } from "@codemirror/view";
+import { countColumn, type EditorState, type Extension, Prec } from "@codemirror/state";
+import { type Command, EditorView } from "@codemirror/view";
 import { ELEMENT_KINDS } from "../src/tam.ts";
 import type { DiagramType } from "./types.ts";
 
@@ -888,13 +888,107 @@ export function syntaxOf(type: DiagramType): Extension {
 }
 
 /**
- * Enter at the end of a line that closes a block (`end`, `else`, `}`): the line moves out to where
- * its block began, then the new line follows as usual.
+ * Whether the text at a place is free text, which the syntax does not read: the text of a message,
+ * of a note, of a label behind a colon, a title, a comment. `above` is the source before the line,
+ * `before` the line up to the place.
+ */
+export function freeText(type: DiagramType, above: string, before: string): boolean {
+  const start = above ? scanSource(type, above.replace(/\r?\n$/, "")).state : undefined,
+    { lines, state } = scanSource(type, before, start);
+  return (
+    lines[0].at(-1)?.tag === "comment" ||
+    state.phase === "text" ||
+    state.phase === "title" ||
+    !!state.prose ||
+    state.directive ||
+    state.front === "inside"
+  );
+}
+
+/** The signs that close a bracket or a text, which typing the opening one adds behind the cursor. */
+const CLOSERS = /^[)\]}|"']+\s*$/;
+
+/**
+ * Where Enter starts its new line when the cursor stands at a column of a line: behind the closing
+ * brackets that are all that follows it, since a statement is one line. Undefined where Enter
+ * breaks the line at the cursor: anywhere else, and between the braces of a block just opened.
+ */
+export function pastClosers(type: DiagramType, line: string, column: number): number | undefined {
+  const rest = line.slice(column);
+  if (!CLOSERS.test(rest) || !line.slice(0, column).trim()) return undefined;
+  const block = type === "tam" || type === "class" || type === "state";
+  if (block && rest.startsWith("}") && /\{\s*$/.test(line.slice(0, column))) return undefined;
+  return column + rest.trimEnd().length;
+}
+
+/**
+ * What typing `}` on an empty line does where the brace that closes the block is already below it,
+ * put there when the block was opened: the range of the empty lines to remove, so that the cursor
+ * comes to stand behind that brace. Undefined where a brace is to be written.
+ */
+export function braceBelow(
+  type: DiagramType,
+  state: EditorState,
+): { from: number; to: number; cursor: number } | undefined {
+  if (type !== "tam" && type !== "class" && type !== "state") return undefined;
+  const range = state.selection.main,
+    line = state.doc.lineAt(range.head);
+  if (!range.empty || line.text.trim() || line.number === state.doc.lines) return undefined;
+  let next = state.doc.line(line.number + 1);
+  while (!next.text.trim() && next.number < state.doc.lines) next = state.doc.line(next.number + 1);
+  if (!/^\s*\}/.test(next.text)) return undefined;
+  // Every block of the source is closed already: one more brace would close none.
+  const text = state.doc.toString(),
+    count = (sign: string) => text.split(sign).length - 1;
+  if (count("{") !== count("}")) return undefined;
+  return { from: line.from, to: next.from, cursor: line.from + next.text.indexOf("}") + 1 };
+}
+
+/**
+ * What typing does besides writing: no bracket or quote is closed by itself inside free text, and
+ * a `}` typed above the one that already closes its block goes to that one.
+ */
+export function typingRules(type: () => DiagramType): Extension {
+  return Prec.high(
+    EditorView.inputHandler.of((view, from, to, text, insert) => {
+      const { state } = view;
+      if (text === "}") {
+        const below = braceBelow(type(), state);
+        if (!below) return false;
+        view.dispatch({
+          changes: { from: below.from, to: below.to },
+          selection: { anchor: below.cursor },
+          userEvent: "input.type",
+          scrollIntoView: true,
+        });
+        return true;
+      }
+      if (text.length !== 1 || !"([{\"'`".includes(text)) return false;
+      const line = state.doc.lineAt(from);
+      if (!freeText(type(), state.sliceDoc(0, line.from), state.sliceDoc(line.from, from)))
+        return false;
+      view.dispatch(insert());
+      return true;
+    }),
+  );
+}
+
+/**
+ * Enter. Before closing brackets that end the line, the new line starts behind them. At the end of
+ * a line that closes a block (`end`, `else`, `}`), the line moves out to where its block began,
+ * then the new line follows as usual.
  */
 export function newlineAfterBlock(type: () => DiagramType): Command {
   return (view) => {
-    const { state } = view,
-      range = state.selection.main,
+    let { state } = view;
+    const cursor = state.selection.main,
+      at = state.doc.lineAt(cursor.head),
+      past = cursor.empty ? pastClosers(type(), at.text, cursor.head - at.from) : undefined;
+    if (past !== undefined && at.from + past !== cursor.head) {
+      view.dispatch({ selection: { anchor: at.from + past } });
+      state = view.state;
+    }
+    const range = state.selection.main,
       line = state.doc.lineAt(range.head);
     if (range.empty && range.head === line.to && closes(type(), line.text)) {
       const want = getIndentation(state, line.from),

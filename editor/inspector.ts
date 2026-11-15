@@ -11,6 +11,14 @@ import { h, icon, iconButton, setOff, tipped } from "./dom.ts";
 import type { Editor } from "./editor.ts";
 import type { IconName } from "./icons.ts";
 import { ARRANGE, arrangeRefusal, WIRES, wireChange, wireValue } from "./menus.ts";
+import {
+  classRelationEnds,
+  classStereotype,
+  setClassMultiplicity,
+  setClassStereotype,
+} from "../src/uml-class-edit.ts";
+import { replyTo, toggleActivation } from "../src/uml-sequence-edit.ts";
+import { setStateDescription, stateDescription } from "../src/uml-state-edit.ts";
 import { pieceIcon } from "./structures.ts";
 import { kindName, typeInfo } from "./types.ts";
 
@@ -38,9 +46,13 @@ export class Inspector {
     const { editor } = this,
       elements = editor.selectedElements,
       wires = editor.selectedWires;
-    const key = [editor.type, ...editor.selection.map((part) => `${part.type}:${part.id}`)].join(
-      " ",
-    );
+    // What a part is comes with its picture: a part just added is known once it is laid out.
+    const key = [
+      editor.type,
+      ...editor.selection.map(
+        (part) => `${part.type}:${part.id}:${editor.doc.picture?.parts?.get(part.id)?.kind ?? ""}`,
+      ),
+    ].join(" ");
     if (key !== this.inspected || !this.element.childElementCount) {
       this.inspected = key;
       this.sync = [];
@@ -85,19 +97,22 @@ export class Inspector {
   /**
    * A text field that takes its value when it loses focus or on Enter, and shows `read()`
    * otherwise. A field for several lines is one line high and grows with the line breaks in it,
-   * which Shift+Enter types.
+   * which Shift+Enter types; in a `list` Enter types them, and the field is taken when it is left.
    */
   private text(
     read: () => string,
     write: (value: string) => void,
     placeholder = "",
     multiline = false,
+    list = false,
   ) {
     const field = multiline
       ? h("textarea", { class: "field", rows: "1", placeholder, spellcheck: "false" })
       : h("input", { class: "field", type: "text", placeholder, spellcheck: "false" });
+    // As high as its lines, or as its placeholder's while it is empty.
     const fit = () => {
-      if (multiline) field.setAttribute("rows", String(field.value.split("\n").length));
+      if (multiline)
+        field.setAttribute("rows", String((field.value || placeholder).split("\n").length));
     };
     const commit = () => {
       if (field.value !== read()) write(field.value);
@@ -106,7 +121,10 @@ export class Inspector {
     field.addEventListener("input", fit);
     field.addEventListener("keydown", (event) => {
       const key = (event as KeyboardEvent).key;
-      if (key === "Enter" && !(multiline && (event as KeyboardEvent).shiftKey)) {
+      const { shiftKey, ctrlKey, metaKey } = event as KeyboardEvent;
+      // In a list every line is an entry: Enter starts the next, and leaving the field takes them.
+      if (key === "Enter" && list && !ctrlKey && !metaKey) return;
+      if (key === "Enter" && !(multiline && shiftKey)) {
         event.preventDefault();
         field.blur();
       } else if (key === "Escape") {
@@ -175,6 +193,28 @@ export class Inspector {
       }),
     );
     return h("div", { class: "segments" }, ...controls);
+  }
+
+  /** A button of a pane's actions. */
+  private action(name: string, run: () => void) {
+    return h("button", { class: "button outlined", type: "button", onClick: run }, name);
+  }
+
+  /** How many of each end's class a relation of a class diagram joins. */
+  private multiplicities(id: string): HTMLElement[] {
+    const { editor } = this,
+      ends = () => classRelationEnds(editor.doc.source, id);
+    if (!ends()) return [];
+    return (["from", "to"] as const).map((end) =>
+      this.row(
+        end === "from" ? "At source" : "At target",
+        this.text(
+          () => ends()?.[end === "from" ? "fromMultiplicity" : "toMultiplicity"] ?? "",
+          (text) => editor.amend((source) => setClassMultiplicity(source, id, end, text)),
+          "1, 0..1, *",
+        ),
+      ),
+    );
   }
 
   private remove() {
@@ -436,9 +476,14 @@ export class Inspector {
     const label = this.row(
       "Label",
       this.text(
-        () => (read()?.word === "dependency" ? "" : (read()?.label ?? "")),
+        () =>
+          (read()?.word === "dependency" ? "" : (read()?.label ?? "")).replace(
+            /<br\s*\/?>/gi,
+            "\n",
+          ),
         (text) => editor.setWire(id, { label: text }),
         "What is sent or asked",
+        true,
       ),
     );
     const protocol = this.row(
@@ -523,6 +568,8 @@ export class Inspector {
       structure = editor.structure!,
       parts = () => editor.doc.picture?.parts;
     if (elements.length === 1 && !wires.length) {
+      // The id as the source writes it: the scene's has a prefix where a shape needs one.
+      const shown = (id: string) => id.replace(/^(head|ns):/, "");
       const [id] = elements,
         kind = parts()?.get(id)?.kind ?? "",
         piece = structure.pieces.find((item) => item.kind === kind);
@@ -530,16 +577,47 @@ export class Inspector {
         this.subject(pieceIcon(kind), piece?.name ?? "Part"),
         this.group(
           "Identity",
-          this.row(
-            "Name",
-            this.text(
-              () => (parts()?.get(id)?.label ?? "").replace(/<br\s*\/?>/gi, "\n"),
-              (label) => editor.relabel(id, label),
+          editor.nameable(id) &&
+            this.row(
               "Name",
-              true,
+              this.text(
+                () => (parts()?.get(id)?.label ?? "").replace(/<br\s*\/?>/gi, "\n"),
+                (label) => editor.relabel(id, label),
+                "Name",
+                true,
+              ),
             ),
-          ),
-          this.row("Id", h("code", {}, id), "div"),
+          // The id is what the source calls the part: changed at every mention where the type can.
+          editor.can("reid") && editor.nameable(id)
+            ? this.row(
+                "Id",
+                this.text(
+                  () => shown(id),
+                  (next) => editor.renameId(id, next),
+                ),
+              )
+            : this.row("Id", h("code", {}, shown(id)), "div"),
+          editor.type === "class" &&
+            editor.members(id) !== undefined &&
+            this.row(
+              "Stereotype",
+              this.text(
+                () => classStereotype(editor.doc.source, id),
+                (text) => editor.amend((source) => setClassStereotype(source, id, text)),
+                "interface, abstract, …",
+              ),
+            ),
+          editor.type === "state" &&
+            kind === "state" &&
+            this.row(
+              "Does",
+              this.text(
+                () => stateDescription(editor.doc.source, id),
+                (text) => editor.amend((source) => setStateDescription(source, id, text)),
+                "entry / do something",
+                true,
+              ),
+            ),
         ),
         // A class lists its attributes and methods, one a line.
         editor.members(id) !== undefined &&
@@ -557,6 +635,7 @@ export class Inspector {
                 ),
               "+name: type\n+method()",
               true,
+              true,
             ),
           ),
         h(
@@ -564,7 +643,17 @@ export class Inspector {
           { class: "note" },
           "Click a shape on the left to add it at this one, or drag a dot beside it to another.",
         ),
-        h("div", { class: "actions end" }, this.remove()),
+        h(
+          "div",
+          { class: "actions end" },
+          editor.can("copy") &&
+            !parts()?.get(id)?.group &&
+            this.action("Duplicate", () => editor.duplicateSelection()),
+          editor.can("ungroup") &&
+            !!parts()?.get(id)?.group &&
+            this.action("Ungroup", () => editor.ungroup(id)),
+          this.remove(),
+        ),
       ];
       return rows.filter((row) => row !== false);
     }
@@ -574,7 +663,9 @@ export class Inspector {
         this.subject("connect", "Connection"),
         this.group(
           "Identity",
-          structure.links.length > 1 &&
+          // A join of a kind that is only read has none to choose.
+          structure.links.some((link) => link.kind === editor.linkKind(id)) &&
+            structure.links.length > 1 &&
             this.row(
               "Kind",
               this.choice(
@@ -583,16 +674,28 @@ export class Inspector {
                 (kind) => editor.relink(id, kind),
               ),
             ),
-          this.row(
-            "Label",
-            this.text(
-              () => editor.wireLabel(id)?.text ?? "",
-              (label) => editor.wireLabel(id)?.set(label),
-              "What it says",
+          !!editor.wireLabel(id) &&
+            this.row(
+              "Label",
+              this.text(
+                () => (editor.wireLabel(id)?.text ?? "").replace(/<br\s*\/?>/gi, "\n"),
+                (label) => editor.wireLabel(id)?.set(label),
+                "What it says",
+                true,
+              ),
             ),
-          ),
+          ...(editor.type === "class" ? this.multiplicities(id) : []),
         ),
-        h("div", { class: "actions end" }, this.remove()),
+        h(
+          "div",
+          { class: "actions end" },
+          editor.can("reverse") && this.action("Reverse", () => editor.reverseJoin(id)),
+          editor.type === "sequence" &&
+            this.action("Reply", () => editor.amend((source) => replyTo(source, id).source)),
+          editor.type === "sequence" &&
+            this.action("Activation", () => editor.amend((source) => toggleActivation(source, id))),
+          this.remove(),
+        ),
       ];
     }
     if (editor.selection.length)
