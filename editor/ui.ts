@@ -288,6 +288,8 @@ export class Panels {
       },
       completes: () => editor.editable,
       type: () => editor.type,
+      undo: () => editor.doc.undo(),
+      redo: () => editor.doc.redo(),
       cursorAt: (line) => {
         const node = [...(editor.doc.picture?.diagram.nodes.values() ?? [])].find(
           (item) => item.line === line && !item.id.includes("#"),

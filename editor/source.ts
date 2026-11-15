@@ -295,6 +295,9 @@ export interface SourceHost {
   completes(): boolean;
   /** The type of diagram the source draws: its colors and completions follow it. */
   type(): DiagramType;
+  /** Steps back and forth in the document's history, which holds typed and canvas edits alike. */
+  undo(): void;
+  redo(): void;
   /** The cursor came to a line by a click or a key. */
   cursorAt(line: number): void;
 }

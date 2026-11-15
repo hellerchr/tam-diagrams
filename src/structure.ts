@@ -43,6 +43,8 @@ export interface Piece {
    * (`before`), or stands alone.
    */
   joins?: "after" | "before";
+  /** The kinds of part it joins that way; any part when left out. */
+  joinsTo?: string[];
   /** Whether it carries a name to type when added. */
   named?: boolean;
 }
@@ -69,6 +71,12 @@ export interface Structure {
   connect(source: string, from: string, to: string, kind?: string): string;
   /** Gives a part another name. */
   rename(source: string, id: string, label: string): string;
+  /**
+   * Gives a part that was just added its first name: where the syntax allows, the id follows the
+   * name (`class Invoice` rather than `class Class1["Invoice"]`), with every mention of it.
+   * Returns the id the part has afterwards. A structure without it names new parts with `rename`.
+   */
+  retitle?(source: string, id: string, name: string): { source: string; id: string };
   /** Gives a join another label; an empty one removes it. */
   label(source: string, edge: string, label: string): string;
   /** Makes a join one of another kind. */
