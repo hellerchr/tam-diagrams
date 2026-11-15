@@ -287,6 +287,7 @@ export class Panels {
         return flat(editor.tree).filter((item) => !item.id.includes("#"));
       },
       completes: () => editor.editable,
+      type: () => editor.type,
       cursorAt: (line) => {
         const node = [...(editor.doc.picture?.diagram.nodes.values() ?? [])].find(
           (item) => item.line === line && !item.id.includes("#"),

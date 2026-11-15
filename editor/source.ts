@@ -41,6 +41,7 @@ import {
 import { tags } from "@lezer/highlight";
 import { ELEMENT_KINDS } from "../src/tam.ts";
 import { completeTam, type Known } from "./completion.ts";
+import type { DiagramType } from "./types.ts";
 
 const KINDS = new Set<string>(ELEMENT_KINDS);
 
@@ -274,6 +275,8 @@ export interface SourceHost {
   elements(): Known[];
   /** Whether the source is a block diagram, completed from its notation. */
   completes(): boolean;
+  /** The type of diagram the source draws: its colors and completions follow it. */
+  type(): DiagramType;
   /** The cursor came to a line by a click or a key. */
   cursorAt(line: number): void;
 }
