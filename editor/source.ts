@@ -1,7 +1,7 @@
 /**
- * The source pane: the TAM text in a code editor, with the notation's colors, the line of an error
- * underlined, the ids and words of the notation offered while typing, and the lines of what is
- * selected on the canvas marked.
+ * The source pane: the text of a diagram in a code editor, with the colors of its type's syntax, the
+ * line of an error underlined, the statements, ids and connections of the syntax offered while
+ * typing, and the lines of what is selected on the canvas marked.
  */
 
 import {
@@ -9,16 +9,10 @@ import {
   autocompletion,
   closeBrackets,
   closeBracketsKeymap,
-  completeAnyWord,
   type CompletionContext,
 } from "@codemirror/autocomplete";
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
-import {
-  HighlightStyle,
-  indentUnit,
-  StreamLanguage,
-  syntaxHighlighting,
-} from "@codemirror/language";
+import { HighlightStyle, indentUnit, syntaxHighlighting } from "@codemirror/language";
 import { setDiagnostics } from "@codemirror/lint";
 import {
   Annotation,
@@ -39,64 +33,10 @@ import {
   tooltips,
 } from "@codemirror/view";
 import { tags } from "@lezer/highlight";
-import { ELEMENT_KINDS } from "../src/tam.ts";
-import { completeTam, type Known } from "./completion.ts";
+import type { Known } from "./completion.ts";
+import { completeSource } from "./completion-uml.ts";
+import { newlineAfterBlock, syntaxOf } from "./syntax.ts";
 import type { DiagramType } from "./types.ts";
-
-const KINDS = new Set<string>(ELEMENT_KINDS);
-
-const HEADERS = new Set(["title", "direction", "level"]);
-
-/** The words of connections, longest first, and the keywords of dependencies. */
-const WORDS = ["reads/writes", "sends data", "reads", "writes", "calls", "delegates", "requires"];
-
-const DEPENDENCIES = ["use", "import", "create", "generate", "pointer"];
-
-/** The notation as tokens: enough to color a source, not to check it. */
-const tam = StreamLanguage.define<{ start: boolean; title: boolean }>({
-  startState: () => ({ start: true, title: false }),
-  token(stream, state) {
-    if (stream.sol()) {
-      state.start = true;
-      state.title = false;
-    }
-    if (stream.eatSpace()) return null;
-    if (stream.match("%%")) {
-      stream.skipToEnd();
-      return "comment";
-    }
-    // After `title` the rest of the line is the title.
-    if (state.title) {
-      stream.match(/^.*?(?=%%|$)/);
-      return "string";
-    }
-    const first = state.start;
-    state.start = false;
-    if (first) {
-      const word = stream.match(/^[A-Za-z_]\w*/, false) as RegExpMatchArray | null;
-      if (word && (KINDS.has(word[0]) || HEADERS.has(word[0]))) {
-        stream.match(word[0]);
-        state.title = word[0] === "title";
-        return "keyword";
-      }
-    }
-    if (stream.match(/^\[[^\]]*\]/) || stream.match(/^"[^"]*"/)) return "string";
-    if (stream.match(/^:::\w+/)) return "atom";
-    if (
-      stream.match(/^@\s*-?\d+(\.\d+)?\s*,\s*-?\d+(\.\d+)?/) ||
-      stream.match(/^\d+(\.\d+)?x\d+(\.\d+)?/)
-    )
-      return "number";
-    if (stream.match(/^@\s*[^-\s][^-]*?(?=\s*-->|\s*---|$)/)) return "meta";
-    if (stream.match(/^(<--|-->|---|--|-\.|\.->)/)) return "operator";
-    if (stream.match(/^\.\.\./) || stream.match(/^[{}]/)) return "punctuation";
-    for (const word of [...WORDS, ...DEPENDENCIES, "provides", "stack"])
-      if (stream.match(new RegExp(`^${word.replace("/", "\\/")}\\b`, "i"))) return "typeName";
-    if (stream.match(/^[A-Za-z_]\w*/)) return "variableName";
-    stream.next();
-    return null;
-  },
-});
 
 /** The colors come from the page, so the pane follows the theme. */
 const colors = HighlightStyle.define([
@@ -107,9 +47,15 @@ const colors = HighlightStyle.define([
   { tag: tags.atom, color: "var(--syntax-number)" },
   { tag: tags.meta, color: "var(--syntax-string)", fontStyle: "italic" },
   { tag: tags.typeName, color: "var(--syntax-word)" },
+  { tag: tags.annotation, color: "var(--syntax-number)", fontStyle: "italic" },
+  { tag: tags.modifier, color: "var(--syntax-keyword)" },
   { tag: tags.operator, color: "var(--text-2)" },
   { tag: tags.punctuation, color: "var(--text-2)" },
 ]);
+
+/** The selector of the drawing of a UML element in the completion list, as an element and as a statement that declares one. */
+const drawing = (name: string) =>
+  `.cm-completionIcon-uml-${name}, .cm-completionIcon-declare-uml-${name}`;
 
 const look = EditorView.theme({
   "&": {
@@ -226,6 +172,78 @@ const look = EditorView.theme({
     backgroundColor: "var(--syntax-keyword)",
   },
   ".cm-completionIcon-constant": { backgroundColor: "var(--syntax-number)" },
+  // The elements of the UML types, drawn in one color: that of a keyword where the option declares one.
+  '[class*="cm-completionIcon-"][class*="uml-"]': {
+    color: "var(--text-2)",
+    borderColor: "currentColor",
+  },
+  '[class*="cm-completionIcon-"][class*="declare-uml-"]': { color: "var(--syntax-keyword)" },
+  [drawing("class")]: {
+    height: "12px",
+    background: "linear-gradient(currentColor, currentColor) 0 3px / 100% 1.5px no-repeat",
+  },
+  [drawing("actor")]: { width: "10px", margin: "0 3px", borderRadius: "50% 50% 2px 2px" },
+  [drawing("usecase")]: { borderRadius: "50%" },
+  [`${drawing("step")}, ${drawing("state")}`]: { borderRadius: "4px" },
+  [drawing("stadium")]: { borderRadius: "5px" },
+  [drawing("cylinder")]: { borderRadius: "8px / 3px" },
+  [drawing("hexagon")]: { borderLeftWidth: "3px", borderRightWidth: "3px", borderRadius: "3px" },
+  [drawing("decision")]: {
+    width: "9px",
+    height: "9px",
+    margin: "0 3.5px",
+    transform: "rotate(45deg)",
+  },
+  [`${drawing("circle")}, ${drawing("final")}, ${drawing("method")}`]: {
+    width: "10px",
+    height: "10px",
+    margin: "0 3px",
+    border: "none",
+    borderRadius: "50%",
+    backgroundColor: "currentColor",
+  },
+  [drawing("final")]: {
+    border: "1.5px solid currentColor",
+    background: "radial-gradient(circle, currentColor 2px, transparent 2.5px)",
+  },
+  [`${drawing("method")}, ${drawing("attribute")}`]: {
+    width: "8px",
+    height: "8px",
+    margin: "0 4px",
+  },
+  [drawing("bar")]: {
+    height: "4px",
+    border: "none",
+    borderRadius: "1px",
+    backgroundColor: "currentColor",
+  },
+  // A lifeline: the box of a participant and the dashed line below it.
+  [drawing("participant")]: {
+    position: "relative",
+    width: "12px",
+    height: "6px",
+    margin: "0 2px 7px",
+    "&:after": {
+      position: "absolute",
+      left: "3.75px",
+      top: "4.5px",
+      height: "7px",
+      borderLeft: "1.5px dashed currentColor",
+    },
+  },
+  // A fragment: a frame with the tab of its keyword.
+  [drawing("frame")]: {
+    height: "12px",
+    background: "linear-gradient(currentColor, currentColor) 0 0 / 6px 3.5px no-repeat",
+  },
+  [drawing("note")]: {
+    height: "12px",
+    background: "linear-gradient(225deg, currentColor 3.5px, transparent 3.5px)",
+  },
+  [drawing("lanes")]: {
+    height: "12px",
+    background: "linear-gradient(currentColor, currentColor) 50% 0 / 1.5px 100% no-repeat",
+  },
   '[class*="cm-completionIcon-color-"]': {
     width: "10px",
     height: "10px",
@@ -283,13 +301,20 @@ export interface SourceHost {
 
 export class SourcePane {
   private readonly view: EditorView;
+  private readonly host: SourceHost;
   /** Long lines wrap or scroll: set by `setWrap`. */
   private readonly wrapping = new Compartment();
+  /** The syntax of the diagram type: set by `setType`. */
+  private readonly syntax = new Compartment();
+  /** The diagram type whose syntax the pane has. */
+  private type: DiagramType;
 
   constructor(parent: HTMLElement, host: SourceHost) {
-    // A block diagram is completed from its notation; the other types from the words of the source.
+    this.host = host;
+    this.type = host.type();
+    // A block diagram is completed from its elements; the other types from their text.
     const complete = (context: CompletionContext) =>
-      host.completes() ? completeTam(context, host.elements()) : completeAnyWord(context);
+      completeSource(context, host.type(), host.completes() ? host.elements() : []);
     this.view = new EditorView({
       parent,
       state: EditorState.create({
@@ -300,7 +325,7 @@ export class SourcePane {
           highlightActiveLine(),
           indentUnit.of("  "),
           EditorState.tabSize.of(2),
-          tam,
+          this.syntax.of(syntaxOf(this.type)),
           syntaxHighlighting(colors),
           closeBrackets(),
           // The list reaches past the pane, which would cut it off.
@@ -309,6 +334,7 @@ export class SourcePane {
           keymap.of([
             // Tab takes the completion on offer, as Enter does; else it indents.
             { key: "Tab", run: acceptCompletion },
+            { key: "Enter", run: newlineAfterBlock(() => this.type) },
             ...closeBracketsKeymap,
             ...defaultKeymap,
             ...historyKeymap,
@@ -342,6 +368,7 @@ export class SourcePane {
 
   /** Shows a text that came from the document: an edit on the canvas, undo, a file. True when it replaced another, and the marked lines with it. */
   setText(text: string): boolean {
+    this.setType(this.host.type());
     if (text === this.text) return false;
     this.view.dispatch({
       changes: { from: 0, to: this.view.state.doc.length, insert: text },
@@ -350,8 +377,20 @@ export class SourcePane {
     return true;
   }
 
+  /** Gives the pane the syntax of a diagram type: its colors, its comments and its indentation. */
+  setType(type: DiagramType) {
+    if (type === this.type) return;
+    this.type = type;
+    this.view.dispatch({
+      effects: this.syntax.reconfigure(syntaxOf(type)),
+      annotations: fromDocument.of(true),
+    });
+  }
+
   /** Underlines the line of a problem; line 0 is about the whole source. */
   setProblem(problem: { line: number; message: string } | undefined) {
+    // The document is read anew whenever this is called: the moment its type may have changed.
+    this.setType(this.host.type());
     const { state } = this.view,
       line =
         problem && problem.line >= 1 && problem.line <= state.doc.lines

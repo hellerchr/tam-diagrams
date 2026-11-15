@@ -11,6 +11,7 @@ import { h, icon, iconButton, setOff, tipped } from "./dom.ts";
 import type { Editor } from "./editor.ts";
 import type { IconName } from "./icons.ts";
 import { ARRANGE, arrangeRefusal, WIRES, wireChange, wireValue } from "./menus.ts";
+import { pieceIcon } from "./structures.ts";
 import { kindName, typeInfo } from "./types.ts";
 
 /** One of the buttons of a segmented control: a name or an icon, and what its tooltip says. */
@@ -515,22 +516,24 @@ export class Inspector {
     ];
   }
 
-  /** A node or an edge of an activity diagram: its name or label, and its removal. */
+  /** A part or a join of a diagram with a structure: its name or label, its kind, and its removal. */
   private flowPane(elements: string[], wires: string[]): HTMLElement[] {
     const { editor } = this,
       info = typeInfo(editor.type),
-      nodes = () => editor.doc.picture?.diagram.nodes;
+      structure = editor.structure!,
+      parts = () => editor.doc.picture?.parts;
     if (elements.length === 1 && !wires.length) {
       const [id] = elements,
-        group = nodes()?.get(id)?.kind === "group";
-      return [
-        this.subject(group ? "group" : "uml-step", group ? "Group" : "Node"),
+        kind = parts()?.get(id)?.kind ?? "",
+        piece = structure.pieces.find((item) => item.kind === kind);
+      const rows: (HTMLElement | false)[] = [
+        this.subject(pieceIcon(kind), piece?.name ?? "Part"),
         this.group(
           "Identity",
           this.row(
             "Name",
             this.text(
-              () => (nodes()?.get(id)?.label ?? "").replace(/<br\s*\/?>/gi, "\n"),
+              () => (parts()?.get(id)?.label ?? "").replace(/<br\s*\/?>/gi, "\n"),
               (label) => editor.relabel(id, label),
               "Name",
               true,
@@ -538,26 +541,54 @@ export class Inspector {
           ),
           this.row("Id", h("code", {}, id), "div"),
         ),
+        // A class lists its attributes and methods, one a line.
+        editor.members(id) !== undefined &&
+          this.group(
+            "Members",
+            this.text(
+              () => (editor.members(id) ?? []).join("\n"),
+              (text) =>
+                editor.setMembers(
+                  id,
+                  text
+                    .split("\n")
+                    .map((line) => line.trim())
+                    .filter(Boolean),
+                ),
+              "+name: type\n+method()",
+              true,
+            ),
+          ),
         h(
           "p",
           { class: "note" },
-          "Click a shape on the left to add it after this one, or drag a dot to another node.",
+          "Click a shape on the left to add it at this one, or drag a dot beside it to another.",
         ),
         h("div", { class: "actions end" }, this.remove()),
       ];
+      return rows.filter((row) => row !== false);
     }
     if (wires.length === 1 && !elements.length) {
       const [id] = wires;
       return [
-        this.subject("connect", "Flow"),
+        this.subject("connect", "Connection"),
         this.group(
           "Identity",
+          structure.links.length > 1 &&
+            this.row(
+              "Kind",
+              this.choice(
+                structure.links.map((link) => ({ value: link.kind, name: link.name })),
+                () => editor.linkKind(id) ?? "",
+                (kind) => editor.relink(id, kind),
+              ),
+            ),
           this.row(
             "Label",
             this.text(
               () => editor.wireLabel(id)?.text ?? "",
               (label) => editor.wireLabel(id)?.set(label),
-              "yes, no, …",
+              "What it says",
             ),
           ),
         ),
@@ -575,7 +606,7 @@ export class Inspector {
       h(
         "p",
         { class: "note" },
-        "Click a shape on the left to add it; with a node selected it follows that node. Drag from a dot beside a node to connect. Double-click to name. The layout is automatic.",
+        "Click a shape on the left to add it, or drag it onto a part to join it there. Drag from a dot beside a part to connect. Double-click to name. The layout is automatic.",
       ),
     ];
   }

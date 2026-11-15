@@ -7,6 +7,8 @@
 import type { ElementKind } from "../src/tam-edit.ts";
 import { h, icon, tipped } from "./dom.ts";
 import type { Editor } from "./editor.ts";
+import type { Link, Piece } from "../src/structure.ts";
+import { linkIcon, pieceIcon, structureOf } from "./structures.ts";
 import { type DiagramType, type Shape, type Snippet, typeInfo } from "./types.ts";
 
 export class Palette {
@@ -20,6 +22,8 @@ export class Palette {
   /** The groups of shapes, shown as far as the diagram takes their shapes. */
   private groups: { box: HTMLElement; items: Shape[] }[] = [];
   private snippets: { row: HTMLElement; snippet: Snippet }[] = [];
+  private pieces: { tile: HTMLElement; piece: Piece }[] = [];
+  private readonly links = new Map<string, HTMLElement>();
   private readonly none = h("p", { class: "note" }, "Nothing found.");
   private type: DiagramType | undefined;
 
@@ -66,9 +70,31 @@ export class Palette {
       const tiles = h("div", { class: "tiles" }, ...group.items.map((item) => this.tile(item)));
       return { box: this.group(group.title, tiles), items: group.items };
     });
-    this.snippets = info.snippets.map((snippet) => ({ snippet, row: this.snippet(snippet) }));
+    // A diagram with a structure shows its pieces and the kinds of join; one edited as text, its statements.
+    const structure = structureOf(type);
+    this.links.clear();
+    this.pieces = (structure?.pieces ?? []).map((piece) => ({ piece, tile: this.piece(piece) }));
+    this.snippets = structure
+      ? []
+      : info.snippets.map((snippet) => ({ snippet, row: this.snippet(snippet) }));
     this.list.replaceChildren(
       ...this.groups.map((group) => group.box),
+      ...(structure
+        ? [
+            this.group(
+              info.name,
+              h("div", { class: "tiles" }, ...this.pieces.map((item) => item.tile)),
+            ),
+            ...(structure.links.length > 1
+              ? [
+                  this.group(
+                    "Connections",
+                    h("div", { class: "tiles" }, ...structure.links.map((link) => this.link(link))),
+                  ),
+                ]
+              : []),
+          ]
+        : []),
       ...(this.snippets.length
         ? [
             this.group(
@@ -89,20 +115,103 @@ export class Palette {
         class: "tile snippet",
         type: "button",
         ...tipped({
-          tip: snippet.piece
-            ? `Add ${snippet.name.toLowerCase()}, after the selected one`
-            : `Add ${snippet.name.toLowerCase()}: ${snippet.text.trim()}`,
+          tip: `Add ${snippet.name.toLowerCase()}: ${snippet.text.trim()}`,
           side: "right",
         }),
-        // On a diagram edited on the canvas the piece joins what is selected; else its statement is added.
-        onClick: () =>
-          snippet.piece && this.editor.structural
-            ? this.editor.addPiece(snippet.piece)
-            : this.insert(snippet.text),
+        onClick: () => this.insert(snippet.text),
       },
       icon(snippet.icon),
       h("span", { class: "name" }, snippet.name),
     );
+  }
+
+  /**
+   * A piece of a diagram with a structure: a click adds it at the selected part, a drag carries it
+   * to a part on the canvas, which shows as the one it would join, or to the empty canvas, where
+   * it stands alone.
+   */
+  private piece(piece: Piece): HTMLElement {
+    const { editor } = this;
+    const control = h(
+      "button",
+      {
+        class: "tile",
+        type: "button",
+        ...tipped({
+          tip: `${piece.name}: ${piece.about}. Click to add, or drag onto the canvas.`,
+          side: "right",
+        }),
+      },
+      icon(pieceIcon(piece.kind)),
+      h("span", { class: "name" }, piece.name),
+    );
+    let start: { x: number; y: number } | undefined, chip: HTMLElement | undefined;
+    const over = (event: PointerEvent) => {
+      const rect = editor.view.canvas.getBoundingClientRect();
+      return (
+        event.clientX >= rect.left &&
+        event.clientX <= rect.right &&
+        event.clientY >= rect.top &&
+        event.clientY <= rect.bottom
+      );
+    };
+    const end = () => {
+      start = undefined;
+      chip?.remove();
+      chip = undefined;
+      editor.showPieceTarget(undefined);
+    };
+    control.addEventListener("pointerdown", (event) => {
+      if (event.button !== 0) return;
+      start = { x: event.clientX, y: event.clientY };
+      control.setPointerCapture(event.pointerId);
+    });
+    control.addEventListener("pointermove", (event) => {
+      if (!start) return;
+      if (!chip && Math.hypot(event.clientX - start.x, event.clientY - start.y) < 5) return;
+      chip ??= document.body.appendChild(
+        h("div", { class: "drag-chip" }, icon(pieceIcon(piece.kind)), h("span", {}, piece.name)),
+      );
+      chip.style.transform = `translate(${event.clientX + 10}px, ${event.clientY + 10}px)`;
+      editor.showPieceTarget(
+        over(event) ? editor.view.toScene(editor.view.pointOf(event)) : undefined,
+      );
+    });
+    control.addEventListener("pointerup", (event) => {
+      if (!start) return;
+      const dragged = !!chip,
+        on = over(event);
+      end();
+      if (!dragged) editor.addPiece(piece.kind);
+      else if (on) editor.dropPiece(piece.kind, editor.view.toScene(editor.view.pointOf(event)));
+    });
+    control.addEventListener("pointercancel", end);
+    // The keyboard adds a piece as a click does.
+    control.addEventListener("click", (event) => {
+      if (event.detail === 0) editor.addPiece(piece.kind);
+    });
+    return control;
+  }
+
+  /** A kind of join: the one new connections are drawn with, and what a selected join becomes on a click. */
+  private link(link: Link): HTMLElement {
+    const { editor } = this;
+    const control = h(
+      "button",
+      {
+        class: "tile",
+        type: "button",
+        ...tipped({
+          tip: `${link.name}: new connections are drawn as this; a selected one becomes it`,
+          side: "right",
+        }),
+        onClick: () => editor.setLink(link.kind),
+      },
+      icon(linkIcon(link.kind)),
+      h("span", { class: "name" }, link.name),
+    );
+    this.links.set(link.kind, control);
+    return control;
   }
 
   /**
@@ -207,6 +316,12 @@ export class Palette {
       group.box.hidden = !any;
       found ||= any;
     }
+    for (const { tile, piece } of this.pieces) {
+      tile.hidden = !!words && !piece.name.toLowerCase().includes(words);
+      found ||= !tile.hidden;
+    }
+    for (const [kind, tile] of this.links)
+      tile.setAttribute("aria-pressed", String(editor.link === kind));
     for (const { row, snippet } of this.snippets) {
       row.hidden =
         !!words &&

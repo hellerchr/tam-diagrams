@@ -57,15 +57,10 @@ import {
   snapEdge,
   snapMove,
 } from "./guides.ts";
-import { parseFlowchart } from "../src/uml-activity.ts";
-import {
-  addFlowPiece,
-  connectFlow,
-  type FlowPiece,
-  labelFlowEdge,
-  removeFlow,
-  renameFlow,
-} from "../src/uml-activity-edit.ts";
+import { parseUml } from "../src/index.ts";
+import type { Structure } from "../src/structure.ts";
+import { classMembers, setClassMembers } from "../src/uml-class-edit.ts";
+import { structureOf } from "./structures.ts";
 import { type DiagramType, typeInfo, typeOf, withUmlTitle } from "./types.ts";
 import type { View } from "./view.ts";
 
@@ -210,6 +205,10 @@ export class Editor {
     done: (text: string | undefined) => void,
   ) => void = () => {};
   private gesture: Gesture | undefined;
+  /** The kind of join picked for new connections. */
+  private picked: string | undefined;
+  /** The part a piece dragged from the palette would join. */
+  private pieceTarget: string | undefined;
   private hover: Part | undefined;
   /** The element whose connection dots show: the one under the pointer, until the pointer leaves the dots. */
   private linkHost: string | undefined;
@@ -366,20 +365,26 @@ export class Editor {
     return typeOf(this.doc.source);
   }
 
-  /**
-   * Whether the diagram's structure is edited on the canvas while its layout stays automatic: an
-   * activity diagram's nodes are added, named, connected and removed, not moved.
-   */
-  get structural(): boolean {
-    return typeInfo(this.type).mode === "structure";
+  /** The structure of the diagram, when its parts are edited on the canvas and laid out automatically. */
+  get structure(): Structure | undefined {
+    return structureOf(this.type);
   }
 
-  /** An edit of an activity diagram's source: applied when the result still reads as one. */
-  private flowEdit(make: (source: string) => string): boolean {
-    if (this.doc.problem) return this.change(undefined);
+  /**
+   * Whether the diagram's structure is edited on the canvas while its layout stays automatic: its
+   * parts are added, named, joined and removed, not moved.
+   */
+  get structural(): boolean {
+    return !!this.structure;
+  }
+
+  /** An edit of a structure's source: applied when the result still reads as a diagram of its type. */
+  private structEdit(make: (structure: Structure, source: string) => string): boolean {
+    const { structure } = this;
+    if (this.doc.problem || !structure) return this.change(undefined);
     try {
-      const next = make(this.doc.source);
-      parseFlowchart(next);
+      const next = make(structure, this.doc.source);
+      parseUml(next);
       void this.doc.apply(next);
       return true;
     } catch (reason) {
@@ -391,48 +396,73 @@ export class Editor {
   }
 
   /**
-   * Adds a piece to an activity diagram: joined to the one selected node (a start leads to it, the
-   * others follow it), inside the selected group, and opens its name.
+   * Adds a piece to a diagram with a structure, at a part: inside it when it is a group, else
+   * joined to it as the piece joins (a step follows, a start leads) and in its group. Without `at`
+   * the one selected part is taken; with null the piece stands alone. Its name opens for typing.
    */
-  addPiece(kind: FlowPiece, from?: string) {
-    const { picture } = this;
-    if (!this.structural || !picture) return;
+  addPiece(kind: string, at?: string | null) {
+    const { picture, structure } = this,
+      piece = structure?.pieces.find((item) => item.kind === kind);
+    if (!structure || !piece || !picture) return;
     const [only] = this.selectedElements,
-      chosen = from ?? (this.selectedElements.length === 1 ? only : undefined),
-      node = chosen ? picture.diagram.nodes.get(chosen) : undefined,
-      group = node?.kind === "group" ? node.id : (node?.parent ?? null);
+      chosen =
+        at === null ? undefined : (at ?? (this.selectedElements.length === 1 ? only : undefined)),
+      node = chosen ? picture.parts?.get(chosen) : undefined,
+      parent = node?.group ? node.id : (node?.parent ?? null);
     let made = "";
-    const done = this.flowEdit((source) => {
-      const added = addFlowPiece(source, { kind, parent: kind === "group" ? null : group });
+    const before = this.doc.source;
+    const done = this.structEdit((edits, source) => {
+      const added = edits.add(source, { kind, parent });
       made = added.id;
-      if (!node || node.kind === "group" || kind === "group") return added.source;
-      return kind === "start"
-        ? connectFlow(added.source, made, node.id)
-        : connectFlow(added.source, node.id, made);
+      if (!made || !node || node.group || piece.group || !piece.joins) return added.source;
+      return piece.joins === "before"
+        ? edits.connect(added.source, made, node.id)
+        : edits.connect(added.source, node.id, made);
     });
     if (!done) return;
+    // Some pieces exist only at another: the start of a state machine at the state it leads to.
+    if (!made || this.doc.source === before) {
+      this.notify(`${piece.name} stands at another part: select one first, or drop it onto one.`);
+      return;
+    }
     this.tool = "select";
+    this.pieceTarget = undefined;
     this.select([{ type: "element", id: made }]);
     void this.whenShown().then(() => {
       this.reveal(made);
-      if (kind !== "start" && kind !== "end") this.rename(made);
+      if (piece.named) this.rename(made);
     });
+  }
+
+  /** A piece dragged from the palette is over a point of the canvas: the part it would join shows. */
+  showPieceTarget(at: Point | undefined) {
+    const part = at && this.picture ? partAt(this.picture, at, 0) : undefined,
+      target = part?.type === "element" ? part.id : undefined;
+    if (target === this.pieceTarget) return;
+    this.pieceTarget = target;
+    this.view.invalidate();
+  }
+
+  /** A piece dropped on the canvas: at the part under it, or alone on the empty canvas. */
+  dropPiece(kind: string, at: Point) {
+    const part = this.picture && partAt(this.picture, at, 0);
+    this.addPiece(kind, part?.type === "element" ? part.id : null);
   }
 
   /** Gives an element another name, in whichever notation the diagram is written. */
   relabel(id: string, label: string) {
-    if (this.structural) this.flowEdit((source) => renameFlow(source, id, label));
+    if (this.structural) this.structEdit((edits, source) => edits.rename(source, id, label));
     else this.edit((source) => setElement(source, id, { label }));
   }
 
   /** The label of a connection, and a way to set it; undefined for one that carries none. */
   wireLabel(id: string): { text: string; set: (text: string) => void } | undefined {
     if (this.structural) {
-      const edge = this.picture?.diagram.edges.find((item) => item.id === id);
+      const edge = this.picture?.joins?.get(id);
       return (
         edge && {
           text: edge.label ?? "",
-          set: (text) => void this.flowEdit((source) => labelFlowEdge(source, id, text)),
+          set: (text) => void this.structEdit((edits, source) => edits.label(source, id, text)),
         }
       );
     }
@@ -440,6 +470,47 @@ export class Editor {
     return connection && connection.word !== "dependency"
       ? { text: connection.label ?? "", set: (text) => this.setWire(id, { label: text }) }
       : undefined;
+  }
+
+  /** The attributes and methods of a class of a class diagram, one a line; undefined for anything else. */
+  members(id: string): string[] | undefined {
+    const kind = this.picture?.parts?.get(id)?.kind;
+    if (this.type !== "class" || !kind || kind === "note" || kind === "package") return undefined;
+    try {
+      return classMembers(this.doc.source, id);
+    } catch {
+      return undefined;
+    }
+  }
+
+  /** Replaces the attributes and methods of a class. */
+  setMembers(id: string, members: string[]) {
+    this.structEdit((_, source) => setClassMembers(source, id, members));
+  }
+
+  /** The kind of join new connections of a structure are drawn with: the usual one until another is picked. */
+  get link(): string | undefined {
+    const links = this.structure?.links ?? [];
+    return links.some((item) => item.kind === this.picked) ? this.picked : links[0]?.kind;
+  }
+
+  /** Picks the kind of join for new connections; the one selected join becomes it too. */
+  setLink(kind: string) {
+    this.picked = kind;
+    const [only] = this.selectedWires;
+    if (this.selection.length === 1 && only && this.linkKind(only) !== kind)
+      this.relink(only, kind);
+    this.onState();
+  }
+
+  /** The kind of a join of a structure, one of its links. */
+  linkKind(id: string): string | undefined {
+    return this.picture?.joins?.get(id)?.kind;
+  }
+
+  /** Makes a join of a structure one of another kind. */
+  relink(id: string, kind: string) {
+    this.structEdit((edits, source) => edits.relink(source, id, kind));
   }
 
   /** Whether the diagram is edited on the canvas; the UML types are edited as text. */
@@ -676,7 +747,7 @@ export class Editor {
     if (!this.selection.length) return;
     const ids = this.selection.map((part) => part.id);
     const done = this.structural
-      ? this.flowEdit((source) => removeFlow(source, ids))
+      ? this.structEdit((edits, source) => edits.remove(source, ids))
       : this.edit((source) => remove(source, ids));
     if (done) this.select([]);
   }
@@ -1427,9 +1498,13 @@ export class Editor {
 
   /** Connects two elements with the word that fits them and selects the connection. */
   connect(from: string, to: string) {
-    if (this.structural) {
-      if (!this.flowEdit((source) => connectFlow(source, from, to))) return;
-      const made = parseFlowchart(this.doc.source).edges.at(-1);
+    if (this.structure) {
+      // The join that is new after the edit is the one to select.
+      const before = new Set(this.picture?.joins?.keys());
+      if (!this.structEdit((edits, source) => edits.connect(source, from, to, this.link))) return;
+      const made = this.structure
+        .read(this.doc.source)
+        .edges.findLast((edge) => !before.has(edge.id));
       this.tool = "select";
       if (made) this.select([{ type: "wire", id: made.id }]);
       return;
@@ -1445,7 +1520,7 @@ export class Editor {
    * storage, in the same container, at the first free spot.
    */
   addBeside(from: string, side: number) {
-    if (this.structural) return this.addPiece("step", from);
+    if (this.structure) return this.addPiece(this.structure.pieces[0].kind, from);
     const base = this.doc.placedSource();
     if (base === undefined) return void this.change(undefined);
     const picture = this.doc.layout(base),
@@ -1524,8 +1599,9 @@ export class Editor {
 
   /** A connection dropped on the empty canvas ends at a new agent there. */
   private connectNew(from: string, at: Point) {
-    if (this.structural) {
-      if (this.picture && !partAt(this.picture, at, 0)) this.addPiece("step", from);
+    if (this.structure) {
+      if (this.picture && !partAt(this.picture, at, 0))
+        this.addPiece(this.structure.pieces[0].kind, from);
       return;
     }
     const { picture } = this,
@@ -1575,7 +1651,7 @@ export class Editor {
     if (this.tool !== "select" || (!this.editable && !this.structural)) return;
     const part = picture && partAt(picture, point, 6 / this.view.zoom);
     if (!part) {
-      if (this.structural) this.addPiece("step");
+      if (this.structure) this.addPiece(this.structure.pieces[0].kind, null);
       else this.create("agent", point, event.altKey);
     } else if (part.type === "element") this.rename(part.id);
     else this.rename(part.id, true, point);
@@ -1880,6 +1956,14 @@ export class Editor {
       context.fill();
       context.globalAlpha = 1;
       context.stroke();
+    }
+    if (this.pieceTarget) {
+      // The part a dragged piece would join.
+      context.strokeStyle = accent;
+      context.setLineDash([6, 4]);
+      context.lineWidth = 2;
+      boxesOf(picture, this.pieceTarget).forEach((box) => outlineBox(box, 4));
+      context.setLineDash([]);
     }
     if (gesture?.type === "move" && gesture.target) {
       context.setLineDash([6, 4]);

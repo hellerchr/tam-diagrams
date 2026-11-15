@@ -77,12 +77,26 @@ function reaches(word: string): (kind: string) => boolean {
   return () => true;
 }
 
-const option = (label: string, type: string, detail?: string, apply?: string): Completion => ({
+/** An option of a completion list: what is shown, the kind its drawing stands for, what it is, and the text it writes when that is not its label. */
+export const option = (
+  label: string,
+  type: string,
+  detail?: string,
+  apply?: string,
+): Completion => ({
   label,
   type,
   ...(detail ? { detail } : {}),
   ...(apply ? { apply } : {}),
 });
+
+/** The directions a diagram can be laid out in. */
+export const DIRECTIONS: Completion[] = [
+  option("TB", "constant", "top to bottom"),
+  option("LR", "constant", "left to right"),
+  option("BT", "constant", "bottom to top"),
+  option("RL", "constant", "right to left"),
+];
 
 /** The completions at the cursor of a block diagram source; null where nothing is to offer. */
 export function completeTam(context: CompletionContext, known: Known[]): CompletionResult | null {
@@ -114,13 +128,7 @@ export function completeTam(context: CompletionContext, known: Known[]): Complet
       ...known.map(element),
     ]);
   }
-  if ((match = before.match(/^direction\s+(\w*)$/)))
-    return result(at(match[1].length), [
-      option("TB", "constant", "top to bottom"),
-      option("LR", "constant", "left to right"),
-      option("BT", "constant", "bottom to top"),
-      option("RL", "constant", "right to left"),
-    ]);
+  if ((match = before.match(/^direction\s+(\w*)$/))) return result(at(match[1].length), DIRECTIONS);
   if ((match = before.match(/^level\s+(\w*)$/)))
     return result(at(match[1].length), [
       option("conceptual", "constant", "agents, storages, channels"),

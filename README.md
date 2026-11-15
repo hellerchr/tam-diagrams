@@ -67,9 +67,9 @@ package needs one of the others, or the command line, which runs from the bundle
 ## Editor
 
 `npm run editor` serves a diagram editor (`npm run build:editor` writes it as a static page to
-`dist/editor`). It edits TAM block diagrams and activity diagrams (with and without lanes) on a
-canvas, and the other UML types (class, use case, state machine, sequence) as text beside a live
-preview.
+`dist/editor`). It edits every diagram type on a canvas: TAM block diagrams with elements placed by
+hand, and the UML types (class, use case, activity with and without lanes, state machine, sequence)
+by their structure, with the layout automatic.
 *File ▸ New* opens a chooser with a card for each type and its examples; the chip beside the title
 says which type is on show.
 
@@ -81,11 +81,19 @@ usual. A moved element lines up with the edges and middles of others and with th
 A selection is aligned, distributed, made one size, put in a box or laid out on its own from the
 Arrange menu, the Properties section or a right click, which also changes what a connection is.
 
-An activity diagram lays itself out; its structure is edited on the canvas. A click on a shape of
-the Shapes tab adds a step, decision, start, end or group, after the selected node and in its group
-or lane; a drag from the dots beside a node connects it to another, or to a new step on the empty
-canvas; a double click names a node or labels a flow; Delete removes what is selected with its
-flows. In the types edited as text, a click on a shape adds its statement to the source.
+A UML diagram lays itself out; its structure is edited on the canvas. The Shapes tab holds the
+pieces of the type (classes and packages, actors and use cases, steps and decisions, states,
+participants) and its kinds of connection. A click on a piece adds it at the selected part, a drag
+carries it onto a part or the empty canvas; a piece dropped on a group stands inside it, one dropped
+on a part is joined to it where the type has such a join (a step follows a step). A drag from the
+dots beside a part connects it to another with the kind of connection picked in the palette; a
+selected connection changes its kind there or in the Properties section. A double click names a
+part or labels a connection; Delete removes what is selected with its connections. A class lists its
+members in the Properties section.
+
+The source pane colors every type's syntax and completes it in context: statements and ids at the
+start of a line, the relations a part can start, the parts a relation can reach, members inside a
+class, the branches of a fragment.
 
 The window has a menu bar (File, Edit, View, Arrange, Help) with the document's title, a rail with
 the pointer tools, a left panel (Shapes and Outline), a right panel (Properties above Source, with a
@@ -247,7 +255,12 @@ api -- reads/writes --> cart
 | `src/uml-usecase-lines.ts`   | Use case lines: straight or curved links and loops                                   |
 | `src/uml-usecase-label.ts`   | Use case line labels: beside the middle of the line, on the side with room           |
 | `src/uml-activity.ts`        | Flowcharts and activity diagrams: the parser                                         |
-| `src/uml-activity-edit.ts`   | Edits of a flowchart or swimlane source as text: add, name, connect, remove          |
+| `src/structure.ts`           | What an editor needs to change a diagram that lays itself out: parts, pieces, edits  |
+| `src/uml-activity-edit.ts`   | Edits of a flowchart or swimlane source as text, and its `Structure`                 |
+| `src/uml-class-edit.ts`      | Edits of a class diagram source as text, its members, and its `Structure`            |
+| `src/uml-usecase-edit.ts`    | Edits of a use case source as text, and its `Structure`                              |
+| `src/uml-state-edit.ts`      | Edits of a state machine source as text, and its `Structure`                         |
+| `src/uml-sequence-edit.ts`   | Edits of a sequence diagram source as text, message order, and its `Structure`       |
 | `src/uml-activity-layout.ts` | Flowchart layout with ELK and the node shapes swimlanes share                        |
 | `src/uml-swimlanes.ts`       | Swimlane activity diagrams: `layoutSwimlanes` and the drawing                        |
 | `src/swimlane-place.ts`      | Swimlanes stage 1: lanes, rows and items sized and placed                            |
@@ -304,6 +317,10 @@ api -- reads/writes --> cart
 | `editor/dom.ts`              | Elements, icons and icon buttons the panels are built from                           |
 | `editor/types.ts`            | The diagram types: mode, shapes or snippets, starter and examples of each            |
 | `editor/source.ts`           | The source pane: a code editor with the notation's colors and completions            |
+| `editor/syntax.ts`           | The tokenizer and indent rules of every diagram type's syntax                        |
+| `editor/completion.ts`       | Completion of a block diagram source from its notation                               |
+| `editor/completion-uml.ts`   | Completion of the Mermaid types' sources, and of the header on the first line        |
+| `editor/structures.ts`       | The `Structure` of each type edited by its structure, and the drawings of its pieces |
 | `editor/icons.ts`            | The editor's icons as SVG                                                            |
 | `editor/main.ts`             | The page: theme, files, export, autosave                                             |
 | `rolldown.config.mjs`        | The build: bundles `cli/bin.ts` into `dist/cli.js`, the package's `bin`              |

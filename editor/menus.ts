@@ -435,21 +435,37 @@ export class Menus {
       { name: "Fit diagram", key: "1", run: () => editor.fit() },
       { name: "100%", key: "Ctrl+0", run: () => editor.view.zoomTo(1) },
     ];
-    if (editor.structural) {
-      // An activity diagram: a node is named, continued and removed; the layout is not the user's.
+    const { structure } = editor;
+    if (structure) {
+      // A diagram that lays itself out: a part is named, continued and removed, a join changes its kind.
       const [id] = editor.selection.map((part) => part.id),
-        node = elements.length === 1 && !wires.length;
-      if (!editor.selection.length)
-        return [{ name: "Add a step", run: () => editor.addPiece("step") }, "line", ...fits];
-      const entries: MenuEntry[] = node
-        ? [
-            { name: "Rename", key: "F2", run: () => editor.rename(id) },
-            { name: "Add a step after", run: () => editor.addPiece("step", id) },
-            { name: "Add a decision after", run: () => editor.addPiece("decision", id) },
-            "line",
-          ]
-        : [];
-      return [...entries, remove];
+        pieces = (at?: string | null): MenuEntry[] =>
+          structure.pieces.map((piece) => ({
+            name: piece.name,
+            run: () => editor.addPiece(piece.kind, at),
+          }));
+      if (!editor.selection.length) return [{ name: "Add", items: pieces(null) }, "line", ...fits];
+      if (elements.length === 1 && !wires.length)
+        return [
+          { name: "Rename", key: "F2", run: () => editor.rename(id) },
+          { name: "Add here", items: pieces(id) },
+          "line",
+          remove,
+        ];
+      if (wires.length === 1 && !elements.length)
+        return [
+          structure.links.length > 1 && {
+            name: "Change kind",
+            items: structure.links.map((link) => ({
+              name: link.name,
+              checked: editor.linkKind(id) === link.kind,
+              run: () => editor.relink(id, link.kind),
+            })),
+          },
+          "line",
+          remove,
+        ];
+      return [remove];
     }
     if (!editor.editable) return fits;
     if (elements.length && wires.length) return [remove];

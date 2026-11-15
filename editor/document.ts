@@ -12,7 +12,8 @@ import { layoutWithin, overlapping, pin } from "../src/tam-pin.ts";
 import type { Measure } from "../src/text.ts";
 import { parseUml } from "../src/index.ts";
 import { UmlError } from "../src/uml.ts";
-import { type Flowchart, parseFlowchart } from "../src/uml-activity.ts";
+import type { StructureEdge, StructureNode } from "../src/structure.ts";
+import { structureOf } from "./structures.ts";
 import { type DiagramType, typeInfo, typeOf } from "./types.ts";
 
 /** A source laid out: the parsed diagram and the scene drawn from it. */
@@ -28,6 +29,9 @@ export interface Picture {
   type: DiagramType;
   /** The title the source gives the diagram. */
   title?: string;
+  /** In a diagram with a structure: its parts and joins by id, with the kinds they are. */
+  parts?: Map<string, StructureNode>;
+  joins?: Map<string, StructureEdge>;
 }
 
 /** A UML picture holds no block diagram: nothing in it is an element to select or move. */
@@ -45,31 +49,28 @@ const problemOf = (reason: unknown): Problem =>
     : { line: 0, message: reason instanceof Error ? reason.message : String(reason) };
 
 /**
- * An activity diagram as the editor sees every diagram: elements by id, what holds them, and the
- * connections between them, so that selecting, the tree and the highlights work on it as on a
- * block diagram. Nodes stand in as agents, subgraphs and lanes as groups.
+ * A diagram with a structure as the editor sees every diagram: elements by id, what holds them,
+ * and the connections between them, so that selecting, the tree and the highlights work on it as
+ * on a block diagram. Parts stand in as agents, groups as groups.
  */
-function flowDiagram(chart: Flowchart): TamDiagram {
+function structureDiagram(nodes: StructureNode[], edges: StructureEdge[]): TamDiagram {
   const diagram = NO_DIAGRAM();
-  const add = (
-    id: string,
-    kind: "agent" | "group",
-    label: string,
-    parent: string | null,
-    line: number,
-  ) => diagram.nodes.set(id, { id, kind, label, parent, children: [], stack: false, line });
-  for (const group of chart.subgraphs.values())
-    add(group.id, "group", group.label, group.parent, group.line);
-  for (const node of chart.nodes.values())
-    add(node.id, "agent", node.label, node.parent, node.line);
-  for (const id of chart.order) {
-    const node = diagram.nodes.get(id);
-    if (!node) continue;
-    if (node.parent && diagram.nodes.has(node.parent))
-      diagram.nodes.get(node.parent)!.children.push(id);
-    else diagram.roots.push(id);
+  for (const node of nodes)
+    diagram.nodes.set(node.id, {
+      id: node.id,
+      kind: node.group ? "group" : "agent",
+      label: node.label,
+      parent: node.parent,
+      children: [],
+      stack: false,
+      line: node.line,
+    });
+  for (const node of nodes) {
+    const parent = node.parent ? diagram.nodes.get(node.parent) : undefined;
+    if (parent) parent.children.push(node.id);
+    else diagram.roots.push(node.id);
   }
-  for (const edge of chart.edges)
+  for (const edge of edges)
     diagram.edges.push({
       id: edge.id,
       kind: "channel",
@@ -127,11 +128,9 @@ export class Doc {
       if (type !== "tam") {
         // A UML source: parsed and laid out by its own type; the picture is to look at.
         const parsed = parseUml(source);
-        // An activity diagram's nodes and edges are selected and changed on the canvas.
-        const diagram =
-          type === "flowchart" || type === "swimlane"
-            ? flowDiagram(parseFlowchart(source))
-            : NO_DIAGRAM();
+        // The parts and joins of a diagram with a structure are selected and changed on the canvas.
+        const structure = structureOf(type)?.read(source),
+          diagram = structure ? structureDiagram(structure.nodes, structure.edges) : NO_DIAGRAM();
         this.problem = undefined;
         this.onChange();
         const scene = await parsed.layout(this.measure, this.elk);
@@ -144,6 +143,8 @@ export class Doc {
           overlaps: [],
           type: parsed.kind,
           title: parsed.title,
+          parts: new Map(structure?.nodes.map((node) => [node.id, node])),
+          joins: new Map(structure?.edges.map((edge) => [edge.id, edge])),
         };
         this.onChange();
         return;

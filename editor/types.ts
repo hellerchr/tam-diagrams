@@ -14,8 +14,8 @@ import {
 } from "../src/samples/uml-examples.ts";
 import type { ElementKind } from "../src/tam-edit.ts";
 import { detectUml, type UmlKind } from "../src/uml.ts";
-import type { FlowPiece } from "../src/uml-activity-edit.ts";
 import type { IconName } from "./icons.ts";
+import { structureOf } from "./structures.ts";
 
 export type DiagramType = "tam" | UmlKind;
 
@@ -25,8 +25,6 @@ export interface Snippet {
   /** The drawing of what the statement adds. */
   icon: IconName;
   text: string;
-  /** In a diagram edited on the canvas: the piece a click adds, joined to what is selected. */
-  piece?: FlowPiece;
 }
 
 /** A shape of the palette: an element kind to drag onto the canvas. */
@@ -163,7 +161,7 @@ export const TYPES: TypeInfo[] = [
     starter: `classDiagram
   class Order {
     +id: string
-    +total(): number
+    +total() number
   }
   class OrderItem {
     +quantity: number
@@ -226,7 +224,7 @@ export const TYPES: TypeInfo[] = [
     name: "Activity diagram",
     plural: "Activity diagrams",
     icon: "flowchart",
-    mode: "structure",
+    mode: "text",
     palette: [],
     examples: examples(FLOWCHART_EXAMPLES),
     about: "Steps and decisions of a flow",
@@ -240,26 +238,26 @@ export const TYPES: TypeInfo[] = [
       {
         name: "Step",
         icon: "uml-step",
-        piece: "step",
+
         text: "  a[Do something] --> b[Do the next thing]",
       },
       {
         name: "Decision",
         icon: "uml-decision",
-        piece: "decision",
+
         text: "  ask{Decide?} -->|yes| one[One way]\n  ask -->|no| other[Other way]",
       },
       {
         name: "Start",
         icon: "uml-start",
-        piece: "start",
+
         text: "  start((Start)) --> first[First step]",
       },
-      { name: "End", icon: "uml-end", piece: "end", text: "  last[Last step] --> stop(((End)))" },
+      { name: "End", icon: "uml-end", text: "  last[Last step] --> stop(((End)))" },
       {
         name: "Group",
         icon: "group",
-        piece: "group",
+
         text: "  subgraph part [A part]\n    x[Inside] --> y[Also inside]\n  end",
       },
     ],
@@ -269,7 +267,7 @@ export const TYPES: TypeInfo[] = [
     name: "Activity with lanes",
     plural: "Activities with lanes",
     icon: "swimlane",
-    mode: "structure",
+    mode: "text",
     palette: [],
     examples: examples(SWIMLANE_EXAMPLES),
     about: "A flow across the agents that carry it out",
@@ -287,19 +285,19 @@ export const TYPES: TypeInfo[] = [
       {
         name: "Lane",
         icon: "uml-lane",
-        piece: "group",
+
         text: "  subgraph NewLane\n    step(New Step)\n  end",
       },
       {
         name: "Step",
         icon: "uml-step",
-        piece: "step",
+
         text: "  a(Do something) --> b(Do the next thing)",
       },
       {
         name: "Decision",
         icon: "uml-decision",
-        piece: "decision",
+
         text: "  ask{ } -->|yes| one(One way)\n  ask -->|no| other(Other way)",
       },
     ],
@@ -364,6 +362,9 @@ export const TYPES: TypeInfo[] = [
     ],
   },
 ];
+
+// A type with a structure is edited on the canvas, whatever else the table says of it.
+for (const info of TYPES) if (structureOf(info.type)) info.mode = "structure";
 
 export const typeInfo = (type: DiagramType): TypeInfo =>
   TYPES.find((item) => item.type === type) ?? TYPES[0];
