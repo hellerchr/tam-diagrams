@@ -7,7 +7,8 @@ import { join, relative, resolve } from "node:path";
 const root = resolve(__dirname, "..");
 const files = (dir: string): string[] =>
   readdirSync(dir, { withFileTypes: true }).flatMap((entry) =>
-    entry.name === "node_modules"
+    // Spikes try other libraries out and are no part of the package.
+    entry.name === "node_modules" || entry.name === "spikes"
       ? []
       : entry.isDirectory()
         ? files(join(dir, entry.name))
