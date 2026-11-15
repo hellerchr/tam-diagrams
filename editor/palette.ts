@@ -89,10 +89,16 @@ export class Palette {
         class: "tile snippet",
         type: "button",
         ...tipped({
-          tip: `Add ${snippet.name.toLowerCase()}: ${snippet.text.trim()}`,
+          tip: snippet.piece
+            ? `Add ${snippet.name.toLowerCase()}, after the selected one`
+            : `Add ${snippet.name.toLowerCase()}: ${snippet.text.trim()}`,
           side: "right",
         }),
-        onClick: () => this.insert(snippet.text),
+        // On a diagram edited on the canvas the piece joins what is selected; else its statement is added.
+        onClick: () =>
+          snippet.piece && this.editor.structural
+            ? this.editor.addPiece(snippet.piece)
+            : this.insert(snippet.text),
       },
       icon(snippet.icon),
       h("span", { class: "name" }, snippet.name),

@@ -298,7 +298,15 @@ export function chooser(host: ChooserHost) {
         { class: "card", type: "button", onClick: () => pick(info), onDblclick: create },
         h("span", { class: "thumb" }, picture),
         h("span", { class: "name" }, icon(info.icon), h("span", {}, info.name)),
-        h("span", { class: "badge" }, info.mode === "canvas" ? "Canvas" : "Text + preview"),
+        h(
+          "span",
+          { class: "badge" },
+          info.mode === "canvas"
+            ? "Canvas"
+            : info.mode === "structure"
+              ? "Canvas, automatic layout"
+              : "Text + preview",
+        ),
       );
       return [info.type, card] as const;
     }),

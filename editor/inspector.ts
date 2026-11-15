@@ -44,15 +44,17 @@ export class Inspector {
       this.inspected = key;
       this.sync = [];
       this.element.replaceChildren(
-        ...(!editor.editable
-          ? this.textPane()
-          : wires.length === 1 && !elements.length
-            ? this.wirePane(wires[0])
-            : elements.length && !wires.length
-              ? this.elementPane(elements)
-              : editor.selection.length
-                ? this.manyPane()
-                : this.diagramPane()),
+        ...(editor.structural
+          ? this.flowPane(elements, wires)
+          : !editor.editable
+            ? this.textPane()
+            : wires.length === 1 && !elements.length
+              ? this.wirePane(wires[0])
+              : elements.length && !wires.length
+                ? this.elementPane(elements)
+                : editor.selection.length
+                  ? this.manyPane()
+                  : this.diagramPane()),
       );
     }
     for (const sync of this.sync) sync();
@@ -510,6 +512,71 @@ export class Inspector {
         "Elements and connections are selected together. Select only elements, or one connection, to see properties.",
       ),
       h("div", { class: "actions end" }, this.remove()),
+    ];
+  }
+
+  /** A node or an edge of an activity diagram: its name or label, and its removal. */
+  private flowPane(elements: string[], wires: string[]): HTMLElement[] {
+    const { editor } = this,
+      info = typeInfo(editor.type),
+      nodes = () => editor.doc.picture?.diagram.nodes;
+    if (elements.length === 1 && !wires.length) {
+      const [id] = elements,
+        group = nodes()?.get(id)?.kind === "group";
+      return [
+        this.subject(group ? "group" : "uml-step", group ? "Group" : "Node"),
+        this.group(
+          "Identity",
+          this.row(
+            "Name",
+            this.text(
+              () => (nodes()?.get(id)?.label ?? "").replace(/<br\s*\/?>/gi, "\n"),
+              (label) => editor.relabel(id, label),
+              "Name",
+              true,
+            ),
+          ),
+          this.row("Id", h("code", {}, id), "div"),
+        ),
+        h(
+          "p",
+          { class: "note" },
+          "Click a shape on the left to add it after this one, or drag a dot to another node.",
+        ),
+        h("div", { class: "actions end" }, this.remove()),
+      ];
+    }
+    if (wires.length === 1 && !elements.length) {
+      const [id] = wires;
+      return [
+        this.subject("connect", "Flow"),
+        this.group(
+          "Identity",
+          this.row(
+            "Label",
+            this.text(
+              () => editor.wireLabel(id)?.text ?? "",
+              (label) => editor.wireLabel(id)?.set(label),
+              "yes, no, …",
+            ),
+          ),
+        ),
+        h("div", { class: "actions end" }, this.remove()),
+      ];
+    }
+    if (editor.selection.length)
+      return [
+        this.subject("shapes", `${editor.selection.length} selected`),
+        h("div", { class: "actions end" }, this.remove()),
+      ];
+    return [
+      this.subject(info.icon, info.name),
+      h("p", { class: "note" }, `${info.about}.`),
+      h(
+        "p",
+        { class: "note" },
+        "Click a shape on the left to add it; with a node selected it follows that node. Drag from a dot beside a node to connect. Double-click to name. The layout is automatic.",
+      ),
     ];
   }
 

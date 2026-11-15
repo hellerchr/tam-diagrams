@@ -14,6 +14,7 @@ import {
 } from "../src/samples/uml-examples.ts";
 import type { ElementKind } from "../src/tam-edit.ts";
 import { detectUml, type UmlKind } from "../src/uml.ts";
+import type { FlowPiece } from "../src/uml-activity-edit.ts";
 import type { IconName } from "./icons.ts";
 
 export type DiagramType = "tam" | UmlKind;
@@ -24,6 +25,8 @@ export interface Snippet {
   /** The drawing of what the statement adds. */
   icon: IconName;
   text: string;
+  /** In a diagram edited on the canvas: the piece a click adds, joined to what is selected. */
+  piece?: FlowPiece;
 }
 
 /** A shape of the palette: an element kind to drag onto the canvas. */
@@ -69,7 +72,7 @@ export interface TypeInfo {
   plural: string;
   icon: IconName;
   /** Whether the diagram is edited on the canvas, or as text with the picture as a preview. */
-  mode: "canvas" | "text";
+  mode: "canvas" | "structure" | "text";
   /** The shapes to drag onto the canvas; none for a type edited as text. */
   palette: ShapeGroup[];
   /** Diagrams of the type to open and learn from. */
@@ -223,7 +226,7 @@ export const TYPES: TypeInfo[] = [
     name: "Activity diagram",
     plural: "Activity diagrams",
     icon: "flowchart",
-    mode: "text",
+    mode: "structure",
     palette: [],
     examples: examples(FLOWCHART_EXAMPLES),
     about: "Steps and decisions of a flow",
@@ -234,17 +237,29 @@ export const TYPES: TypeInfo[] = [
   wait --> check
   ship --> done(((End)))`,
     snippets: [
-      { name: "Step", icon: "uml-step", text: "  a[Do something] --> b[Do the next thing]" },
+      {
+        name: "Step",
+        icon: "uml-step",
+        piece: "step",
+        text: "  a[Do something] --> b[Do the next thing]",
+      },
       {
         name: "Decision",
         icon: "uml-decision",
+        piece: "decision",
         text: "  ask{Decide?} -->|yes| one[One way]\n  ask -->|no| other[Other way]",
       },
-      { name: "Start", icon: "uml-start", text: "  start((Start)) --> first[First step]" },
-      { name: "End", icon: "uml-end", text: "  last[Last step] --> stop(((End)))" },
+      {
+        name: "Start",
+        icon: "uml-start",
+        piece: "start",
+        text: "  start((Start)) --> first[First step]",
+      },
+      { name: "End", icon: "uml-end", piece: "end", text: "  last[Last step] --> stop(((End)))" },
       {
         name: "Group",
         icon: "group",
+        piece: "group",
         text: "  subgraph part [A part]\n    x[Inside] --> y[Also inside]\n  end",
       },
     ],
@@ -254,7 +269,7 @@ export const TYPES: TypeInfo[] = [
     name: "Activity with lanes",
     plural: "Activities with lanes",
     icon: "swimlane",
-    mode: "text",
+    mode: "structure",
     palette: [],
     examples: examples(SWIMLANE_EXAMPLES),
     about: "A flow across the agents that carry it out",
@@ -269,11 +284,22 @@ export const TYPES: TypeInfo[] = [
   order --> check
   ship --> receive`,
     snippets: [
-      { name: "Lane", icon: "uml-lane", text: "  subgraph NewLane\n    step(New Step)\n  end" },
-      { name: "Step", icon: "uml-step", text: "  a(Do something) --> b(Do the next thing)" },
+      {
+        name: "Lane",
+        icon: "uml-lane",
+        piece: "group",
+        text: "  subgraph NewLane\n    step(New Step)\n  end",
+      },
+      {
+        name: "Step",
+        icon: "uml-step",
+        piece: "step",
+        text: "  a(Do something) --> b(Do the next thing)",
+      },
       {
         name: "Decision",
         icon: "uml-decision",
+        piece: "decision",
         text: "  ask{ } -->|yes| one(One way)\n  ask -->|no| other(Other way)",
       },
     ],

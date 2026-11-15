@@ -120,7 +120,7 @@ export class Outline {
                 { class: "note" },
                 words
                   ? "Nothing found."
-                  : editor.editable
+                  : editor.editable || editor.structural
                     ? "No elements yet."
                     : `${typeInfo(editor.type).plural} are edited as text: their parts are in the source.`,
               ),

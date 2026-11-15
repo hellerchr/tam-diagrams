@@ -12,6 +12,7 @@ import { layoutWithin, overlapping, pin } from "../src/tam-pin.ts";
 import type { Measure } from "../src/text.ts";
 import { parseUml } from "../src/index.ts";
 import { UmlError } from "../src/uml.ts";
+import { type Flowchart, parseFlowchart } from "../src/uml-activity.ts";
 import { type DiagramType, typeInfo, typeOf } from "./types.ts";
 
 /** A source laid out: the parsed diagram and the scene drawn from it. */
@@ -42,6 +43,43 @@ const problemOf = (reason: unknown): Problem =>
   reason instanceof TamError || reason instanceof UmlError
     ? { line: reason.line, message: reason.message }
     : { line: 0, message: reason instanceof Error ? reason.message : String(reason) };
+
+/**
+ * An activity diagram as the editor sees every diagram: elements by id, what holds them, and the
+ * connections between them, so that selecting, the tree and the highlights work on it as on a
+ * block diagram. Nodes stand in as agents, subgraphs and lanes as groups.
+ */
+function flowDiagram(chart: Flowchart): TamDiagram {
+  const diagram = NO_DIAGRAM();
+  const add = (
+    id: string,
+    kind: "agent" | "group",
+    label: string,
+    parent: string | null,
+    line: number,
+  ) => diagram.nodes.set(id, { id, kind, label, parent, children: [], stack: false, line });
+  for (const group of chart.subgraphs.values())
+    add(group.id, "group", group.label, group.parent, group.line);
+  for (const node of chart.nodes.values())
+    add(node.id, "agent", node.label, node.parent, node.line);
+  for (const id of chart.order) {
+    const node = diagram.nodes.get(id);
+    if (!node) continue;
+    if (node.parent && diagram.nodes.has(node.parent))
+      diagram.nodes.get(node.parent)!.children.push(id);
+    else diagram.roots.push(id);
+  }
+  for (const edge of chart.edges)
+    diagram.edges.push({
+      id: edge.id,
+      kind: "channel",
+      source: edge.source,
+      target: edge.target,
+      label: edge.label,
+      line: edge.line,
+    });
+  return diagram;
+}
 
 /** The most steps that can be undone. */
 const HISTORY = 300;
@@ -89,13 +127,18 @@ export class Doc {
       if (type !== "tam") {
         // A UML source: parsed and laid out by its own type; the picture is to look at.
         const parsed = parseUml(source);
+        // An activity diagram's nodes and edges are selected and changed on the canvas.
+        const diagram =
+          type === "flowchart" || type === "swimlane"
+            ? flowDiagram(parseFlowchart(source))
+            : NO_DIAGRAM();
         this.problem = undefined;
         this.onChange();
         const scene = await parsed.layout(this.measure, this.elk);
         if (run !== this.run) return;
         this.picture = {
           source,
-          diagram: NO_DIAGRAM(),
+          diagram,
           scene,
           placed: false,
           overlaps: [],

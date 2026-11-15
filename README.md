@@ -67,8 +67,9 @@ package needs one of the others, or the command line, which runs from the bundle
 ## Editor
 
 `npm run editor` serves a diagram editor (`npm run build:editor` writes it as a static page to
-`dist/editor`). It edits TAM block diagrams on a canvas, and the UML types (class, use case,
-activity with and without lanes, state machine, sequence) as text beside a live preview.
+`dist/editor`). It edits TAM block diagrams and activity diagrams (with and without lanes) on a
+canvas, and the other UML types (class, use case, state machine, sequence) as text beside a live
+preview.
 *File ▸ New* opens a chooser with a card for each type and its examples; the chip beside the title
 says which type is on show.
 
@@ -78,8 +79,13 @@ Properties section offers only the kinds and connections the notation allows the
 lists the elements as a tree and takes drops too. Copy, cut, paste, duplicate, undo and redo work as
 usual. A moved element lines up with the edges and middles of others and with the gaps between them.
 A selection is aligned, distributed, made one size, put in a box or laid out on its own from the
-Arrange menu, the Properties section or a right click, which also changes what a connection is. In
-the other types the Shapes tab holds snippets instead: a click adds a statement to the source.
+Arrange menu, the Properties section or a right click, which also changes what a connection is.
+
+An activity diagram lays itself out; its structure is edited on the canvas. A click on a shape of
+the Shapes tab adds a step, decision, start, end or group, after the selected node and in its group
+or lane; a drag from the dots beside a node connects it to another, or to a new step on the empty
+canvas; a double click names a node or labels a flow; Delete removes what is selected with its
+flows. In the types edited as text, a click on a shape adds its statement to the source.
 
 The window has a menu bar (File, Edit, View, Arrange, Help) with the document's title, a rail with
 the pointer tools, a left panel (Shapes and Outline), a right panel (Properties above Source, with a
@@ -241,6 +247,7 @@ api -- reads/writes --> cart
 | `src/uml-usecase-lines.ts`   | Use case lines: straight or curved links and loops                                   |
 | `src/uml-usecase-label.ts`   | Use case line labels: beside the middle of the line, on the side with room           |
 | `src/uml-activity.ts`        | Flowcharts and activity diagrams: the parser                                         |
+| `src/uml-activity-edit.ts`   | Edits of a flowchart or swimlane source as text: add, name, connect, remove          |
 | `src/uml-activity-layout.ts` | Flowchart layout with ELK and the node shapes swimlanes share                        |
 | `src/uml-swimlanes.ts`       | Swimlane activity diagrams: `layoutSwimlanes` and the drawing                        |
 | `src/swimlane-place.ts`      | Swimlanes stage 1: lanes, rows and items sized and placed                            |

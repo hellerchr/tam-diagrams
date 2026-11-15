@@ -722,7 +722,7 @@ export class Panels {
     }
     setOff(this.undo, !doc.canUndo);
     setOff(this.redo, !doc.canRedo);
-    this.arrangeTitle.hidden = text;
+    this.arrangeTitle.hidden = !editor.editable;
     if (document.activeElement !== this.title) this.title.value = doc.picture?.title ?? "";
     this.sizeTitle();
     this.chip.replaceChildren(icon(info.icon), h("span", {}, info.name), icon("chevron"));

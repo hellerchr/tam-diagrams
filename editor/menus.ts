@@ -244,8 +244,13 @@ export class Menus {
     const { editor } = this,
       { doc } = editor,
       elements = editor.selectedElements,
-      text = editor.editable ? undefined : `${typeInfo(editor.type).plural} are edited as text`,
-      needs = text ?? (elements.length ? undefined : "Select an element"),
+      text =
+        editor.editable || editor.structural
+          ? undefined
+          : `${typeInfo(editor.type).plural} are edited as text`,
+      // Copies stand at a place: only a diagram that places its elements has them.
+      placed = editor.editable ? text : "Elements of this diagram are not copied",
+      needs = placed ?? (elements.length ? undefined : "Select an element"),
       [only] = editor.selection;
     return [
       { name: "Undo", key: "Ctrl+Z", off: !doc.canUndo, run: () => doc.undo() },
@@ -253,7 +258,7 @@ export class Menus {
       "line",
       { name: "Cut", key: "Ctrl+X", off: needs, run: () => this.clip(true) },
       { name: "Copy", key: "Ctrl+C", off: needs, run: () => this.clip(false) },
-      { name: "Paste", key: "Ctrl+V", off: text, run: () => this.paste() },
+      { name: "Paste", key: "Ctrl+V", off: placed, run: () => this.paste() },
       { name: "Duplicate", key: "Ctrl+D", off: needs, run: () => editor.duplicateSelection() },
       {
         name: "Delete",
@@ -323,7 +328,7 @@ export class Menus {
       { name: "Snap", checked: editor.snapping, run: () => bench.toggleSnap() },
       { name: "Grid", checked: editor.view.grid, run: () => bench.toggleGrid() },
       "line",
-      panel(editor.editable ? "Shapes panel" : "Snippets panel", "shapes"),
+      panel("Shapes panel", "shapes"),
       panel("Outline panel", "outline"),
       panel("Properties", "properties"),
       panel("Source", "source"),
@@ -430,6 +435,22 @@ export class Menus {
       { name: "Fit diagram", key: "1", run: () => editor.fit() },
       { name: "100%", key: "Ctrl+0", run: () => editor.view.zoomTo(1) },
     ];
+    if (editor.structural) {
+      // An activity diagram: a node is named, continued and removed; the layout is not the user's.
+      const [id] = editor.selection.map((part) => part.id),
+        node = elements.length === 1 && !wires.length;
+      if (!editor.selection.length)
+        return [{ name: "Add a step", run: () => editor.addPiece("step") }, "line", ...fits];
+      const entries: MenuEntry[] = node
+        ? [
+            { name: "Rename", key: "F2", run: () => editor.rename(id) },
+            { name: "Add a step after", run: () => editor.addPiece("step", id) },
+            { name: "Add a decision after", run: () => editor.addPiece("decision", id) },
+            "line",
+          ]
+        : [];
+      return [...entries, remove];
+    }
     if (!editor.editable) return fits;
     if (elements.length && wires.length) return [remove];
     if (elements.length) {

@@ -128,6 +128,10 @@ export class StatusBar {
       elements = editor.selectedElements.length,
       wires = editor.selectedWires.length;
     if (doc.problem) return "The source has an error: the diagram shows as it last was";
+    if (editor.structural)
+      return elements === 1
+        ? "Click a shape to add it after this node · drag a dot to connect · double-click to rename · Delete removes"
+        : "Click a shape to add it · select a node first to continue from it · the layout is automatic";
     if (!editor.editable)
       return `${typeInfo(editor.type).plural} are edited as text: type in the source or add a snippet · drag to move the view · Ctrl + wheel zooms`;
     if (editor.doing && GESTURE_HINTS[editor.doing]) return GESTURE_HINTS[editor.doing];

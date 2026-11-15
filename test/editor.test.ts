@@ -106,9 +106,11 @@ describe("diagram types in the editor", () => {
       expect(made.problem, info.name).toBeUndefined();
       expect(made.picture).toMatchObject({ type: info.type, placed: false });
       expect(made.picture!.scene.shapes.length).toBeGreaterThan(0);
-      // Nothing of it is edited on the canvas.
+      // Nothing of it is placed by hand; an activity diagram's nodes are there to select and change.
       expect(made.placedSource()).toBeUndefined();
-      expect(made.picture!.diagram.nodes.size).toBe(0);
+      const nodes = made.picture!.diagram.nodes.size;
+      if (info.mode === "structure") expect(nodes).toBeGreaterThan(0);
+      else expect(nodes).toBe(0);
       // Every snippet adds statements the type reads.
       for (const snippet of info.snippets) {
         await made.apply(`${info.starter}\n${snippet.text}\n`);
@@ -120,5 +122,21 @@ describe("diagram types in the editor", () => {
   it("reports the line of an error in a UML source", async () => {
     const made = await doc("classDiagram\n  class A\n  A --> ");
     expect(made.problem?.line).toBe(3);
+  });
+});
+
+describe("an activity diagram in the editor", () => {
+  it("shows its nodes, groups and edges as parts to select", async () => {
+    const made = await doc(
+      "flowchart TB\n  a[A] --> b{B?}\n  subgraph g [G]\n    c[C]\n  end\n  b -->|yes| c",
+    );
+    const { picture } = made;
+    expect(picture!.diagram.roots).toEqual(["a", "b", "g"]);
+    expect(picture!.diagram.nodes.get("g")).toMatchObject({ kind: "group", children: ["c"] });
+    const box = boxOf(picture!, "a")!;
+    expect(partAt(picture!, { x: box.x + 5, y: box.y + 5 })).toEqual({ type: "element", id: "a" });
+    const [wire] = picture!.scene.wires.filter((item) => item.edge === "e2"),
+      middle = wire.points[Math.floor(wire.points.length / 2)];
+    expect(partAt(picture!, middle)).toEqual({ type: "wire", id: "e2" });
   });
 });

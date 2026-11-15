@@ -57,6 +57,15 @@ import {
   snapEdge,
   snapMove,
 } from "./guides.ts";
+import { parseFlowchart } from "../src/uml-activity.ts";
+import {
+  addFlowPiece,
+  connectFlow,
+  type FlowPiece,
+  labelFlowEdge,
+  removeFlow,
+  renameFlow,
+} from "../src/uml-activity-edit.ts";
 import { type DiagramType, typeInfo, typeOf, withUmlTitle } from "./types.ts";
 import type { View } from "./view.ts";
 
@@ -273,9 +282,9 @@ export class Editor {
   /** The picture changed: selections of what is gone go with it. */
   refresh() {
     const { picture } = this;
-    if (this.editable === this.textOnly) {
+    if ((this.editable || this.structural) === this.textOnly) {
       // A picture edited as text is moved about; one edited on the canvas starts with the select tool.
-      this.textOnly = !this.editable;
+      this.textOnly = !this.editable && !this.structural;
       this.tool = this.textOnly ? "pan" : "select";
       this.sticky = false;
       this.ghost = undefined;
@@ -319,7 +328,12 @@ export class Editor {
 
   /** Picks the tool. A diagram edited as text is only moved about; a sticky shape tool places several. */
   setTool(tool: Tool, sticky = false) {
-    if (!this.editable && tool !== "pan") return;
+    if (
+      !this.editable &&
+      tool !== "pan" &&
+      !(this.structural && (tool === "select" || tool === "connect"))
+    )
+      return;
     this.tool = tool;
     this.sticky = sticky && tool !== "select" && tool !== "pan" && tool !== "connect";
     this.ghost = undefined;
@@ -350,6 +364,82 @@ export class Editor {
   /** What the document draws: a source without a picture yet says it by its first line. */
   get type(): DiagramType {
     return typeOf(this.doc.source);
+  }
+
+  /**
+   * Whether the diagram's structure is edited on the canvas while its layout stays automatic: an
+   * activity diagram's nodes are added, named, connected and removed, not moved.
+   */
+  get structural(): boolean {
+    return typeInfo(this.type).mode === "structure";
+  }
+
+  /** An edit of an activity diagram's source: applied when the result still reads as one. */
+  private flowEdit(make: (source: string) => string): boolean {
+    if (this.doc.problem) return this.change(undefined);
+    try {
+      const next = make(this.doc.source);
+      parseFlowchart(next);
+      void this.doc.apply(next);
+      return true;
+    } catch (reason) {
+      this.notify(
+        (reason instanceof Error ? reason.message : String(reason)).replace(/^Line \d+: /, ""),
+      );
+      return false;
+    }
+  }
+
+  /**
+   * Adds a piece to an activity diagram: joined to the one selected node (a start leads to it, the
+   * others follow it), inside the selected group, and opens its name.
+   */
+  addPiece(kind: FlowPiece, from?: string) {
+    const { picture } = this;
+    if (!this.structural || !picture) return;
+    const [only] = this.selectedElements,
+      chosen = from ?? (this.selectedElements.length === 1 ? only : undefined),
+      node = chosen ? picture.diagram.nodes.get(chosen) : undefined,
+      group = node?.kind === "group" ? node.id : (node?.parent ?? null);
+    let made = "";
+    const done = this.flowEdit((source) => {
+      const added = addFlowPiece(source, { kind, parent: kind === "group" ? null : group });
+      made = added.id;
+      if (!node || node.kind === "group" || kind === "group") return added.source;
+      return kind === "start"
+        ? connectFlow(added.source, made, node.id)
+        : connectFlow(added.source, node.id, made);
+    });
+    if (!done) return;
+    this.tool = "select";
+    this.select([{ type: "element", id: made }]);
+    void this.whenShown().then(() => {
+      this.reveal(made);
+      if (kind !== "start" && kind !== "end") this.rename(made);
+    });
+  }
+
+  /** Gives an element another name, in whichever notation the diagram is written. */
+  relabel(id: string, label: string) {
+    if (this.structural) this.flowEdit((source) => renameFlow(source, id, label));
+    else this.edit((source) => setElement(source, id, { label }));
+  }
+
+  /** The label of a connection, and a way to set it; undefined for one that carries none. */
+  wireLabel(id: string): { text: string; set: (text: string) => void } | undefined {
+    if (this.structural) {
+      const edge = this.picture?.diagram.edges.find((item) => item.id === id);
+      return (
+        edge && {
+          text: edge.label ?? "",
+          set: (text) => void this.flowEdit((source) => labelFlowEdge(source, id, text)),
+        }
+      );
+    }
+    const connection = this.connection(id);
+    return connection && connection.word !== "dependency"
+      ? { text: connection.label ?? "", set: (text) => this.setWire(id, { label: text }) }
+      : undefined;
   }
 
   /** Whether the diagram is edited on the canvas; the UML types are edited as text. */
@@ -585,7 +675,10 @@ export class Editor {
   deleteSelection() {
     if (!this.selection.length) return;
     const ids = this.selection.map((part) => part.id);
-    if (this.edit((source) => remove(source, ids))) this.select([]);
+    const done = this.structural
+      ? this.flowEdit((source) => removeFlow(source, ids))
+      : this.edit((source) => remove(source, ids));
+    if (done) this.select([]);
   }
 
   duplicateSelection() {
@@ -708,6 +801,10 @@ export class Editor {
 
   setElements(change: ElementChange) {
     const ids = this.selectedElements;
+    if (this.structural) {
+      if (change.label !== undefined && ids.length === 1) this.relabel(ids[0], change.label);
+      return;
+    }
     this.edit((source) => ids.reduce((next, id) => setElement(next, id, change), source));
   }
 
@@ -928,8 +1025,8 @@ export class Editor {
     const { picture } = this;
     if (!picture || this.doc.problem) return;
     if (wire) {
-      const connection = this.connection(id);
-      if (!connection || connection.word === "dependency" || !at) return;
+      const wired = this.wireLabel(id);
+      if (!wired || !at) return;
       // The field lies on the label where it is drawn, its lines as lines; a connection without one gets it at the pointer.
       const drawn = picture.scene.texts
         .filter(
@@ -940,9 +1037,9 @@ export class Editor {
       const box = drawn.length
         ? around(drawn)
         : { x: at.x - 60, y: at.y - 10, width: 120, height: 20 };
-      const label = (connection.label ?? "").replace(/<br\s*\/?>/gi, "\n");
+      const label = wired.text.replace(/<br\s*\/?>/gi, "\n");
       this.editText(box, label, { size: 12, weight: 400 }, (text) => {
-        if (text !== undefined && text !== label) this.setWire(id, { label: text });
+        if (text !== undefined && text !== label) wired.set(text);
       });
       return;
     }
@@ -958,8 +1055,7 @@ export class Editor {
     const field = container ? { ...box, height: Math.min(box.height, 34) } : box;
     const label = (node?.label ?? NAMES.agent).replace(/<br\s*\/?>/gi, "\n");
     this.editText(field, label, { size: 14, weight: container ? 600 : 400 }, (text) => {
-      if (text !== undefined && text !== label)
-        this.edit((source) => setElement(source, id, { label: text }));
+      if (text !== undefined && text !== label) this.relabel(id, text);
     });
   }
 
@@ -981,7 +1077,12 @@ export class Editor {
       return;
     }
     // A picture that is edited as text is moved about by dragging it.
-    if (event.button === 1 || this.space || this.tool === "pan" || !this.editable) {
+    if (
+      event.button === 1 ||
+      this.space ||
+      this.tool === "pan" ||
+      (!this.editable && !this.structural)
+    ) {
       this.gesture = { type: "pan", last: screen };
       this.cursor();
       return;
@@ -1134,6 +1235,8 @@ export class Editor {
     point: Point,
     event: PointerEvent,
   ) {
+    // An activity diagram lays itself out: its nodes are not moved.
+    if (this.structural) return;
     if (!gesture.base) {
       if (Math.hypot(screen.x - gesture.screen.x, screen.y - gesture.screen.y) < SLOP) return;
       const source = this.doc.placedSource();
@@ -1324,6 +1427,13 @@ export class Editor {
 
   /** Connects two elements with the word that fits them and selects the connection. */
   connect(from: string, to: string) {
+    if (this.structural) {
+      if (!this.flowEdit((source) => connectFlow(source, from, to))) return;
+      const made = parseFlowchart(this.doc.source).edges.at(-1);
+      this.tool = "select";
+      if (made) this.select([{ type: "wire", id: made.id }]);
+      return;
+    }
     if (!this.edit((source) => connect(source, from, to))) return;
     const made = parseTam(this.doc.source).edges.findLast((edge) => !edge.id.includes("#"));
     this.tool = "select";
@@ -1335,6 +1445,7 @@ export class Editor {
    * storage, in the same container, at the first free spot.
    */
   addBeside(from: string, side: number) {
+    if (this.structural) return this.addPiece("step", from);
     const base = this.doc.placedSource();
     if (base === undefined) return void this.change(undefined);
     const picture = this.doc.layout(base),
@@ -1413,6 +1524,10 @@ export class Editor {
 
   /** A connection dropped on the empty canvas ends at a new agent there. */
   private connectNew(from: string, at: Point) {
+    if (this.structural) {
+      if (this.picture && !partAt(this.picture, at, 0)) this.addPiece("step", from);
+      return;
+    }
     const { picture } = this,
       base = this.doc.placedSource(),
       start = picture && boxOf(picture, from);
@@ -1457,10 +1572,12 @@ export class Editor {
   private doubleClick(event: MouseEvent) {
     const point = this.view.toScene(this.view.pointOf(event)),
       { picture } = this;
-    if (this.tool !== "select" || !this.editable) return;
+    if (this.tool !== "select" || (!this.editable && !this.structural)) return;
     const part = picture && partAt(picture, point, 6 / this.view.zoom);
-    if (!part) this.create("agent", point, event.altKey);
-    else if (part.type === "element") this.rename(part.id);
+    if (!part) {
+      if (this.structural) this.addPiece("step");
+      else this.create("agent", point, event.altKey);
+    } else if (part.type === "element") this.rename(part.id);
     else this.rename(part.id, true, point);
   }
 
@@ -1587,7 +1704,8 @@ export class Editor {
 
   private handleAt(screen: Point) {
     const { single } = this;
-    if (!single || this.tool !== "select") return undefined;
+    // Only what the source places has a size to drag.
+    if (!single || this.tool !== "select" || !this.editable) return undefined;
     const found = this.handlePoints(single.box).find(
       (spot) => Math.abs(spot.x - screen.x) <= HANDLE && Math.abs(spot.y - screen.y) <= HANDLE,
     );
@@ -1698,7 +1816,12 @@ export class Editor {
     for (const id of this.selectedElements)
       boxesOf(picture, id).forEach((box) => outlineBox(box, 3));
     const { single } = this;
-    if (single && this.tool === "select" && (!gesture || gesture.type === "resize")) {
+    if (
+      single &&
+      this.editable &&
+      this.tool === "select" &&
+      (!gesture || gesture.type === "resize")
+    ) {
       context.fillStyle = "#ffffff";
       for (const spot of this.handlePoints(single.box)) {
         // The handles stand on the frame, which lies 3 outside the element.
