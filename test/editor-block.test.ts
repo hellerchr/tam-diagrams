@@ -1,8 +1,11 @@
 // Block diagrams in the editor: plain block diagrams, whose palette and choices leave out the
 // design level that the parser still reads.
 import { describe, expect, it } from "vitest";
+import type { Box } from "../src/scene.ts";
 import { parseTam } from "../src/tam.ts";
+import { ICONS } from "../editor/icons.ts";
 import { WIRES } from "../editor/menus.ts";
+import { Palette } from "../editor/palette.ts";
 import { PLAIN_KINDS, TYPES } from "../editor/types.ts";
 import { editorAt } from "./editor-at.ts";
 
@@ -60,5 +63,128 @@ describe("a block diagram in the editor", () => {
 
     const plain = await editorAt("agent a[A]\nstorage s[S]\na -- reads --> s");
     expect(plain.editor.designLevel).toBe(false);
+  });
+});
+
+const SHOP = `agent web[Web] @0,0
+agent api[API] @300,0
+storage db[Orders] @0,200`;
+
+/** The middle of an element's box. */
+const middle = (picture: { scene: { shapes: { id: string; box: Box }[] } }, id: string) => {
+  const { box } = picture.scene.shapes.find((shape) => shape.id === id)!;
+  return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+};
+
+describe("the connections of a block diagram's palette", () => {
+  it("are the conceptual connections of the notation, each with a drawing of its own", () => {
+    const links = TYPES[0].links!;
+    expect(links.map((link) => link.kind)).toEqual([
+      "calls",
+      "sends data",
+      "calls both",
+      "---",
+      "reads",
+      "writes",
+      "reads/writes",
+    ]);
+    const icons = links.map((link) => link.icon);
+    expect(new Set(icons.map((name) => ICONS[name])).size).toBe(icons.length);
+    for (const link of links) expect(link.hint).toMatch(/\(.*(--|---).*\)$/);
+  });
+
+  it("stand in the Shapes tab under Connections, and the one picked is pressed", async () => {
+    const { editor } = await editorAt(SHOP),
+      palette = new Palette(editor, () => {});
+    palette.update();
+    const groups = [...palette.element.querySelectorAll(".palette-group")];
+    const connections = groups.find((group) => group.textContent!.startsWith("Connections"))!;
+    const tiles = [...connections.querySelectorAll<HTMLButtonElement>(".tile")];
+    expect(tiles.map((tile) => tile.textContent)).toEqual([
+      "Request",
+      "Data flow",
+      "Both ways",
+      "Channel",
+      "Read",
+      "Write",
+      "Read/write",
+    ]);
+    tiles[4].click();
+    palette.update();
+    expect(editor.link).toBe("reads");
+    expect(editor.tool).toBe("connect");
+    expect(tiles.map((tile) => tile.getAttribute("aria-pressed"))).toEqual([
+      "false",
+      "false",
+      "false",
+      "false",
+      "true",
+      "false",
+      "false",
+    ]);
+    // Picked again, the connection is the one that fits again.
+    tiles[4].click();
+    expect(editor.link).toBeUndefined();
+    expect(editor.tool).toBe("select");
+  });
+
+  it("draws the kind picked from element to element", async () => {
+    const { doc, editor, drag } = await editorAt(SHOP);
+    editor.setLink("sends data");
+    await drag(middle(doc.picture!, "web"), middle(doc.picture!, "api"));
+    expect(doc.source.trimEnd().split("\n").at(-1)).toBe("web -- sends data --> api");
+    expect(editor.selectedWires).toHaveLength(1);
+    editor.setLink("calls both");
+    await drag(middle(doc.picture!, "api"), middle(doc.picture!, "web"));
+    expect(doc.source.trimEnd().split("\n").at(-1)).toBe("api <-- calls --> web");
+    editor.setLink("writes");
+    await drag(middle(doc.picture!, "web"), middle(doc.picture!, "db"));
+    expect(doc.source.trimEnd().split("\n").at(-1)).toBe("web -- writes --> db");
+    // Undo takes the connection back.
+    doc.undo();
+    expect(doc.source).not.toContain("web -- writes --> db");
+  });
+
+  it("draws the kind picked from the dots beside a selected element", async () => {
+    const { doc, editor, drag } = await editorAt(SHOP);
+    editor.setLink("---");
+    editor.setTool("select");
+    editor.select([{ type: "element", id: "web" }]);
+    const box = doc.picture!.scene.shapes.find((shape) => shape.id === "web")!.box;
+    // The dot off the middle of the right side.
+    await drag(
+      { x: box.x + box.width + 22, y: box.y + box.height / 2 },
+      middle(doc.picture!, "api"),
+    );
+    expect(doc.source.trimEnd().split("\n").at(-1)).toBe("web --- api");
+  });
+
+  it("refuses a pair the kind does not fit, and says why", async () => {
+    const { doc, editor, drag, notes } = await editorAt(SHOP);
+    editor.setLink("reads");
+    await drag(middle(doc.picture!, "db"), middle(doc.picture!, "web"));
+    expect(doc.source).toBe(SHOP);
+    expect(notes.at(-1)).toMatch(/storage and does not act/);
+    editor.setLink("calls");
+    await drag(middle(doc.picture!, "web"), middle(doc.picture!, "db"));
+    expect(doc.source).toBe(SHOP);
+    expect(notes.at(-1)).toMatch(/storage/);
+  });
+
+  it("leaves the selected connection as it is: the one drawn last stays what it was drawn as", async () => {
+    const { doc, editor, settled } = await editorAt(`${SHOP}\nweb -- calls --> api`);
+    editor.select([{ type: "wire", id: "e1" }]);
+    editor.setLink("sends data");
+    await settled();
+    expect(doc.source.trimEnd().split("\n").at(-1)).toBe("web -- calls --> api");
+  });
+
+  it("ends a connection dropped on the empty canvas at a new element of the kind it reaches", async () => {
+    const { doc, editor, drag } = await editorAt(SHOP);
+    editor.setLink("writes");
+    await drag(middle(doc.picture!, "web"), { x: 600, y: 300 });
+    const [, last] = doc.source.trimEnd().split("\n").slice(-2);
+    expect(last).toBe("web -- writes --> storage1");
+    expect(doc.source).toMatch(/^storage storage1\[Storage\] @/m);
   });
 });

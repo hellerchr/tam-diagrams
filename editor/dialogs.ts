@@ -143,6 +143,10 @@ const BLOCK_KEYS: SheetGroup[] = [
       ["Double-click the canvas", "Add an agent"],
       ["Drag a dot", "Connect to another element; released on the empty canvas, to a new one"],
       [["C"], "Connect tool: drag from one element to another"],
+      [
+        "Click a connection in the palette",
+        "Draw that kind: drag from one element to another, or from a dot",
+      ],
     ],
   ],
   [

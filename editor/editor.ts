@@ -11,6 +11,7 @@ import {
   parseTam,
   type Placement,
   type TamDiagram,
+  type Word,
 } from "../src/tam.ts";
 import {
   idFor,
@@ -163,6 +164,8 @@ type Gesture =
       target?: string;
       /** Pressed on a connection dot: the side it is on, and where, to tell a click from a drag. */
       dot?: { side: number; screen: Point };
+      /** In a block diagram: whether the connection may reach an element, by its id, as found. */
+      reaches?: Map<string, boolean>;
     }
   /** A shape tool pressed on the canvas: the element is placed where the pointer is released. */
   | { type: "place"; kind: ElementKind; free: boolean; keep: boolean }
@@ -669,16 +672,41 @@ export class Editor {
     this.structEdit((_, source) => setClassMembers(source, id, members));
   }
 
-  /** The kind of join new connections of a structure are drawn with: the usual one until another is picked. */
+  /**
+   * The kind of join new connections are drawn with. In a structure the usual one until another is
+   * picked; in a block diagram the one picked in the palette, or none for the word that fits the
+   * two elements.
+   */
   get link(): string | undefined {
-    const links = this.structure?.links ?? [];
+    if (!this.structure)
+      return typeInfo(this.type).links?.some((item) => item.kind === this.picked)
+        ? this.picked
+        : undefined;
+    const links = this.structure.links;
     return links.some((item) => item.kind === this.picked) ? this.picked : links[0]?.kind;
   }
 
-  /** Picks the kind of join new connections are drawn with. */
+  /**
+   * Picks the kind of join new connections are drawn with. In a block diagram the kind is a tool: a
+   * drag from element to element draws it, and picking it again goes back to the word that fits.
+   * A selected connection keeps its kind: the next one drawn would else change the one before.
+   */
   setLink(kind: string) {
-    this.picked = kind;
-    this.onState();
+    if (this.structure) {
+      this.picked = kind;
+      this.onState();
+      return;
+    }
+    if (!typeInfo(this.type).links?.some((item) => item.kind === kind)) return;
+    const again = this.picked === kind;
+    this.picked = again ? undefined : kind;
+    this.setTool(again ? "select" : "connect");
+  }
+
+  /** What a connection of a block diagram says when drawn now: the kind picked, or the word that fits. */
+  private get linkChange(): { word: Word; both: boolean; label: undefined } | undefined {
+    const shape = typeInfo(this.type).links?.find((item) => item.kind === this.link);
+    return shape && { word: shape.word, both: !!shape.both, label: undefined };
   }
 
   /** Gives an element of a block diagram another id, in every connection and interface that names it. */
@@ -807,6 +835,22 @@ export class Editor {
   elementsRefusal(change: ElementChange) {
     const ids = this.selectedElements;
     return this.refusal((source) => ids.reduce((next, id) => setElement(next, id, change), source));
+  }
+
+  /** Whether a connection drawn from an element may reach another; each answer is kept for the gesture. */
+  private reaches(gesture: Extract<Gesture, { type: "connect" }>, target: string): boolean {
+    gesture.reaches ??= new Map();
+    let fits = gesture.reaches.get(target);
+    if (fits === undefined) {
+      fits = this.connectRefusal(gesture.from, target) === undefined;
+      gesture.reaches.set(target, fits);
+    }
+    return fits;
+  }
+
+  /** Why two elements may not be connected with the kind of connection picked; undefined when they may. */
+  private connectRefusal(from: string, to: string): string | undefined {
+    return this.refusal((source) => connect(source, from, to, this.linkChange));
   }
 
   /** Whether a connection may change this way, between the elements it joins. */
@@ -1851,9 +1895,14 @@ export class Editor {
       case "connect": {
         gesture.current = point;
         // A part of a structure may join itself: a self message, a transition back to its state.
+        // In a block diagram only an element the connection may reach takes it.
         const target = this.targetAt(point);
         gesture.target =
-          target && (target !== gesture.from || this.structural) ? target : undefined;
+          target &&
+          (target !== gesture.from || this.structural) &&
+          (this.structural || this.reaches(gesture, target))
+            ? target
+            : undefined;
         view.invalidate();
         return;
       }
@@ -2189,7 +2238,16 @@ export class Editor {
         // A dot is dragged: a click on one only selects its element, so a slip adds nothing.
         if (clicked) this.select([{ type: "element", id: gesture.from }]);
         else if (gesture.target) this.connect(gesture.from, gesture.target);
-        else this.connectNew(gesture.from, gesture.current);
+        else {
+          // Dropped on an element the connection cannot reach: the notation's reason is said.
+          const target = this.structural ? undefined : this.targetAt(gesture.current),
+            why =
+              target && target !== gesture.from
+                ? this.connectRefusal(gesture.from, target)
+                : undefined;
+          if (why) this.notify(why);
+          else this.connectNew(gesture.from, gesture.current);
+        }
         break;
       }
       case "place":
@@ -2265,7 +2323,8 @@ export class Editor {
         });
       return;
     }
-    if (!this.edit((source) => connect(source, from, to))) return;
+    const change = this.linkChange;
+    if (!this.edit((source) => connect(source, from, to, change))) return;
     const made = parseTam(this.doc.source).edges.findLast((edge) => !edge.id.includes("#"));
     this.tool = "select";
     if (made) this.select([{ type: "wire", id: made.id }]);
@@ -2374,16 +2433,19 @@ export class Editor {
     );
     if (away < 3 * GRID || partAt(picture, at, 0)) return;
     let made = "";
+    // An access ends at a storage; any other connection at an agent.
+    const change = this.linkChange,
+      kind = change && /reads|writes/.test(change.word) ? "storage" : "agent";
     const done = this.change(
       (() => {
         const added = addElement(base, {
-          kind: "agent",
-          label: NAMES.agent,
-          at: dropPlace("agent", at, false),
+          kind,
+          label: NAMES[kind],
+          at: dropPlace(kind, at, false),
         });
         made = added.id;
         try {
-          return connect(added.source, from, made);
+          return connect(added.source, from, made, change);
         } catch {
           return added.source;
         }

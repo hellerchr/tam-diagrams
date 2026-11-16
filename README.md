@@ -83,9 +83,13 @@ as text, and keeps the choices it already uses; the palette, the Properties and 
 offer no more of it. In a block diagram, shapes are dragged from the Shapes tab onto the canvas,
 moved, resized, nested by dropping them into a container, and connected by dragging from the dots
 beside an element; the Properties section offers only the kinds and connections the notation
-allows there. The Outline tab
-lists the elements as a tree and takes drops too. Copy, cut, paste, duplicate, undo and redo work as
-usual. A moved element lines up with the edges and middles of others and with the gaps between them.
+allows there. The Connections group of the Shapes tab holds the connections of the notation:
+request, data flow and bidirectional channels, the channel without a direction, and read, write
+and read/write accesses. A click picks one as the tool: a drag from one element to another, or
+from the dots, draws it, and a second click goes back to the connection that fits the two
+elements. A pair the connection does not fit (a read access from a storage) is refused with the
+rule it breaks. The Outline tab lists the elements as a tree and takes drops too. Copy, cut,
+paste, duplicate, undo and redo work as usual. A moved element lines up with the edges and middles of others and with the gaps between them.
 A selection is aligned, distributed, made one size, put in a box or laid out on its own from the
 Arrange menu, the Properties section or a right click, which also changes what a connection is.
 

@@ -82,6 +82,22 @@ describe("editing a TAM source as text", () => {
       expect(() => parseTam(connect(SHOP, from, to))).not.toThrow();
   });
 
+  it("connects with a word given as drawn, and leaves a pair the word does not fit to the parser", () => {
+    const words = (source: string) => source.trimEnd().split("\n").at(-1);
+    expect(words(connect(SHOP, "customer", "api", { word: "calls", both: true }))).toBe(
+      "customer <-- calls --> api",
+    );
+    expect(words(connect(SHOP, "customer", "api", { word: "---" }))).toBe("customer --- api");
+    expect(words(connect(SHOP, "cart", "db", { word: "reads" }))).toBe("cart -- reads --> db");
+    // A read access from a storage is not turned round: the parser refuses it.
+    expect(words(connect(SHOP, "db", "customer", { word: "reads" }))).toBe(
+      "db -- reads --> customer",
+    );
+    expect(() => parseTam(connect(SHOP, "db", "customer", { word: "reads" }))).toThrow(
+      /storage and does not act/,
+    );
+  });
+
   it("changes one connection of a statement that holds several", () => {
     expect(connectionOf(SHOP, "e3")).toMatchObject({ from: "api", to: "db", word: "reads/writes" });
     const source = setConnection(SHOP, "e3", { word: "reads", label: "peek" });

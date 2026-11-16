@@ -389,7 +389,10 @@ export function defaultConnection(diagram: TamDiagram, from: string, to: string)
   return connection("calls");
 }
 
-/** Connects two elements; without a word, with the one that fits them. */
+/**
+ * Connects two elements; without a word, with the one that fits them. A word given is written from
+ * `from` to `to` as they are: an access from a storage is not turned round but refused when parsed.
+ */
 export function connect(
   source: string,
   from: string,
@@ -398,7 +401,9 @@ export function connect(
 ): string {
   const diagram = parseTam(source),
     lines = linesOf(source);
-  const connection = { ...defaultConnection(diagram, from, to), ...change };
+  const connection: Connection = change.word
+    ? { from, to, word: change.word, both: false, ...change }
+    : { ...defaultConnection(diagram, from, to), ...change };
   // After the last statement, before blank lines at the end of the source.
   let end = lines.length;
   while (end > 0 && !lines[end - 1].trim()) end--;
