@@ -72,21 +72,31 @@ export interface Bench {
   toggleGrid(): void;
 }
 
-/** The kinds of connection the editor offers: a word, and for dependencies their keyword. */
-export const WIRES: { value: string; name: string; word: Word; keyword?: string }[] = [
+/**
+ * The kinds of connection the editor knows: a word, and for dependencies their keyword. Those of
+ * the design level are shown for a connection of that kind and offered for no other.
+ */
+export const WIRES: {
+  value: string;
+  name: string;
+  word: Word;
+  keyword?: string;
+  design?: boolean;
+}[] = [
   { value: "calls", name: "Request (calls)", word: "calls" },
   { value: "sends data", name: "Data flow (sends data)", word: "sends data" },
   { value: "---", name: "Channel, no direction", word: "---" },
   { value: "reads", name: "Read access", word: "reads" },
   { value: "writes", name: "Write access", word: "writes" },
   { value: "reads/writes", name: "Read and write access", word: "reads/writes" },
-  { value: "requires", name: "Requires an interface", word: "requires" },
-  { value: "delegates", name: "Delegates to a part", word: "delegates" },
+  { value: "requires", name: "Requires an interface", word: "requires", design: true },
+  { value: "delegates", name: "Delegates to a part", word: "delegates", design: true },
   ...["use", "import", "create", "generate", "pointer"].map((keyword) => ({
     value: `dependency:${keyword}`,
     name: `Dependency «${keyword}»`,
     word: "dependency" as Word,
     keyword,
+    design: keyword === "use" || keyword === "import",
   })),
 ];
 
@@ -174,9 +184,6 @@ export const arrangeRefusal = (action: ArrangeAction, selected: number) =>
 const BOXES: [ElementKind, string][] = [
   ["agent", "Ctrl+G"],
   ["storage", ""],
-  ["component", ""],
-  ["subsystem", ""],
-  ["package", ""],
   ["group", "Ctrl+Shift+G"],
 ];
 
@@ -756,7 +763,10 @@ export class Menus {
         current = connection && wireValue(connection);
       // The kinds this connection may be, between the elements it joins.
       const kinds = connection
-        ? WIRES.filter((kind) => kind.value === current || editor.allowsWire(id, wireChange(kind)))
+        ? WIRES.filter(
+            (kind) =>
+              kind.value === current || (!kind.design && editor.allowsWire(id, wireChange(kind))),
+          )
         : [];
       return [
         kinds.length > 1 && {

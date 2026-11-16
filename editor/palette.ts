@@ -301,7 +301,7 @@ export class Palette {
     if (editor.type !== this.type) this.build(editor.type);
     const words = this.search.value.trim().toLowerCase();
     let found = false;
-    // Only the shapes the diagram takes are offered: a conceptual one has no components.
+    // Only the shapes the diagram takes are offered: one its level allows.
     for (const group of this.groups) {
       let any = false;
       for (const entry of group.items) {

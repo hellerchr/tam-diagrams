@@ -60,7 +60,7 @@ describe("the order of a completion list", () => {
     const block = ordered("agent z[Z]\n", true);
     expect(block.slice(0, 3)).toEqual(["agent", "human", "storage"]);
     expect(block.slice(-4)).toEqual(["user", "api", "worker", "db"]);
-    expect(block.indexOf("level")).toBeLessThan(block.indexOf("user"));
+    expect(block).not.toContain("level");
     expect(ordered("api -- reads --> ")).toEqual(["db"]);
     expect(ordered("db -- x --> ")).toEqual(["user", "api", "worker"]);
 

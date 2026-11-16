@@ -117,37 +117,13 @@ export const TYPES: TypeInfo[] = [
           },
         ],
       },
-      {
-        title: "Design level",
-        items: [
-          {
-            kind: "component",
-            icon: "component",
-            name: "Component",
-            hint: "Replaceable unit with provided and required interfaces",
-          },
-          {
-            kind: "subsystem",
-            icon: "subsystem",
-            name: "Subsystem",
-            hint: "Unit of the system composed of components",
-          },
-          { kind: "class", icon: "class", name: "Class", hint: "Implementation class" },
-          {
-            kind: "package",
-            icon: "package",
-            name: "Package",
-            hint: "Namespace of the source code",
-          },
-        ],
-      },
     ],
+    // Block diagrams are plain block diagrams: the design level and package diagrams the parser
+    // still reads are not offered, so no example shows them.
     examples: examples(TAM_EXAMPLES, {
       "flyer: web service landscape": "Web service landscape",
       "standard figure 2-1: web server": "Web server",
       "protocols, data flow and dependencies": "Protocols, data flow and dependencies",
-      "design level: components and interfaces": "Components and interfaces",
-      "package dependencies": "Package dependencies",
       "reference: SAP blog online shop": "Online shop",
     }),
     about: "Compositional structure: agents, storages, channels and accesses (SAP TAM, FMC)",
@@ -456,6 +432,14 @@ export const typeInfo = (type: DiagramType): TypeInfo =>
 
 /** The type of a source: a Mermaid header names a UML type, anything else is a block diagram. */
 export const typeOf = (source: string): DiagramType => detectUml(source) ?? "tam";
+
+/**
+ * The kinds of element the editor offers in a block diagram: those of the palette. The design
+ * level kinds a source may still declare are kept where they stand, not offered.
+ */
+export const PLAIN_KINDS: ReadonlySet<string> = new Set(
+  TYPES[0].palette.flatMap((group) => group.items.map((item) => item.kind)),
+);
 
 /** The name of an element kind as the palette says it. */
 export function kindName(kind: string): string {

@@ -359,7 +359,7 @@ describe("the guide sheet", () => {
       "a <-- calls --> b",
     ]);
     type(sheet, "dependencies");
-    expect(shown(sheet, ".guide-row").length).toBe(5);
+    expect(shown(sheet, ".guide-row").length).toBe(3);
     type(sheet, "no such thing");
     expect(shown(sheet, "section")).toEqual([]);
     expect(sheet.element.querySelector(".guide-count")!.textContent).toBe("Nothing");

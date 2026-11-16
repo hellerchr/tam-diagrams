@@ -34,14 +34,40 @@ describe("completing a block diagram source", () => {
   it("offers the connections the first element can make", () => {
     const agent = offered("api ");
     expect(agent[0]).toBe("-- calls -->");
-    expect(agent).toEqual(expect.arrayContaining(["-- reads -->", "---", "provides IName"]));
+    expect(agent).toEqual(expect.arrayContaining(["-- reads -->", "---", "-. create .->"]));
     expect(agent).not.toContain("-. pointer .->");
-    // A storage only points; a person offers no interface; a component does not talk through channels.
+    // A storage only points; a component does not talk through channels.
     expect(offered("db ")).toEqual(["-. pointer .->"]);
-    expect(offered("user ")).not.toContain("provides IName");
     expect(offered("pay -")).not.toContain("-- calls -->");
-    expect(offered("pay -")).toContain("-- requires IName -->");
     expect(offered("unknown ")).toEqual([]);
+  });
+
+  it("offers nothing of the design level, which plain block diagrams leave out", () => {
+    const all = [
+      ...offered("a"),
+      ...offered("", true),
+      ...offered("api "),
+      ...offered("pay "),
+      ...offered("api -- "),
+      ...offered("api -. "),
+    ];
+    for (const word of [
+      "component",
+      "subsystem",
+      "class",
+      "package",
+      "level",
+      "provides IName",
+      "requires IName",
+      "-- requires IName -->",
+      "-- delegates -->",
+      "requires",
+      "delegates",
+      "-. use .->",
+      "use",
+      "import",
+    ])
+      expect(all).not.toContain(word);
   });
 
   it("offers the elements a connection reaches", () => {
@@ -57,6 +83,6 @@ describe("completing a block diagram source", () => {
     expect(offered("api -- ")).toEqual(
       expect.arrayContaining(["calls", "sends data", "reads", "reads/writes"]),
     );
-    expect(offered("api -. ")).toEqual(["use", "import", "create", "generate", "pointer"]);
+    expect(offered("api -. ")).toEqual(["create", "generate", "pointer"]);
   });
 });

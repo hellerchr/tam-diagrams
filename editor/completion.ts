@@ -10,7 +10,7 @@ import {
   type CompletionResult,
   snippetCompletion,
 } from "@codemirror/autocomplete";
-import { COLORS, ELEMENT_KINDS } from "../src/tam.ts";
+import { COLORS } from "../src/tam.ts";
 
 /** An element of the diagram, as far as completing needs it. */
 export interface Known {
@@ -23,10 +23,6 @@ const ABOUT: Record<string, string> = {
   agent: "active structure element: a service, a process",
   human: "human agent",
   storage: "passive structure element that stores data",
-  component: "design level: a unit with provided and required interfaces",
-  subsystem: "design level: a group of components",
-  class: "design level: a class",
-  package: "a package of a package diagram",
   group: "a frame around elements",
 };
 
@@ -34,7 +30,12 @@ const ABOUT: Record<string, string> = {
 const acts = (kind: string) => kind !== "storage" && kind !== "package";
 const talks = (kind: string) => kind === "agent" || kind === "human" || kind === "group";
 const keeps = (kind: string) => kind === "storage" || kind === "group";
-const design = (kind: string) => kind === "component" || kind === "subsystem" || kind === "class";
+
+/**
+ * The kinds of element a block diagram declares, as the editor offers them: the design level the
+ * parser also reads is not offered.
+ */
+const KINDS = ["agent", "human", "storage", "group"];
 
 /** The connections of the notation: what is typed after the first element, who can start one, and what it says. */
 const CONNECTIONS: { text: string; about: string; from: (kind: string) => boolean }[] = [
@@ -45,35 +46,16 @@ const CONNECTIONS: { text: string; about: string; from: (kind: string) => boolea
   { text: "-- reads --> ", about: "read access to a storage", from: acts },
   { text: "-- writes --> ", about: "write access to a storage", from: acts },
   { text: "-- reads/writes --> ", about: "modifying (read/write) access", from: acts },
-  {
-    text: "-- requires ${IName} --> ",
-    about: "requires the interface of",
-    from: (kind) => acts(kind) && kind !== "human",
-  },
-  { text: "-- delegates --> ", about: "delegation to a part", from: acts },
-  {
-    text: "provides ${IName}",
-    about: "provided interface",
-    from: (kind) => acts(kind) && kind !== "human",
-  },
-  {
-    text: "requires ${IName}",
-    about: "required interface",
-    from: (kind) => acts(kind) && kind !== "human",
-  },
   { text: "-. pointer .-> ", about: "reference to another storage", from: keeps },
   { text: "-. create .-> ", about: "creates at run time", from: acts },
   { text: "-. generate .-> ", about: "generates", from: acts },
-  { text: "-. use .-> ", about: "dependency", from: (kind) => design(kind) || kind === "package" },
-  { text: "-. import .-> ", about: "package import", from: (kind) => kind === "package" },
 ];
 
 /** Which elements a connection word reaches. */
 function reaches(word: string): (kind: string) => boolean {
   if (/^(reads|writes|reads\/writes|pointer)\b/.test(word)) return keeps;
   if (/^(calls|sends data)\b/.test(word) || word === "") return talks;
-  if (/^requires\b/.test(word)) return (kind) => acts(kind) && kind !== "human";
-  if (/^(create|generate|delegates)\b/.test(word)) return acts;
+  if (/^(create|generate)\b/.test(word)) return acts;
   return () => true;
 }
 
@@ -148,7 +130,7 @@ export function completeTam(context: CompletionContext, known: Known[]): Complet
     return result(at(match[1].length), [
       ...ranked(
         [
-          ...ELEMENT_KINDS.map((kind) =>
+          ...KINDS.map((kind) =>
             filled(kind === "group" ? "group {\n\t${}\n}" : `${kind} \${id}[\${Name}]`, {
               label: kind,
               type: `declare-${kind}`,
@@ -157,7 +139,6 @@ export function completeTam(context: CompletionContext, known: Known[]): Complet
           ),
           option("title", "keyword", "the diagram's title", "title "),
           option("direction", "keyword", "TB, LR, BT or RL", "direction "),
-          option("level", "keyword", "conceptual or design", "level "),
         ],
         30,
       ),
@@ -165,11 +146,6 @@ export function completeTam(context: CompletionContext, known: Known[]): Complet
     ]);
   }
   if ((match = before.match(/^direction\s+(\w*)$/))) return result(at(match[1].length), DIRECTIONS);
-  if ((match = before.match(/^level\s+(\w*)$/)))
-    return result(at(match[1].length), [
-      option("conceptual", "constant", "agents, storages, channels"),
-      option("design", "constant", "components and interfaces too"),
-    ]);
   if ((match = before.match(/:::(\w*)$/)))
     return result(
       at(match[1].length),
@@ -219,7 +195,7 @@ export function completeTam(context: CompletionContext, known: Known[]): Complet
     const kind = source ? byId.get(source)?.kind : undefined;
     const words = CONNECTIONS.filter(
       (item) => item.text.startsWith("-- ") && (!kind || item.from(kind)),
-    ).map((item) => item.text.replace(/^-- /, "").replace(/\s*\$\{IName\}/, ""));
+    ).map((item) => item.text.replace(/^-- /, ""));
     return result(
       at(match[1].length),
       ranked(
@@ -233,7 +209,7 @@ export function completeTam(context: CompletionContext, known: Known[]): Complet
     return result(
       at(match[1].length),
       ranked(
-        ["use", "import", "create", "generate", "pointer"].map((word) =>
+        ["create", "generate", "pointer"].map((word) =>
           option(word, "connection", undefined, `${word} .-> `),
         ),
         9,

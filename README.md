@@ -76,9 +76,14 @@ A first visit shows a sample block diagram and a note that says what to try. *Fi
 chooser with a card for each type, and below the cards what to start from (an empty diagram, a
 recent one, an example) beside a picture of it; the chip beside the title says which type is on show.
 
-In a block diagram, shapes are dragged from the Shapes tab onto the canvas, moved, resized, nested by
-dropping them into a container, and connected by dragging from the dots beside an element; the
-Properties section offers only the kinds and connections the notation allows there. The Outline tab
+Block diagrams are plain block diagrams: the editor offers agents, human agents, storages and
+groups, with channels, accesses and the dependencies between them. A source of the design level
+(components, subsystems, classes, packages, interfaces, delegation) still opens, draws and is edited
+as text, and keeps the choices it already uses; the palette, the Properties and the completion
+offer no more of it. In a block diagram, shapes are dragged from the Shapes tab onto the canvas,
+moved, resized, nested by dropping them into a container, and connected by dragging from the dots
+beside an element; the Properties section offers only the kinds and connections the notation
+allows there. The Outline tab
 lists the elements as a tree and takes drops too. Copy, cut, paste, duplicate, undo and redo work as
 usual. A moved element lines up with the edges and middles of others and with the gaps between them.
 A selection is aligned, distributed, made one size, put in a box or laid out on its own from the

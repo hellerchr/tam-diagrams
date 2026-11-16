@@ -803,11 +803,6 @@ export class Editor {
     }
   }
 
-  /** Why the diagram's header may not change this way; undefined when it may. */
-  headerRefusal(header: Parameters<typeof setHeader>[1]) {
-    return this.refusal((source) => setHeader(source, header));
-  }
-
   /** Why the selected elements may not change this way; undefined when they may. */
   elementsRefusal(change: ElementChange) {
     const ids = this.selectedElements;
@@ -1396,6 +1391,29 @@ export class Editor {
 
   allowsHeader(header: Parameters<typeof setHeader>[1]) {
     return this.allows((source) => setHeader(source, header));
+  }
+
+  /**
+   * Whether a block diagram has design level parts already: it says `level design`, or declares
+   * components, subsystems, classes, packages or interfaces, or joins by delegation or a «use» or
+   * «import» dependency. The editor offers plain block diagrams; such a diagram keeps what it has
+   * on offer, such as its interfaces.
+   */
+  get designLevel(): boolean {
+    const diagram = this.picture?.diagram;
+    if (!this.editable || !diagram) return false;
+    return (
+      diagram.level === "design" ||
+      [...diagram.nodes.values()].some((node) =>
+        ["component", "subsystem", "class", "package", "interface"].includes(node.kind),
+      ) ||
+      diagram.edges.some(
+        (edge) =>
+          edge.kind === "delegation" ||
+          edge.kind === "assembly" ||
+          (edge.kind === "dependency" && /«(use|import)»/.test(edge.label ?? "")),
+      )
+    );
   }
 
   /** Whether the diagram takes elements of a kind: a conceptual one takes no components. */

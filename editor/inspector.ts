@@ -28,7 +28,7 @@ import {
 import { replyTo, toggleActivation } from "../src/uml-sequence-edit.ts";
 import { setStateDescription, stateDescription } from "../src/uml-state-edit.ts";
 import { pieceIcon } from "./structures.ts";
-import { kindName, typeInfo } from "./types.ts";
+import { kindName, PLAIN_KINDS, typeInfo } from "./types.ts";
 
 /** The cardinalities of an end of a relationship, as the Properties name them. */
 const CARDINALITY_NAMES: { value: Cardinality; name: string }[] = [
@@ -438,9 +438,10 @@ export class Inspector {
         h("button", { class: "button outlined", type: "button", onClick: add }, "Add"),
       ),
     );
-    // Only elements that act offer interfaces.
+    // Interfaces belong to the design level: only a diagram that has it already offers them, at
+    // elements that act.
     this.sync.push(() => {
-      interfaces.hidden = !single || !editor.allowsInterface(id);
+      interfaces.hidden = !single || !editor.designLevel || !editor.allowsInterface(id);
     });
     const first = nodes()[0];
     return [
@@ -465,7 +466,8 @@ export class Inspector {
             ELEMENT_KINDS.map((kind) => ({ value: kind, name: kindName(kind) })),
             () => (shared((node) => node.kind) ?? "") as ElementKind | "",
             (kind) => editor.setElements({ kind }),
-            (kind) => editor.allowsElements({ kind }),
+            // A design level kind stays on show for an element of it, and is offered to no other.
+            (kind) => PLAIN_KINDS.has(kind) && editor.allowsElements({ kind }),
           ),
         ),
         // The id is what the source calls the element: changed in every connection that names it.
@@ -615,8 +617,11 @@ export class Inspector {
               const kind = WIRES.find((item) => item.value === value)!;
               editor.setWire(id, wireChange(kind));
             },
-            (value) =>
-              editor.allowsWire(id, wireChange(WIRES.find((item) => item.value === value)!)),
+            // A kind of the design level stays on show for a connection of it, and is offered to no other.
+            (value) => {
+              const kind = WIRES.find((item) => item.value === value)!;
+              return !kind.design && editor.allowsWire(id, wireChange(kind));
+            },
           ),
         ),
         this.row("From", from, "div"),
@@ -870,24 +875,6 @@ export class Inspector {
             ],
             () => diagram()?.direction,
             (direction) => editor.setHeader({ direction }),
-          ),
-          "div",
-        ),
-        this.row(
-          "Level",
-          this.segments<"" | "conceptual" | "design">(
-            [
-              { value: "", name: "Any", tip: "Conceptual and design level elements together" },
-              {
-                value: "conceptual",
-                name: "Conceptual",
-                tip: "Agents, storages, channels and accesses only",
-              },
-              { value: "design", name: "Design", tip: "Components, interfaces and connectors" },
-            ],
-            () => diagram()?.level ?? "",
-            (level) => editor.setHeader({ level }),
-            (level) => editor.headerRefusal({ level }),
           ),
           "div",
         ),

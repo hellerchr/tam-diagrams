@@ -287,10 +287,6 @@ const TAM_SYNTAX: SheetGroup[] = [
     [
       ["title Order system", "The title"],
       ["direction LR", "The way an automatic layout runs: TB, LR, BT or RL"],
-      [
-        "level conceptual",
-        "Only agents, storages, channels and accesses; level design adds components",
-      ],
       ["%% a remark", "A comment"],
     ],
   ],
@@ -298,10 +294,7 @@ const TAM_SYNTAX: SheetGroup[] = [
     "Elements",
     [
       ["agent api[Order API]", "A kind, an id, and the name in brackets"],
-      [
-        "agent human storage group",
-        "The kinds of a block diagram; component, subsystem, class and package at design level",
-      ],
+      ["agent human storage group", "The kinds of a block diagram"],
       [
         "agent shop[Web Shop] { ... }",
         "A container: its parts stand on the lines between the braces",
@@ -326,9 +319,7 @@ const TAM_SYNTAX: SheetGroup[] = [
       ["a -- sends data --> b", "A unidirectional data flow channel"],
       ["a --- b", "A channel without a direction"],
       ["a -- reads --> s", "A storage access: reads, writes or reads/writes"],
-      ["a -- requires IOrders --> b", "A required interface of a, provided by b"],
-      ["a provides IRefund", "An interface without a partner; requires works the same"],
-      ["a -. use .-> b", "A dependency: use, import, create, generate or pointer"],
+      ["s -. pointer .-> t", "A reference between storages; create and generate join agents"],
     ],
   ],
 ];
