@@ -143,6 +143,10 @@ const BLOCK_KEYS: SheetGroup[] = [
       ["Double-click the canvas", "Add an agent"],
       ["Drag a dot", "Connect to another element; released on the empty canvas, to a new one"],
       [["C"], "Connect tool: drag from one element to another"],
+      [
+        "Click a connection in the palette",
+        "Draw that kind: drag from one element to another, or from a dot",
+      ],
     ],
   ],
   [
@@ -155,6 +159,7 @@ const BLOCK_KEYS: SheetGroup[] = [
       [["Escape"], "End a gesture or a tool; then clear the selection"],
       [["Enter", "F2"], "Name an element; a double click does too"],
       ["Drag a connection's end", "Attach it to another element"],
+      ["Drag a label", "Stand it elsewhere; it keeps beside its line"],
       ["Right-click", "Menu: put in a box, change a kind, arrange, ..."],
       [["Ctrl", "G"], "Put the selection in an agent"],
       [["Ctrl", "Shift", "G"], "Put the selection in a group"],
@@ -210,6 +215,12 @@ const structureKeys = (info: TypeInfo): SheetGroup[] => {
         [["Escape"], "End a gesture or a tool; then clear the selection"],
         ["Double-click", "Name a part, or label a connection"],
         [["Enter", "F2"], "Name the selected part"],
+        ["Drag a label", "Stand it elsewhere; it keeps beside its line"],
+        ...(info.type === "swimlane"
+          ? ([
+              ["Drag a lane's border", "Make the lane before it wider or narrower"],
+            ] satisfies SheetRow[])
+          : []),
         ["Right-click", "Menu: add here, change a kind, delete"],
         ...(info.type === "sequence"
           ? ([
@@ -286,11 +297,7 @@ const TAM_SYNTAX: SheetGroup[] = [
     "Diagram",
     [
       ["title Order system", "The title"],
-      ["direction LR", "The way an automatic layout runs: TB, LR, BT or RL"],
-      [
-        "level conceptual",
-        "Only agents, storages, channels and accesses; level design adds components",
-      ],
+      ["direction LR", "The way an automatic layout runs: TB or LR"],
       ["%% a remark", "A comment"],
     ],
   ],
@@ -298,10 +305,7 @@ const TAM_SYNTAX: SheetGroup[] = [
     "Elements",
     [
       ["agent api[Order API]", "A kind, an id, and the name in brackets"],
-      [
-        "agent human storage group",
-        "The kinds of a block diagram; component, subsystem, class and package at design level",
-      ],
+      ["agent human storage group", "The kinds of a block diagram"],
       [
         "agent shop[Web Shop] { ... }",
         "A container: its parts stand on the lines between the braces",
@@ -326,9 +330,8 @@ const TAM_SYNTAX: SheetGroup[] = [
       ["a -- sends data --> b", "A unidirectional data flow channel"],
       ["a --- b", "A channel without a direction"],
       ["a -- reads --> s", "A storage access: reads, writes or reads/writes"],
-      ["a -- requires IOrders --> b", "A required interface of a, provided by b"],
-      ["a provides IRefund", "An interface without a partner; requires works the same"],
-      ["a -. use .-> b", "A dependency: use, import, create, generate or pointer"],
+      ["s -. pointer .-> t", "A reference between storages; create and generate join agents"],
+      ["a --- b @+20,-14", "Where the label stands: from the middle of the line"],
     ],
   ],
 ];
@@ -373,7 +376,7 @@ const UML_SYNTAX: Record<Exclude<DiagramType, "tam">, SheetRow[]> = {
     ["User --> order", "Every line is one association"],
   ],
   flowchart: [
-    ["flowchart TB", "The first line: an activity diagram that runs TB, LR, BT or RL"],
+    ["flowchart TB", "The first line: an activity diagram that runs TB or LR"],
     ["start((Start)) --> check{In stock?}", "An initial node, a control flow, and a decision node"],
     ["check -->|yes| ship[Ship order]", "A flow with a guard, to an action"],
     ["check -->|no| wait[Wait for supply]", "The other branch"],
@@ -424,7 +427,7 @@ const UML_SYNTAX: Record<Exclude<DiagramType, "tam">, SheetRow[]> = {
   ],
   er: [
     ["erDiagram", "The first line: an entity relationship diagram"],
-    ["direction LR", "The way the layout runs: TB, LR, BT or RL"],
+    ["direction LR", "The way the layout runs: TB or LR"],
     ["CUSTOMER", "An entity type"],
     [
       'ORDER {\n  int id PK\n  int customerId FK\n  string status "open or closed"\n}',

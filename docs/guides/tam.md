@@ -6,7 +6,7 @@ Compositional structure of a system: agents, storages, channels and accesses.
 
 ## What it shows
 
-A block diagram shows the compositional structure of a system: agents as active structure elements, storages and channels as passive ones, the channels over which agents communicate and the read and write accesses of agents to storages. Use it for the system's components and their communication paths. With `package` elements the same syntax draws a package diagram.
+A block diagram shows the compositional structure of a system: agents as active structure elements, storages and channels as passive ones, the channels over which agents communicate and the read and write accesses of agents to storages. Use it for the system's components and their communication paths. The editor offers plain block diagrams; the design level of the standard is read and drawn too, and has a section of its own at the end.
 
 ## Rules of the notation
 
@@ -14,17 +14,15 @@ The parser enforces the SAP TAM standard and names the line that breaks a rule.
 
 - Agents are active structure elements: they process information. A human agent is an agent that is a person. Storages and channels are passive structure elements: a storage stores information, a channel transmits it.
 - Active and passive elements alternate. Agents communicate over channels and access storages by read and write accesses; a storage is never joined to a storage by a flow, only by a `pointer`.
-- A channel joins agents only: agents, human agents, and groups of them. Components, subsystems and classes connect through interfaces.
+- A channel joins agents only: agents, human agents, and groups of them.
 - A request/response channel is unidirectional or bidirectional. A data flow channel is unidirectional; data in both directions takes two channels.
 - An access joins one active element and one storage, and is written from the active element. `writes` points to the storage, `reads` points from it, `reads/writes` is a modifying access. An access has no protocol.
-- An agent holds agents, storages, subsystems, components and classes. A human agent holds nothing. A storage holds only storages.
-- A component or a class holds components, classes and storages. A subsystem holds these and subsystems, never agents. A package holds packages, classes, components and subsystems, and stands at the top, in a package or in a group.
-- A container stands for its parts: a container and one of its own parts are never connected, except by `delegates` at design level.
-- A package connects only through dependencies. A `pointer` joins two storages; `create` and `generate` join active elements.
+- An agent holds agents and storages. A human agent holds nothing. A storage holds only storages.
+- A container stands for its parts: a container and one of its own parts are never connected.
+- A `pointer` joins two storages; `create` and `generate` join active elements.
 - Only agents and storages are shown as several (`stack`, `...`). Dots stand between elements of one kind.
 - A note remarks on the diagram and takes part in no rule of the notation: it is neither active nor passive, holds nothing, and stands at the top or in any container. Dots and groups do not count it.
 - `-.-` attaches a note to an element: it joins exactly one note and one element. A note has no other connection. A note on an element shown as several is attached to the original.
-- `level conceptual` allows agents, storages, channels and accesses only. Components, subsystems, classes, packages, interfaces and delegation belong to `level design`. Without a level line everything is allowed.
 - Elements do not overlap. In a layout by hand the editor and `check` say which do.
 - An id starts with a letter or `_` and goes on with letters, digits and `_`. Every id is declared once; a connection may stand before or after the declarations of its ends.
 - A diagram has at most 300 elements, 400 lines and 20,000 characters.
@@ -34,9 +32,7 @@ The parser enforces the SAP TAM standard and names the line that breaks a rule.
 | You write | It means |
 | --- | --- |
 | `title Order system` | The title above the diagram. Quotes around it are optional. |
-| `direction LR` | The way the automatic layout runs: `TB` (top to bottom, the default), `LR`, `BT` or `RL`. `TD` is `TB`. |
-| `level conceptual` | Only agents, storages, channels and accesses are allowed. |
-| `level design` | Components, subsystems, classes, packages and interfaces too. |
+| `direction LR` | The way the automatic layout runs: `TB` (top to bottom, the default) or `LR` (left to right). `TD` is `TB`. |
 | `%% a remark` | A comment, to the end of its line. It may follow a statement. |
 
 ## Elements
@@ -50,10 +46,6 @@ The parser enforces the SAP TAM standard and names the line that breaks a rule.
 | `agent api[Order<br>API]` | `<br>` breaks the name. |
 | `human customer[Customer]` | A human agent, drawn with a figure. |
 | `storage db[Orders]` | A storage: a passive structure element, drawn rounded. |
-| `component billing[Billing]` | Design level: a component, with provided and required interfaces. |
-| `subsystem erp[ERP]` | Design level: a subsystem, marked «subsystem». |
-| `class Order[Order]` | Design level: a class. |
-| `package ui[UI]` | A package of a package diagram. |
 
 ## Nesting and grouping
 
@@ -94,6 +86,7 @@ Color, `stack`, `...` and positions follow the name in any order; an opening `{`
 | `agent api[Order API] @250,90` | A position: the top left corner in pixels, y down. One position is enough to lay the diagram out by hand; elements without one stand in a row below the placed ones. |
 | `agent api[Order API] @250,90 140x40` | A position and a least size, width x height. An element is never smaller than its name, a container never smaller than its parts. |
 | `agent worker[Worker] ... @450,90 @450,160` | With `...` a second position places the copy. It takes no size. |
+| `a -- calls: place order --> b @+20,-14` | Behind a connection, signed: its label stands with its middle 20 right of and 14 above the middle of the line, a channel's circle, and keeps to it when the line moves. A statement of several connections takes none. Dragging a label in the editor writes it. |
 
 ## Channels: agent to agent
 
@@ -119,27 +112,14 @@ Color, `stack`, `...` and positions follow the name in any order; an opening `{`
 | `a -- reads/writes --> s` | A modifying (read/write) access of `a` to `s`. |
 | `a -- writes: new orders --> s` | A label follows the word after a colon. |
 
-## Interfaces and delegation: design level
-
-| You write | It means |
-| --- | --- |
-| `c -- requires IOrders --> d` | `c` requires the interface `IOrders` that `d` provides: a ball at `d` in a socket of `c`. |
-| `c -- requires --> d` | The same without a name. |
-| `c -- requires IOrders @REST --> d` | A protocol follows `@`. |
-| `c provides IRefund` | An interface `c` provides, without a partner. |
-| `c requires ILog` | An interface `c` requires, without a partner. |
-| `outer -- delegates --> inner` | Delegation from a container to one of its own parts. The only connection between the two. |
-
 ## Dependencies
 
 A dashed arrow with its keyword in «». It carries the keyword only: no label, no protocol.
 
 | You write | It means |
 | --- | --- |
-| `p -. use .-> q` | A «use» dependency of `p` on `q`. |
-| `p -. import .-> q` | A package import of `q` into `p`. |
-| `c -. create .-> d` | `c` creates `d` at run time. Between active elements. |
-| `c -. generate .-> d` | `c` generates `d`. Between active elements. |
+| `a -. create .-> b` | `a` creates `b` at run time. Between active elements. |
+| `a -. generate .-> b` | `a` generates `b`. Between active elements. |
 | `s -. pointer .-> t` | `s` holds a reference to `t`. Between two storages. |
 
 ## Several ends, chains and words
@@ -151,6 +131,27 @@ A dashed arrow with its keyword in «». It carries the keyword only: no label, 
 | `a -- Read --> s` | Words are read without case, singular or plural: `read`, `Reads`, `send data`. |
 | `reads  writes  reads/writes  sends data  calls  delegates  requires` | The words of a solid arrow. Anything else goes in the label, after a colon. |
 | `use  import  create  generate  pointer` | The keywords of a dashed arrow. |
+
+## Design level and package diagrams
+
+The parser reads the design level of the standard and package diagrams, and the editor draws them and keeps them editable as text; its palette, completion and properties offer the plain block diagram. Components, subsystems and classes connect through interfaces, not channels. A component or a class holds components, classes and storages; a subsystem holds these and subsystems, never agents. A package holds packages, classes, components and subsystems, stands at the top, in a package or in a group, and connects only through dependencies. A container and its part are joined only by `delegates`. `level conceptual` allows agents, storages, channels and accesses only; `level design` allows everything, as no level line does.
+
+| You write | It means |
+| --- | --- |
+| `level conceptual` | Only agents, storages, channels and accesses are allowed. |
+| `level design` | Components, subsystems, classes, packages and interfaces too. |
+| `component billing[Billing]` | A component, with provided and required interfaces. |
+| `subsystem erp[ERP]` | A subsystem, marked «subsystem». |
+| `class Order[Order]` | A class. |
+| `package ui[UI]` | A package of a package diagram. |
+| `c -- requires IOrders --> d` | `c` requires the interface `IOrders` that `d` provides: a ball at `d` in a socket of `c`. |
+| `c -- requires --> d` | The same without a name. |
+| `c -- requires IOrders @REST --> d` | A protocol follows `@`. |
+| `c provides IRefund` | An interface `c` provides, without a partner. |
+| `c requires ILog` | An interface `c` requires, without a partner. |
+| `outer -- delegates --> inner` | Delegation from a container to one of its own parts. The only connection between the two. |
+| `p -. use .-> q` | A «use» dependency of `p` on `q`. |
+| `p -. import .-> q` | A package import of `q` into `p`. |
 
 ## Example
 
@@ -185,7 +186,6 @@ The syntax borrows Mermaid's arrows, not Mermaid's flowchart: shapes in brackets
 | `a <-- sends data --> b` | A data flow channel is unidirectional. Write two channels, or `a <-- calls --> b`. |
 | `a -- reads @SQL --> s` | An access has no protocol. |
 | `a -. use: orders .-> b` | A dependency carries only its keyword. |
-| `c -- calls --> d` | Components connect through interfaces: `c -- requires IName --> d`. |
 | `shop -- calls --> api` | A container is not connected to its own part. |
 | `a -- calls --> x` | Every id is declared: `agent x[Name]`. |
 | `agent web-server[Web]` | An id has letters, digits and `_` only. |

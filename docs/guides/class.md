@@ -28,7 +28,7 @@ A class diagram shows classes with their attributes and operations and how they 
 | `---`<br>`title: Order system`<br>`---` | The title, in a frontmatter block before the first line. |
 | `%% level conceptual` | TAM's conceptual level, as a comment before or after the first line. `%% level design` allows everything, as no level does. |
 | `%% a remark` | A comment: a line of its own that starts with `%%`. |
-| `direction LR` | The way the layout runs: `TB` (the default), `LR`, `BT` or `RL`. `TD` is `TB`. |
+| `direction LR` | The way the layout runs: `TB` (the default) or `LR`. `TD` is `TB`. |
 
 ## Classes
 
@@ -112,6 +112,7 @@ Without positions the diagram lays itself out. Moving a part in the editor write
 | You write | It means |
 | --- | --- |
 | `%% @Order 120,40` | The part with this id stands with its top left corner at x 120, y 40, in pixels, y down. A part without such a line stays where the layout puts it; without any such line the layout is automatic again. |
+| `%% @label:r1 +20,-14` | The label of the connection `r1`, the first in the source (`r2` the second, and so on), stands with its middle 20 right of and 14 above the middle of its line, which it keeps to when the line moves. Dragging a label in the editor writes it. |
 
 ## Example
 

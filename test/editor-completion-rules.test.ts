@@ -53,14 +53,14 @@ describe("the order of a completion list", () => {
       "stateDiagram-v2\n  direction ",
       "usecase-beta\n  direction ",
     ])
-      expect(ordered(text), text).toEqual(["TB", "LR", "BT", "RL"]);
+      expect(ordered(text), text).toEqual(["TB", "LR"]);
   });
 
   it("has the statements before the elements, and the elements as the source declares them", () => {
     const block = ordered("agent z[Z]\n", true);
     expect(block.slice(0, 3)).toEqual(["agent", "human", "storage"]);
     expect(block.slice(-4)).toEqual(["user", "api", "worker", "db"]);
-    expect(block.indexOf("level")).toBeLessThan(block.indexOf("user"));
+    expect(block).not.toContain("level");
     expect(ordered("api -- reads --> ")).toEqual(["db"]);
     expect(ordered("db -- x --> ")).toEqual(["user", "api", "worker"]);
 
@@ -108,7 +108,7 @@ describe("a completion list where nothing is left to complete", () => {
     for (const text of [
       "flowchart LR",
       "swimlane-beta TB",
-      "direction RL",
+      "direction LR",
       "classDiagram\n  direction LR",
       "classDiagram\n  class A",
       "flowchart TB\n  subgraph s\n    a --> b\n  end",

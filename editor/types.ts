@@ -13,6 +13,7 @@ import {
   SWIMLANE_EXAMPLES,
   USECASE_EXAMPLES,
 } from "../src/samples/uml-examples.ts";
+import type { Word } from "../src/tam.ts";
 import type { ElementKind } from "../src/tam-edit.ts";
 import { detectUml, type UmlKind } from "../src/uml.ts";
 import type { IconName } from "./icons.ts";
@@ -37,6 +38,21 @@ export interface Shape {
   key?: string;
   /** What the element stands for, for its tooltip. */
   hint: string;
+}
+
+/**
+ * A kind of connection of the palette: picked, it is the one new connections are drawn as, and
+ * the one a selected connection becomes.
+ */
+export interface LinkShape {
+  kind: string;
+  icon: IconName;
+  name: string;
+  /** What the connection stands for, for its tooltip. */
+  hint: string;
+  /** What the connection says: its word, and whether it goes both ways. */
+  word: Word;
+  both?: boolean;
 }
 
 /** Shapes that belong together in the palette: a level of the notation. */
@@ -71,6 +87,8 @@ export interface TypeInfo {
   mode: "canvas" | "structure" | "text";
   /** The shapes to drag onto the canvas; none for a type edited as text. */
   palette: ShapeGroup[];
+  /** The kinds of connection to draw between the shapes; a structure has its own. */
+  links?: LinkShape[];
   /** Diagrams of the type to open and learn from. */
   examples: Example[];
   /** What the type shows, for the chooser. */
@@ -130,6 +148,60 @@ export const TYPES: TypeInfo[] = [
         ],
       },
     ],
+    links: [
+      {
+        kind: "calls",
+        icon: "tam-calls",
+        name: "Request",
+        hint: "Request/response channel: the client calls the server (-- calls -->)",
+        word: "calls",
+      },
+      {
+        kind: "sends data",
+        icon: "tam-sends",
+        name: "Data flow",
+        hint: "Data flow channel: data goes one way (-- sends data -->)",
+        word: "sends data",
+      },
+      {
+        kind: "calls both",
+        icon: "tam-calls-both",
+        name: "Both ways",
+        hint: "Bidirectional channel: requests go both ways (<-- calls -->)",
+        word: "calls",
+        both: true,
+      },
+      {
+        kind: "---",
+        icon: "tam-channel",
+        name: "Channel",
+        hint: "Channel without a direction (---)",
+        word: "---",
+      },
+      {
+        kind: "reads",
+        icon: "tam-reads",
+        name: "Read",
+        hint: "Read access: an agent reads a storage (-- reads -->)",
+        word: "reads",
+      },
+      {
+        kind: "writes",
+        icon: "tam-writes",
+        name: "Write",
+        hint: "Write access: an agent writes a storage (-- writes -->)",
+        word: "writes",
+      },
+      {
+        kind: "reads/writes",
+        icon: "tam-modifies",
+        name: "Read/write",
+        hint: "Modifying access: an agent reads and writes a storage (-- reads/writes -->)",
+        word: "reads/writes",
+      },
+    ],
+    // Block diagrams are plain block diagrams: the design level and package diagrams the parser
+    // still reads are not offered, so no example shows them.
     examples: examples(TAM_EXAMPLES, {
       "flyer: web service landscape": "Web service landscape",
       "standard figure 2-1: web server": "Web server",
@@ -415,6 +487,14 @@ export const sameType = (a: DiagramType, b: DiagramType): boolean => typeInfo(a)
  * and `sameType` take the two as one.
  */
 export const typeOf = (source: string): DiagramType => detectUml(source) ?? "tam";
+
+/**
+ * The kinds of element the editor offers in a block diagram: those of the palette. The design
+ * level kinds a source may still declare are kept where they stand, not offered.
+ */
+export const PLAIN_KINDS: ReadonlySet<string> = new Set(
+  TYPES[0].palette.flatMap((group) => group.items.map((item) => item.kind)),
+);
 
 /** The name of an element kind as the palette says it. */
 export function kindName(kind: string): string {

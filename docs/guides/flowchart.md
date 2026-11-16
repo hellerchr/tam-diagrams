@@ -26,7 +26,7 @@ An activity diagram shows the control flow between actions: their order, decisio
 
 | You write | It means |
 | --- | --- |
-| `flowchart TB` | The first line, with the way the flow runs: `TB` (top to bottom, the default), `LR`, `BT` or `RL`. `TD` is `TB`; `>`, `<`, `^` and `v` point the way too. |
+| `flowchart TB` | The first line, with the way the flow runs: `TB` (top to bottom, the default) or `LR` (left to right). `TD` is `TB`; `>` and `v` point the way too. |
 | `graph LR` | `graph` and `flowchart-elk` are read as `flowchart`. |
 | `---`<br>`title: Order system`<br>`---` | The title, in a frontmatter block before the first line. |
 | `%% level conceptual` | TAM's level, as a comment before or after the first line. An activity diagram may be of either level. |
@@ -102,7 +102,7 @@ A flow may be written with or without spaces around its arrow.
 
 | You write | It means |
 | --- | --- |
-| `swimlane-beta TB` | The first line of a diagram with lanes, with the way the flow runs. `TB` (the default) and `BT`: lanes are columns. `LR` and `RL`: lanes are rows. `TD` is `TB`; `>`, `<`, `^` and `v` point the way too. |
+| `swimlane-beta TB` | The first line of a diagram with lanes, with the way the flow runs. `TB` (the default): lanes are columns. `LR`: lanes are rows. `TD` is `TB`; `>` and `v` point the way too. |
 | `subgraph Customer`<br>&nbsp;&nbsp;`order(Place order)`<br>`end` | A lane with its nodes, between its line and `end`. The id is its title. |
 | `subgraph shop [Web Shop]`<br>&nbsp;&nbsp;`check(Check order)`<br>`end` | An id, and the title in square brackets. |
 | `subgraph "Web Shop"`<br>&nbsp;&nbsp;`check(Check order)`<br>`end` | A title in quotes, without an id. |
@@ -125,6 +125,8 @@ Without positions the diagram lays itself out. Moving a part in the editor write
 | You write | It means |
 | --- | --- |
 | `%% @pack 120,40` | The part with this id stands with its top left corner at x 120, y 40, in pixels, y down. A part without such a line stays where the layout puts it; without any such line the layout is automatic again. |
+| `%% @label:e1 +20,-14` | The label of the connection `e1`, the first in the source (`e2` the second, and so on), stands with its middle 20 right of and 14 above the middle of its line, which it keeps to when the line moves. Dragging a label in the editor writes it. |
+| `%% @lane:Customer 260` | In a diagram with lanes, the lane of the subgraph `Customer` is 260 wide across the lanes (high, in `LR`), never less than its nodes, its name and its labels need. Dragging the border after a lane in the editor writes it; the outer edge is the last lane's. |
 
 ## Example
 

@@ -28,7 +28,7 @@ A use case diagram shows the functional requirements of a subject: the actors ex
 | `usecase-beta` | The first line. |
 | `---`<br>`title: Order system`<br>`---` | The title, in a frontmatter block before the first line. |
 | `%% a remark` | A comment: a line of its own that starts with `%%`. |
-| `direction TB` | The way the layout runs: `LR` (the default), `TB`, `BT` or `RL`, in capitals. `TD` is `TB`. |
+| `direction TB` | The way the layout runs: `LR` (the default) or `TB`, in capitals. `TD` is `TB`. |
 
 ## Actors
 
@@ -99,6 +99,7 @@ Without positions the diagram lays itself out. Moving a part in the editor write
 | You write | It means |
 | --- | --- |
 | `%% @order 120,40` | The part with this id stands with its top left corner at x 120, y 40, in pixels, y down. A part without such a line stays where the layout puts it; without any such line the layout is automatic again. |
+| `%% @label:r1 +20,-14` | The label of the connection `r1`, the first in the source (`r2` the second, and so on), stands with its middle 20 right of and 14 above the middle of its line, which it keeps to when the line moves. Dragging a label in the editor writes it. |
 
 ## Example
 

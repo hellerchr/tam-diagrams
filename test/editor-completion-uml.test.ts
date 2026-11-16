@@ -54,7 +54,7 @@ describe("completing the first line of a source", () => {
     expect(offered("---\nt")).toEqual(["title"]);
     expect(offered("---\ntitle: X\n---\nfl")).toEqual(expect.arrayContaining(HEADERS));
     expect(offered("---\ntitle: X\n---\nfl")).not.toContain("title");
-    expect(offered("flowchart ")).toEqual(["TB", "LR", "BT", "RL"]);
+    expect(offered("flowchart ")).toEqual(["TB", "LR"]);
     expect(offered("swimlane-beta L")).toContain("LR");
   });
 
@@ -115,7 +115,7 @@ describe("completing a class diagram", () => {
       type: "uml-class",
       detail: "A customer",
     });
-    expect(offered(`${source}  direction `)).toEqual(["TB", "LR", "BT", "RL"]);
+    expect(offered(`${source}  direction `)).toEqual(["TB", "LR"]);
     expect(offered(`${source}  note `)).toEqual(["for"]);
     expect(offered(`${source}  note for `)).toContain("Order");
   });
@@ -283,7 +283,7 @@ describe.each(["flowchart", "swimlane-beta"])("completing a %s", (header) => {
       ...targets,
     ]);
     expect(offered(`${source}  s`)).toEqual(expect.arrayContaining(["subgraph", "ship", "start"]));
-    expect(offered(`${source}  direction `)).toEqual(["TB", "LR", "BT", "RL"]);
+    expect(offered(`${source}  direction `)).toEqual(["TB", "LR"]);
   });
 
   it("offers the edges after a node, and its shapes after a new one", () => {

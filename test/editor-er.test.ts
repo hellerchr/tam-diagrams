@@ -198,7 +198,7 @@ describe("completing an entity relationship diagram", () => {
       "Sports club",
     ]);
     expect(offered(`${source}  d`)).toContain("direction");
-    expect(offered(`${source}  direction `)).toEqual(["TB", "LR", "BT", "RL"]);
+    expect(offered(`${source}  direction `)).toEqual(["TB", "LR"]);
     // A name of several words is written in quotes.
     const club = options(`${source}  S`).find((item) => item.label === "Sports club")!;
     expect(club.apply).toBe('"Sports club"');

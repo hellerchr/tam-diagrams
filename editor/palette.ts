@@ -7,7 +7,8 @@
 import type { ElementKind } from "../src/tam-edit.ts";
 import { h, icon, isOff, setOff, tipped } from "./dom.ts";
 import type { Editor } from "./editor.ts";
-import type { Link, Piece } from "../src/structure.ts";
+import type { Piece } from "../src/structure.ts";
+import type { IconName } from "./icons.ts";
 import { linkIcon, pieceIcon, structureOf } from "./structures.ts";
 import { type DiagramType, sameType, type Shape, type Snippet, typeInfo } from "./types.ts";
 
@@ -77,8 +78,18 @@ export class Palette {
     this.snippets = structure
       ? []
       : info.snippets.map((snippet) => ({ snippet, row: this.snippet(snippet) }));
+    // A block diagram's kinds of connection follow its shapes, as a structure's follow its pieces.
+    const links = (info.links ?? []).map((link) =>
+      this.link(
+        link.kind,
+        link.name,
+        link.icon,
+        `${link.hint}. Drag from one element to another, or from the dots beside one. Click again for the connection that fits.`,
+      ),
+    );
     this.list.replaceChildren(
       ...this.groups.map((group) => group.box),
+      ...(links.length ? [this.group("Connections", h("div", { class: "tiles" }, ...links))] : []),
       ...(structure
         ? [
             this.group(
@@ -89,7 +100,18 @@ export class Palette {
               ? [
                   this.group(
                     "Connections",
-                    h("div", { class: "tiles" }, ...structure.links.map((link) => this.link(link))),
+                    h(
+                      "div",
+                      { class: "tiles" },
+                      ...structure.links.map((link) =>
+                        this.link(
+                          link.kind,
+                          link.name,
+                          linkIcon(link.kind),
+                          `${link.name}: new connections are drawn as this; a selected one becomes it`,
+                        ),
+                      ),
+                    ),
                   ),
                 ]
               : []),
@@ -195,23 +217,20 @@ export class Palette {
   }
 
   /** A kind of join: the one new connections are drawn with, and what a selected join becomes on a click. */
-  private link(link: Link): HTMLElement {
+  private link(kind: string, name: string, drawing: IconName, tip: string): HTMLElement {
     const { editor } = this;
     const control = h(
       "button",
       {
         class: "tile",
         type: "button",
-        ...tipped({
-          tip: `${link.name}: new connections are drawn as this; a selected one becomes it`,
-          side: "right",
-        }),
-        onClick: () => editor.setLink(link.kind),
+        ...tipped({ tip, side: "right" }),
+        onClick: () => editor.setLink(kind),
       },
-      icon(linkIcon(link.kind)),
-      h("span", { class: "name" }, link.name),
+      icon(drawing),
+      h("span", { class: "name" }, name),
     );
-    this.links.set(link.kind, control);
+    this.links.set(kind, control);
     return control;
   }
 
@@ -302,7 +321,7 @@ export class Palette {
     if (!this.type || !sameType(editor.type, this.type)) this.build(editor.type);
     const words = this.search.value.trim().toLowerCase();
     let found = false;
-    // Only the shapes the diagram takes are offered: a conceptual one has no components.
+    // Only the shapes the diagram takes are offered: one its level allows.
     for (const group of this.groups) {
       let any = false;
       for (const entry of group.items) {

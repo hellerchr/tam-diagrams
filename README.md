@@ -79,11 +79,20 @@ A first visit shows a sample block diagram and a note that says what to try. *Fi
 chooser with a card for each type, and below the cards what to start from (an empty diagram, a
 recent one, an example) beside a picture of it; the chip beside the title says which type is on show.
 
-In a block diagram, shapes are dragged from the Shapes tab onto the canvas, moved, resized, nested by
-dropping them into a container, and connected by dragging from the dots beside an element; the
-Properties section offers only the kinds and connections the notation allows there. The Outline tab
-lists the elements as a tree and takes drops too. Copy, cut, paste, duplicate, undo and redo work as
-usual. A moved element lines up with the edges and middles of others and with the gaps between them.
+Block diagrams are plain block diagrams: the editor offers agents, human agents, storages and
+groups, with channels, accesses and the dependencies between them. A source of the design level
+(components, subsystems, classes, packages, interfaces, delegation) still opens, draws and is edited
+as text, and keeps the choices it already uses; the palette, the Properties and the completion
+offer no more of it. In a block diagram, shapes are dragged from the Shapes tab onto the canvas,
+moved, resized, nested by dropping them into a container, and connected by dragging from the dots
+beside an element; the Properties section offers only the kinds and connections the notation
+allows there. The Connections group of the Shapes tab holds the connections of the notation:
+request, data flow and bidirectional channels, the channel without a direction, and read, write
+and read/write accesses. A click picks one as the tool: a drag from one element to another, or
+from the dots, draws it, and a second click goes back to the connection that fits the two
+elements. A pair the connection does not fit (a read access from a storage) is refused with the
+rule it breaks. The Outline tab lists the elements as a tree and takes drops too. Copy, cut,
+paste, duplicate, undo and redo work as usual. A moved element lines up with the edges and middles of others and with the gaps between them.
 A selection is aligned, distributed, made one size, put in a box or laid out on its own from the
 Arrange menu, the Properties section or a right click, which also changes what a connection is.
 
@@ -103,7 +112,14 @@ do not mix, so the piece that does not fit is off with the reason.
 
 The source pane colors every type's syntax and completes it in context: statements and ids at the
 start of a line, the relations a part can start, the parts a relation can reach, members inside a
-class, types and keys inside an entity, the branches of a fragment.
+class, types and keys inside an entity, the branches of a fragment. In a block diagram the list
+opens as the line is typed, at every place of it: the kinds, `title`, `direction` and the ids of
+the elements at its start; the connections an element's kind can start after its id; the
+elements a connection may reach after the arrow, with their names, its own parts, its containers
+and elements of the wrong kind left out and those beside it first; the colors after `:::`; and
+behind a declaration, once a space follows it or on Ctrl+Space, a color, `{` for a kind that holds
+others, `stack` or `...`, and the connections from the new element on the next line. Elements
+are offered as the text declares them, before the picture shows them.
 
 *Help ▸ … guide* (F1, or the question mark above the source) opens the guide of the diagram type
 beside the source: its rules, every statement the parser reads, an example, and what is refused,
@@ -143,6 +159,21 @@ out automatically, as everywhere else; moving an element writes a position for e
 of a UML diagram are moved the same way, with the same snapping, arrow keys and alignment: the first
 move writes a place for every part (`%% @id x,y` at the end of the source), a part dropped onto a
 group moves into it, and the participants of a sequence diagram move along their row.
+
+The label of a connection is dragged where it should stand, in every type: a channel's or an
+access's label in a block diagram, a message of a sequence diagram, the guard of a flow, the event of a transition,
+the name of an association or a relationship. The source keeps its middle as an offset from the
+middle of the line (a channel's circle), so the label goes with its line when an end moves: behind
+the connection in a block diagram (`api -- calls --> db @+20,-14`), as `%% @label:<id> +20,-14`
+at the end of a Mermaid source. A click on a label selects its connection; Undo takes a drag back
+as one step; *Put the label back* in the connection's right-click menu, and *Auto layout*, let the
+layout place it again.
+
+The lanes of an activity with lanes are resized by their borders: the dashed line after a lane,
+or the frame's edge after the last, is dragged across the lanes, and the lane before it takes that
+width, never less than its nodes, its name and its labels need. Nodes stay in the middle of their
+lane; placed nodes of the lanes after the border move with it. The source keeps the width as
+`%% @lane:<subgraph id> <width>`; Undo takes a drag back as one step.
 
 ## draw.io
 
@@ -340,6 +371,10 @@ api -- reads/writes --> cart
 ```
 
 - Positions are absolute, in pixels, y down; nesting stays what the braces say.
+- Behind a connection a signed position places its label: `api -- calls --> db @+20,-14` stands the
+  label's middle 20 right of and 14 above the middle of the line (a channel's circle), wherever the
+  line runs. A statement of several connections (`a --- b --- c`, `a & b -- reads --> s`) takes
+  none.
 - A size is a least size: an element is never smaller than its name, a container never smaller than
   its parts. A container without a position fits its parts.
 - Wires are not stored. They are routed between the placed elements: straight, around one or two
@@ -368,6 +403,15 @@ classDiagram
 - `%% @<id> <x>,<y>`: the id is that of the part's shape in the scene (a class or state by its id,
   an empty namespace `ns:billing`, the start of a composite `Review#initial`, a participant
   `head:Alice`), x and y the top left corner of its box, in whole pixels.
+- `%% @label:<edge> <dx>,<dy>` places the label of a connection: its middle that far from the
+  middle of the line, signed. The edge is the connection's id in the scene: its kind's letter and
+  its place among the connections of the source (`r1` for the first relation of a class, use case
+  or entity relationship diagram, `e2` for the second flow of an activity, `t3` a transition, `m4`
+  a message). The editor keeps these keys in step when an edit adds or removes a connection before
+  it. Labels placed this way need no places of parts, and a sequence diagram takes them too.
+- `%% @lane:<id> <width>` gives the lane of the subgraph `id` of an activity with lanes its width
+  across the lanes (its height in `LR`), never less than its nodes, its name and its labels need.
+  The automatic layout takes it too: a lane wider than it needs has its nodes in its middle.
 - A part keeps the size the automatic layout gives it. A group (namespace, composite state, subgraph,
   system boundary) fits what it holds and needs no place; an empty one has a place of its own.
 - A part without a place stands where the automatic layout puts it, or beside a placed part it

@@ -18,6 +18,7 @@ import { placedGeometry } from "./tam-placed-wires.ts";
 import { bestScene, cachedLayout, COFFMAN, STRAIGHT } from "./best.ts";
 import type { ElkNode } from "elkjs/lib/elk-api";
 import { type DiagramColors, drawScene } from "./draw.ts";
+import { placeLabels } from "./label-places.ts";
 
 export type { Scene };
 
@@ -67,7 +68,19 @@ export function layoutPlaced(source: TamDiagram, measure: Measure): Scene {
   const scene = tamScene(prepared, geometry, measure);
   collectFallbacks(undefined);
   scene.fallbacks = fallbacks;
-  return scene;
+  return withLabels(scene, source);
+}
+
+/** A scene with the labels its source places (`@+dx,dy` behind a connection) where it says. */
+function withLabels(scene: Scene, diagram: TamDiagram): Scene {
+  return placeLabels(
+    scene,
+    new Map(
+      diagram.edges.flatMap((edge) =>
+        edge.labelAt && !edge.id.includes("#") ? [[edge.id, edge.labelAt] as const] : [],
+      ),
+    ),
+  );
 }
 
 /** Lays a parsed diagram out: as its source places it, or else the best of the layouts by ELK. */
@@ -124,12 +137,13 @@ export function bestLayout(
   layout?: ElkLayout,
 ): Promise<Scene> {
   const memo = new Map<string, Promise<ElkNode>>();
+  // The labels a source places stand there in whichever layout wins.
   return bestScene(
     (strategy) => layoutTam(diagram, measure, { ...strategy, layout, memo }),
     STRATEGIES,
     1,
     RETRIES,
-  );
+  ).then((scene) => withLabels(scene, diagram));
 }
 
 /**

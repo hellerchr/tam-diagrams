@@ -13,6 +13,7 @@ import {
   INTERFACE,
   isActive,
   isStorage,
+  LABEL_PLACE,
   parseTam,
   PLACEMENT,
   type Placement,
@@ -137,8 +138,19 @@ const cleanWire = (text: string) =>
     .replace(/-{2,}>?|\.->/g, "-")
     .trim();
 
+/** A signed number, as the place of a label writes its offset: `+20`, `-14`, `+0`. */
+const signed = (value: number) => `${value < 0 ? "-" : "+"}${number(Math.abs(value))}`;
+
+/** The place of a connection's label as its statement ends with it: ` @+20,-14`, or nothing. */
+const labelPlace = (at: Connection["labelAt"]) => (at ? ` @${signed(at.x)},${signed(at.y)}` : "");
+
 /** A connection as a statement. */
 function writeConnection(connection: Connection): string {
+  return writeLink(connection) + labelPlace(connection.labelAt);
+}
+
+/** A connection as a statement, without the place of its label. */
+function writeLink(connection: Connection): string {
   const { from, to, word, both } = connection,
     label = connection.label && cleanWire(connection.label),
     protocol = connection.protocol && cleanWire(connection.protocol),
@@ -200,16 +212,58 @@ export function place(source: string, places: Map<string, Placement | undefined>
   return lines.join("\n");
 }
 
-/** Removes every placement: the diagram is laid out automatically again. */
+/** Removes every placement, of elements and of labels: the diagram is laid out automatically again. */
 export function unplace(source: string): string {
   return linesOf(source)
     .map((line) => {
       const declaration = read(line);
-      return declaration?.at || declaration?.copyAt
-        ? write({ ...declaration, at: undefined, copyAt: undefined })
-        : line;
+      if (declaration)
+        return declaration.at || declaration.copyAt
+          ? write({ ...declaration, at: undefined, copyAt: undefined })
+          : line;
+      return withLabelPlace(line, undefined);
     })
     .join("\n");
+}
+
+/**
+ * A line of one connection with its label placed at `at`, or without a place: the statement keeps
+ * its text, the place stands behind it, before a comment.
+ */
+function withLabelPlace(line: string, at: Connection["labelAt"]): string {
+  const [code, comment] = cut(line),
+    connections = quietly(() => readConnections(code.trim(), 0));
+  if (connections?.length !== 1 || (!at && !connections[0].labelAt)) return line;
+  const kept = code.replace(/\s+$/, "").replace(LABEL_PLACE, "");
+  return `${kept}${labelPlace(at)}${comment ? ` ${comment}` : ""}`;
+}
+
+/**
+ * Places the label of a connection: its middle at `at` from the middle of the line (see
+ * label-places.ts), or where the layout puts it without `at`. A statement that holds several
+ * connections is written out first, one a line, so that the place names one label.
+ */
+export function placeLabel(
+  source: string,
+  edge: string,
+  at: { x: number; y: number } | undefined,
+): string {
+  const lines = linesOf(source),
+    found = findConnection(parseTam(source), lines, edge);
+  if (!found) return source;
+  const offset = at && { x: Math.round(at.x), y: Math.round(at.y) };
+  if (found.connections.length === 1) {
+    lines[found.line] = withLabelPlace(lines[found.line], offset);
+    return lines.join("\n");
+  }
+  rewrite(
+    lines,
+    found.line,
+    found.connections.map((connection, index) =>
+      index === found.index ? { ...connection, labelAt: offset } : connection,
+    ),
+  );
+  return lines.join("\n");
 }
 
 /** An id no element has yet, from a name: `Order API` gives `order_api`, then `order_api2`. */
@@ -393,7 +447,10 @@ export function defaultConnection(diagram: TamDiagram, from: string, to: string)
   return connection("calls");
 }
 
-/** Connects two elements; without a word, with the one that fits them. */
+/**
+ * Connects two elements; without a word, with the one that fits them. A word given is written from
+ * `from` to `to` as they are: an access from a storage is not turned round but refused when parsed.
+ */
 export function connect(
   source: string,
   from: string,
@@ -402,7 +459,9 @@ export function connect(
 ): string {
   const diagram = parseTam(source),
     lines = linesOf(source);
-  const connection = { ...defaultConnection(diagram, from, to), ...change };
+  const connection: Connection = change.word
+    ? { from, to, word: change.word, both: false, ...change }
+    : { ...defaultConnection(diagram, from, to), ...change };
   // A note written without an id (`note [text]`) gets one, so a line can name it.
   for (const end of ["from", "to"] as const) {
     const node = declared(diagram, connection[end]),
@@ -525,7 +584,7 @@ export function renameId(source: string, id: string, next: string): string {
       const renamed = (text: string) =>
         text.replace(new RegExp(`(^|[^\\w])${node.id}(?![\\w])`, "g"), `$1${next}`);
       const [connection] = connections,
-        end = tail.match(/(-->|---|\.->|-\.-)\s*\w+\s*(%%.*)?$/);
+        end = tail.match(/(-->|---|\.->|-\.-)\s*\w+(?:\s+@\s*[-+\d.]+\s*,\s*[-+\d.]+)?\s*(%%.*)?$/);
       if (end && left !== undefined) {
         const at = tail.lastIndexOf(end[0]) + end[1].length;
         lines[index] =

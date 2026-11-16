@@ -88,6 +88,29 @@ export const ICONS = {
   "er-zero-or-one-to-many": crow("zero-or-one", "zero-or-more"),
   "er-one-to-one-or-more": crow("only-one", "one-or-more"),
   "er-one-to-zero-or-one": crow("only-one", "zero-or-one"),
+  // The connections of a block diagram: a channel is a line through a small circle, its request
+  // direction an arrow beside it; an access an arrow from or to a storage, the way the data goes.
+  "tam-calls": svg(
+    '<path d="M1.500 8.500h17"/><circle cx="10" cy="8.500" r="3" fill="var(--panel, #fff)"/><path d="M6.500 15h5"/><path d="M11.500 13l2.500 2-2.500 2z" fill="currentColor"/>',
+  ),
+  "tam-calls-both": svg(
+    '<path d="M1.500 8.500h17"/><circle cx="10" cy="8.500" r="3" fill="var(--panel, #fff)"/><path d="M7.500 15h5"/><path d="M12.500 13l2.500 2-2.500 2zM7.500 13L5 15l2.500 2z" fill="currentColor"/>',
+  ),
+  "tam-sends": svg(
+    '<path d="M1.500 10h13"/><circle cx="8" cy="10" r="3" fill="var(--panel, #fff)"/><path d="M14 6.500l4.500 3.500-4.500 3.500z" fill="currentColor"/>',
+  ),
+  "tam-channel": svg(
+    '<path d="M1.500 10h17"/><circle cx="10" cy="10" r="3" fill="var(--panel, #fff)"/>',
+  ),
+  "tam-reads": svg(
+    '<rect x="1.500" y="6.500" width="6.500" height="7" rx="3.500"/><path d="M8 10h6.500"/><path d="M14 6.500l4.500 3.500-4.500 3.500z" fill="currentColor"/>',
+  ),
+  "tam-writes": svg(
+    '<rect x="12" y="6.500" width="6.500" height="7" rx="3.500"/><path d="M1.500 10h6"/><path d="M7.500 6.500l4.500 3.500-4.500 3.500z" fill="currentColor"/>',
+  ),
+  "tam-modifies": svg(
+    '<rect x="13" y="6.500" width="5.500" height="7" rx="2.750"/><path d="M4.500 10h4.500"/><path d="M8.500 7l4 3-4 3zM5 7l-4 3 4 3z" fill="currentColor"/>',
+  ),
   logo: svg(
     '<rect x="2" y="3" width="7" height="5"/><rect x="11" y="12" width="7" height="5" rx="2.5"/><path d="M5.500 8v6.500h5.500"/>',
   ),

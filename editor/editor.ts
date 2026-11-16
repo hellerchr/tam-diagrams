@@ -11,6 +11,7 @@ import {
   parseTam,
   type Placement,
   type TamDiagram,
+  type Word,
 } from "../src/tam.ts";
 import {
   idFor,
@@ -29,6 +30,7 @@ import {
   moveInto,
   paste,
   place,
+  placeLabel,
   remove,
   setConnection,
   setElement,
@@ -66,8 +68,20 @@ import { parseUml } from "../src/index.ts";
 import type { Structure, StructureEdge } from "../src/structure.ts";
 import { classMembers, setClassMembers } from "../src/uml-class-edit.ts";
 import { moveMessage, moveParticipant } from "../src/uml-sequence-edit.ts";
-import { placeable } from "../src/uml-placed.ts";
-import { followPlaces, hasPlaces, readPlaces, removePlaces, setPlaces } from "../src/uml-places.ts";
+import { labelGroups, labelKey, labelOffset, lineMiddle } from "../src/label-places.ts";
+import { textGroupBox } from "../src/text.ts";
+import { laneFrame, placeable } from "../src/uml-placed.ts";
+import {
+  followPlaces,
+  hasMarks,
+  hasPlaces,
+  readLabels,
+  readPlaces,
+  setLabel,
+  setLane,
+  setPlaces,
+  unmarked,
+} from "../src/uml-places.ts";
 import {
   setUmlHeader,
   turnPlaces,
@@ -178,11 +192,41 @@ type Gesture =
       target?: string;
       /** Pressed on a connection dot: the side it is on, and where, to tell a click from a drag. */
       dot?: { side: number; screen: Point };
+      /** In a block diagram: whether the connection may reach an element, by its id, as found. */
+      reaches?: Map<string, boolean>;
     }
   /** A shape tool pressed on the canvas: the element is placed where the pointer is released. */
   | { type: "place"; kind: ElementKind; free: boolean; keep: boolean }
   /** An end of a connection dragged to another element. */
-  | { type: "attach"; id: string; end: "from" | "to"; current: Point; target?: string };
+  | { type: "attach"; id: string; end: "from" | "to"; current: Point; target?: string }
+  /** The far border of a lane of an activity with lanes dragged: the lane gets that width. */
+  | {
+      type: "lane";
+      /** The lane, by its id and its place among the lanes. */
+      id: string;
+      index: number;
+      across: "x" | "y";
+      start: Point;
+      /** The lane's width when the drag started. */
+      width: number;
+      /** The source the drag starts from, and the width and source it has come to. */
+      base: string;
+      now?: number;
+      result?: string;
+    }
+  /** The label of a connection dragged to another place. */
+  | {
+      type: "label";
+      /** The connection, as the selection names it, and the wire of the scene the label is drawn at. */
+      id: string;
+      wire: string;
+      start: Point;
+      /** The picture the drag started on, and the box around the label's lines there. */
+      picture: Picture;
+      box: Box;
+      /** Where the label is dragged to, once the pointer moved past SLOP. */
+      moved?: Box;
+    };
 
 /** The size a new element of a kind is shown at before it is placed; its name sizes it after. */
 const sizeOf = (kind: ElementKind) =>
@@ -455,7 +499,7 @@ export class Editor {
     try {
       // The places follow the parts: a part given another id keeps its place, one that is gone leaves none.
       const made = make(structure, this.doc.source),
-        next = hasPlaces(made) ? followPlaces(structure.read, this.doc.source, made) : made;
+        next = hasMarks(made) ? followPlaces(structure.read, this.doc.source, made) : made;
       parseUml(next);
       void this.doc.apply(next, run);
       return true;
@@ -705,16 +749,41 @@ export class Editor {
     this.structEdit((_, source) => setClassMembers(source, id, members));
   }
 
-  /** The kind of join new connections of a structure are drawn with: the usual one until another is picked. */
+  /**
+   * The kind of join new connections are drawn with. In a structure the usual one until another is
+   * picked; in a block diagram the one picked in the palette, or none for the word that fits the
+   * two elements.
+   */
   get link(): string | undefined {
-    const links = this.structure?.links ?? [];
+    if (!this.structure)
+      return typeInfo(this.type).links?.some((item) => item.kind === this.picked)
+        ? this.picked
+        : undefined;
+    const links = this.structure.links;
     return links.some((item) => item.kind === this.picked) ? this.picked : links[0]?.kind;
   }
 
-  /** Picks the kind of join new connections are drawn with. */
+  /**
+   * Picks the kind of join new connections are drawn with. In a block diagram the kind is a tool: a
+   * drag from element to element draws it, and picking it again goes back to the word that fits.
+   * A selected connection keeps its kind: the next one drawn would else change the one before.
+   */
   setLink(kind: string) {
-    this.picked = kind;
-    this.onState();
+    if (this.structure) {
+      this.picked = kind;
+      this.onState();
+      return;
+    }
+    if (!typeInfo(this.type).links?.some((item) => item.kind === kind)) return;
+    const again = this.picked === kind;
+    this.picked = again ? undefined : kind;
+    this.setTool(again ? "select" : "connect");
+  }
+
+  /** What a connection of a block diagram says when drawn now: the kind picked, or the word that fits. */
+  private get linkChange(): { word: Word; both: boolean; label: undefined } | undefined {
+    const shape = typeInfo(this.type).links?.find((item) => item.kind === this.link);
+    return shape && { word: shape.word, both: !!shape.both, label: undefined };
   }
 
   /** Gives an element of a block diagram another id, in every connection and interface that names it. */
@@ -896,6 +965,22 @@ export class Editor {
   elementsRefusal(change: ElementChange) {
     const ids = this.selectedElements;
     return this.refusal((source) => ids.reduce((next, id) => setElement(next, id, change), source));
+  }
+
+  /** Whether a connection drawn from an element may reach another; each answer is kept for the gesture. */
+  private reaches(gesture: Extract<Gesture, { type: "connect" }>, target: string): boolean {
+    gesture.reaches ??= new Map();
+    let fits = gesture.reaches.get(target);
+    if (fits === undefined) {
+      fits = this.connectRefusal(gesture.from, target) === undefined;
+      gesture.reaches.set(target, fits);
+    }
+    return fits;
+  }
+
+  /** Why two elements may not be connected with the kind of connection picked; undefined when they may. */
+  private connectRefusal(from: string, to: string): string | undefined {
+    return this.refusal((source) => connect(source, from, to, this.linkChange));
   }
 
   /** Whether a connection may change this way, between the elements it joins. */
@@ -1566,6 +1651,29 @@ export class Editor {
     return this.allows((source) => setHeader(source, header));
   }
 
+  /**
+   * Whether a block diagram has design level parts already: it says `level design`, or declares
+   * components, subsystems, classes, packages or interfaces, or joins by delegation or a «use» or
+   * «import» dependency. The editor offers plain block diagrams; such a diagram keeps what it has
+   * on offer, such as its interfaces.
+   */
+  get designLevel(): boolean {
+    const diagram = this.picture?.diagram;
+    if (!this.editable || !diagram) return false;
+    return (
+      diagram.level === "design" ||
+      [...diagram.nodes.values()].some((node) =>
+        ["component", "subsystem", "class", "package", "interface"].includes(node.kind),
+      ) ||
+      diagram.edges.some(
+        (edge) =>
+          edge.kind === "delegation" ||
+          edge.kind === "assembly" ||
+          (edge.kind === "dependency" && /«(use|import)»/.test(edge.label ?? "")),
+      )
+    );
+  }
+
   /** Whether the diagram takes elements of a kind: a conceptual one takes no components. */
   allowsKind(kind: ElementKind) {
     return this.allows((source) => addElement(source, { kind, label: "x" }).source);
@@ -1584,8 +1692,8 @@ export class Editor {
   async autoLayout() {
     if (this.structural) {
       if (this.doc.problem) return void this.change(undefined);
-      if (!hasPlaces(this.doc.source)) return;
-      void this.doc.apply(removePlaces(this.doc.source));
+      if (!hasMarks(this.doc.source)) return;
+      void this.doc.apply(unmarked(this.doc.source));
       await this.fitSoon();
       return;
     }
@@ -1900,6 +2008,20 @@ export class Editor {
       };
       return;
     }
+    // The border after a lane of an activity with lanes is dragged to give the lane a width.
+    const lane = this.laneEdgeAt(screen);
+    if (lane) {
+      this.gesture = { type: "lane", ...lane, start: point, base: this.doc.source };
+      return;
+    }
+    // A connection's label is dragged where it should stand; a press without a drag selects the connection.
+    const label = event.shiftKey ? undefined : this.labelAt(point);
+    if (label && picture) {
+      if (!this.isSelected({ type: "wire", id: label.id }))
+        this.select([{ type: "wire", id: label.id }]);
+      this.gesture = { type: "label", ...label, start: point, picture };
+      return;
+    }
     if (!part) {
       const kept = event.shiftKey ? this.selection : [];
       this.select(kept);
@@ -2001,9 +2123,14 @@ export class Editor {
       case "connect": {
         gesture.current = point;
         // A part of a structure may join itself: a self message, a transition back to its state.
+        // In a block diagram only an element the connection may reach takes it.
         const target = this.targetAt(point);
         gesture.target =
-          target && (target !== gesture.from || this.structural) ? target : undefined;
+          target &&
+          (target !== gesture.from || this.structural) &&
+          (this.structural || this.reaches(gesture, target))
+            ? target
+            : undefined;
         view.invalidate();
         return;
       }
@@ -2016,7 +2143,148 @@ export class Editor {
       case "place":
         this.showGhost(gesture.kind, point, event.altKey);
         return;
+      case "label":
+        this.dragLabel(gesture, screen, point);
+        return;
+      case "lane":
+        this.dragLane(gesture, point);
+        return;
     }
+  }
+
+  /**
+   * The far border of a lane of an activity with lanes at a point of the canvas: the line between
+   * it and the next lane, or the frame's edge after the last. A lane without a name has no width
+   * of its own to set.
+   */
+  private laneEdgeAt(
+    screen: Point,
+  ): { id: string; index: number; across: "x" | "y"; width: number } | undefined {
+    const { picture } = this;
+    if (this.type !== "swimlane" || this.tool !== "select" || !picture || this.doc.problem)
+      return undefined;
+    const lanes = laneFrame(picture.scene);
+    if (!lanes) return undefined;
+    const { across, bounds, ids, frame } = lanes,
+      along = across === "x" ? "y" : "x",
+      length = across === "x" ? "height" : "width",
+      point = this.view.toScene(screen),
+      reach = HANDLE / 2 / this.view.zoom;
+    if (point[along] < frame[along] || point[along] > frame[along] + frame[length])
+      return undefined;
+    const index = bounds.findIndex(
+      (bound, at) =>
+        at > 0 && Math.abs(point[across] - bound) <= reach && ids[at - 1] !== undefined,
+    );
+    return index > 0
+      ? { id: ids[index - 1]!, index: index - 1, across, width: bounds[index] - bounds[index - 1] }
+      : undefined;
+  }
+
+  /**
+   * Gives the lane whose border is dragged the width the pointer says. Where the parts are placed,
+   * those of the lanes after it move with the border, so they keep their place in their lane.
+   */
+  private dragLane(gesture: Extract<Gesture, { type: "lane" }>, point: Point) {
+    const width = Math.max(
+      1,
+      Math.round(gesture.width + point[gesture.across] - gesture.start[gesture.across]),
+    );
+    if (width === gesture.now) return;
+    gesture.now = width;
+    let result = setLane(gesture.base, gesture.id, width);
+    const { picture } = this,
+      lanes = picture && laneFrame(picture.scene),
+      places = readPlaces(result);
+    if (lanes && places.size && picture.parts) {
+      const after = new Set(lanes.ids.slice(gesture.index + 1)),
+        step = width - gesture.width,
+        moved = new Map<string, Point>();
+      for (const [id, at] of places)
+        if (after.has(picture.parts.get(id)?.parent ?? undefined))
+          moved.set(id, { ...at, [gesture.across]: at[gesture.across] + step });
+      if (moved.size) result = setPlaces(result, moved);
+    }
+    if (this.doc.preview(result)) gesture.result = result;
+  }
+
+  /** Moves a connection's label with the pointer: shown at once, written to the source when let go. */
+  private dragLabel(gesture: Extract<Gesture, { type: "label" }>, screen: Point, point: Point) {
+    const start = this.view.toScreen(gesture.start);
+    if (!gesture.moved && Math.hypot(screen.x - start.x, screen.y - start.y) < SLOP) return;
+    const dx = Math.round(point.x - gesture.start.x),
+      dy = Math.round(point.y - gesture.start.y),
+      { scene } = gesture.picture;
+    gesture.moved = { ...gesture.box, x: gesture.box.x + dx, y: gesture.box.y + dy };
+    const group = new Set(labelGroups(scene).get(gesture.wire));
+    this.doc.previewScene({
+      ...scene,
+      texts: scene.texts.map((text) =>
+        group.has(text)
+          ? {
+              ...text,
+              x: text.x + dx,
+              y: text.y + dy,
+              box: { ...text.box, x: text.box.x + dx, y: text.box.y + dy },
+            }
+          : text,
+      ),
+    });
+  }
+
+  /** The label of a connection at a point of the picture: the connection, its wire and the box around the label. */
+  private labelAt(point: Point): { id: string; wire: string; box: Box } | undefined {
+    const { picture } = this;
+    if (!picture || (!this.editable && !this.structural)) return undefined;
+    for (const [wire, texts] of labelGroups(picture.scene)) {
+      if (!texts.some((text) => contains(text.box, point, 2))) continue;
+      const id = wireOf(picture.diagram, wire);
+      if (id) return { id, wire, box: textGroupBox(texts) };
+    }
+    return undefined;
+  }
+
+  /**
+   * Ends a drag of a lane's border: the width is written. A lane is never narrower than its nodes
+   * need, which the picture of the drag shows: that width is written rather than a smaller one.
+   */
+  private dropLane(gesture: Extract<Gesture, { type: "lane" }>) {
+    const { result, now } = gesture;
+    if (result === undefined || now === undefined) return this.doc.cancel();
+    const shown = this.doc.picture?.source === result ? this.doc.picture : undefined,
+      lanes = shown && laneFrame(shown.scene),
+      drawn = lanes && lanes.bounds[gesture.index + 1] - lanes.bounds[gesture.index],
+      next = drawn !== undefined && drawn > now + 0.5 ? setLane(result, gesture.id, drawn) : result;
+    if (next === this.doc.source) return this.doc.cancel();
+    void this.doc.apply(next);
+  }
+
+  /**
+   * Stands the label of a connection with its box at `box` in the picture the drag started on: as
+   * an offset from the middle of its line, which moves with the line; without a box where the
+   * layout puts it.
+   */
+  placeLabel(id: string, wire: string, picture: Picture, box: Box | undefined) {
+    const offset = box && labelOffset(picture.scene, wire, box);
+    if (box && !offset) return;
+    if (this.structural) {
+      if (this.doc.problem) return void this.change(undefined);
+      void this.doc.apply(setLabel(this.doc.source, labelKey(wire), offset));
+      return;
+    }
+    this.edit((source) => placeLabel(source, id, offset));
+  }
+
+  /** Whether the label of a connection stands where the source places it, not where the layout put it. */
+  labelPlaced(id: string): boolean {
+    if (this.structural) return readLabels(this.doc.source).has(id);
+    return !!this.connection(id)?.labelAt;
+  }
+
+  /** Puts the label of a connection back where the layout puts it. */
+  unplaceLabel(id: string) {
+    const { picture } = this;
+    if (picture) this.placeLabel(id, id, picture, undefined);
   }
 
   /** Moves the selected elements with the pointer, into the container under it. */
@@ -2339,7 +2607,16 @@ export class Editor {
         // A dot is dragged: a click on one only selects its element, so a slip adds nothing.
         if (clicked) this.select([{ type: "element", id: gesture.from }]);
         else if (gesture.target) this.connect(gesture.from, gesture.target);
-        else this.connectNew(gesture.from, gesture.current);
+        else {
+          // Dropped on an element the connection cannot reach: the notation's reason is said.
+          const target = this.structural ? undefined : this.targetAt(gesture.current),
+            why =
+              target && target !== gesture.from
+                ? this.connectRefusal(gesture.from, target)
+                : undefined;
+          if (why) this.notify(why);
+          else this.connectNew(gesture.from, gesture.current);
+        }
         break;
       }
       case "place":
@@ -2356,6 +2633,13 @@ export class Editor {
           this.select([gesture.inside]);
         // The selection the frame made shows in the panels once it is done.
         this.onState();
+        break;
+      case "label":
+        if (gesture.moved)
+          this.placeLabel(gesture.id, gesture.wire, gesture.picture, gesture.moved);
+        break;
+      case "lane":
+        this.dropLane(gesture);
         break;
       case "pan":
         break;
@@ -2415,7 +2699,8 @@ export class Editor {
         });
       return;
     }
-    if (!this.edit((source) => connect(source, from, to))) return;
+    const change = this.linkChange;
+    if (!this.edit((source) => connect(source, from, to, change))) return;
     const made = parseTam(this.doc.source).edges.findLast((edge) => !edge.id.includes("#"));
     this.tool = "select";
     if (made) this.select([{ type: "wire", id: made.id }]);
@@ -2524,16 +2809,19 @@ export class Editor {
     );
     if (away < 3 * GRID || partAt(picture, at, 0)) return;
     let made = "";
+    // An access ends at a storage; any other connection at an agent.
+    const change = this.linkChange,
+      kind = change && /reads|writes/.test(change.word) ? "storage" : "agent";
     const done = this.change(
       (() => {
         const added = addElement(base, {
-          kind: "agent",
-          label: NAMES.agent,
-          at: dropPlace("agent", at, false),
+          kind,
+          label: NAMES[kind],
+          at: dropPlace(kind, at, false),
         });
         made = added.id;
         try {
-          return connect(added.source, from, made);
+          return connect(added.source, from, made, change);
         } catch {
           return added.source;
         }
@@ -2548,7 +2836,13 @@ export class Editor {
   private abort() {
     const { gesture } = this;
     this.gesture = undefined;
-    if (gesture?.type === "move" || gesture?.type === "resize") this.doc.cancel();
+    if (
+      gesture?.type === "move" ||
+      gesture?.type === "resize" ||
+      (gesture?.type === "lane" && gesture.result !== undefined) ||
+      (gesture?.type === "label" && gesture.moved)
+    )
+      this.doc.cancel();
     this.view.invalidate();
   }
 
@@ -2765,9 +3059,14 @@ export class Editor {
     else if (this.space || this.tool === "pan") cursor = "grab";
     else if (this.tool !== "select") cursor = "crosshair";
     else if (screen) {
+      // In the order a press takes them: handles, ends and dots, lane borders, labels, parts.
       const handle = this.handleAt(screen);
+      let lane: ReturnType<Editor["laneEdgeAt"]>;
       if (handle) cursor = handle.handle.cursor;
       else if (this.endAt(screen) || this.linkAt(screen)) cursor = "crosshair";
+      else if ((lane = this.laneEdgeAt(screen)))
+        cursor = lane.across === "x" ? "col-resize" : "row-resize";
+      else if (this.labelAt(this.view.toScene(screen))) cursor = "move";
       else if (this.hover?.type === "element") cursor = "move";
       else if (this.hover) cursor = "pointer";
     }
@@ -2888,6 +3187,24 @@ export class Editor {
       context.setLineDash([6, 4]);
       context.lineWidth = 2;
       boxesOf(picture, gesture.target).forEach((box) => outlineBox(box, 4));
+      context.setLineDash([]);
+    }
+    if (gesture?.type === "label" && gesture.moved) {
+      // The label where it goes, tied to the middle of its line, which it keeps its distance to.
+      const middle = lineMiddle(gesture.picture.scene, gesture.wire),
+        box = gesture.moved;
+      context.strokeStyle = accent;
+      context.lineWidth = 1;
+      context.setLineDash([4, 3]);
+      outlineBox(box, 2);
+      if (middle) {
+        const from = view.toScreen(middle),
+          to = view.toScreen({ x: box.x + box.width / 2, y: box.y + box.height / 2 });
+        context.beginPath();
+        context.moveTo(from.x, from.y);
+        context.lineTo(to.x, to.y);
+        context.stroke();
+      }
       context.setLineDash([]);
     }
     if (gesture?.type === "frame") {
