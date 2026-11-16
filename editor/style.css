@@ -271,8 +271,15 @@ hr {
   color: var(--accent-text);
 }
 
-[aria-disabled="true"]:is(.button, .rail-button, .segment, .status-button, .menu-title),
-[aria-disabled="true"]:is(.button, .rail-button, .segment, .status-button, .menu-title):hover {
+[aria-disabled="true"]:is(.button, .rail-button, .segment, .status-button, .menu-title, .tile),
+[aria-disabled="true"]:is(
+    .button,
+    .rail-button,
+    .segment,
+    .status-button,
+    .menu-title,
+    .tile
+  ):hover {
   color: var(--text-3);
   background: none;
   cursor: default;

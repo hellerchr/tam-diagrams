@@ -1,6 +1,6 @@
 import { type Command, parseCommand, USAGE, UsageError } from "./args.ts";
-import { checkSource, isDiagramError, renderSource } from "./diagram.ts";
-import { diagramMessage, inputName, internalMessage, ioMessage } from "./report.ts";
+import { checkSource, convertSource, isDiagramError, renderSource, sourceOf } from "./diagram.ts";
+import { diagramMessage, inputName, internalMessage, ioMessage, warningLines } from "./report.ts";
 
 /** What the CLI needs from its surroundings; node-io.ts implements it, tests substitute it. */
 export interface CliIo {
@@ -55,28 +55,38 @@ async function emit(svg: string, output: string | undefined, io: CliIo): Promise
   }
 }
 
-async function runRender(command: Extract<Command, { kind: "render" }>, io: CliIo) {
-  const source = await load(command.input, io);
-  if (source === undefined) return USAGE_OR_IO_ERROR;
-  let svg: string;
+async function runRender(command: Extract<Command, { kind: "render" | "convert" }>, io: CliIo) {
+  const text = await load(command.input, io);
+  if (text === undefined) return USAGE_OR_IO_ERROR;
+  let result: string;
   try {
-    svg = await renderSource(source);
+    if (command.kind === "convert") {
+      const { output, warnings } = await convertSource(text, command);
+      io.stderr(warningLines(inputName(command.input), warnings));
+      result = output;
+    } else {
+      const { source, warnings } = await sourceOf(text);
+      io.stderr(warningLines(inputName(command.input), warnings));
+      result = `${await renderSource(source, command)}\n`;
+    }
   } catch (error) {
     return reportFailure(error, command.input, io);
   }
-  return emit(`${svg}\n`, command.output, io);
+  return emit(result, command.output, io);
 }
 
 /** Checks every input, so one run reports every failing file; the result is the worst exit code. */
 async function runCheck(command: Extract<Command, { kind: "check" }>, io: CliIo) {
   let worst = OK;
   for (const input of command.inputs) {
-    const source = await load(input, io);
-    if (source === undefined) {
+    const text = await load(input, io);
+    if (text === undefined) {
       worst = Math.max(worst, USAGE_OR_IO_ERROR);
       continue;
     }
     try {
+      const { source, warnings } = await sourceOf(text);
+      io.stderr(warningLines(inputName(input), warnings));
       await checkSource(source);
     } catch (error) {
       worst = Math.max(worst, reportFailure(error, input, io));
@@ -102,5 +112,5 @@ export async function main(argv: string[], io: CliIo): Promise<number> {
     io.stdout(USAGE);
     return OK;
   }
-  return command.kind === "render" ? runRender(command, io) : runCheck(command, io);
+  return command.kind === "check" ? runCheck(command, io) : runRender(command, io);
 }

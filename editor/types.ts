@@ -62,6 +62,11 @@ export interface TypeInfo {
   /** The name for several, as in "Class diagrams are edited as text". */
   plural: string;
   icon: IconName;
+  /**
+   * The other kinds of source the type is written as, which the user sees as this type: an
+   * activity diagram with lanes is a `swimlane-beta` source, one without a `flowchart`.
+   */
+  variants?: DiagramType[];
   /** Whether the diagram is edited on the canvas, or as text with the picture as a preview. */
   mode: "canvas" | "structure" | "text";
   /** The shapes to drag onto the canvas; none for a type edited as text. */
@@ -115,29 +120,12 @@ export const TYPES: TypeInfo[] = [
             key: "G",
             hint: "Frame around elements that share channels and accesses",
           },
-        ],
-      },
-      {
-        title: "Design level",
-        items: [
           {
-            kind: "component",
-            icon: "component",
-            name: "Component",
-            hint: "Replaceable unit with provided and required interfaces",
-          },
-          {
-            kind: "subsystem",
-            icon: "subsystem",
-            name: "Subsystem",
-            hint: "Unit of the system composed of components",
-          },
-          { kind: "class", icon: "class", name: "Class", hint: "Implementation class" },
-          {
-            kind: "package",
-            icon: "package",
-            name: "Package",
-            hint: "Namespace of the source code",
+            kind: "note",
+            icon: "uml-note",
+            name: "Note",
+            key: "N",
+            hint: "A remark attached to an element with a dotted line",
           },
         ],
       },
@@ -146,8 +134,6 @@ export const TYPES: TypeInfo[] = [
       "flyer: web service landscape": "Web service landscape",
       "standard figure 2-1: web server": "Web server",
       "protocols, data flow and dependencies": "Protocols, data flow and dependencies",
-      "design level: components and interfaces": "Components and interfaces",
-      "package dependencies": "Package dependencies",
       "reference: SAP blog online shop": "Online shop",
     }),
     about: "Compositional structure: agents, storages, channels and accesses (SAP TAM, FMC)",
@@ -240,14 +226,24 @@ export const TYPES: TypeInfo[] = [
     icon: "flowchart",
     mode: "text",
     palette: [],
-    examples: examples(FLOWCHART_EXAMPLES, {
-      "flowchart: harness turn (mermaid-demo)": "Agent turn",
-      "flowchart: login decisions": "Login decisions",
-      "flowchart: node shapes": "Node shapes",
-      "flowchart: nested subgraphs LR": "Nested groups",
-      "flowchart: CI pipeline (large)": "CI pipeline",
-    }),
-    about: "Actions and control flow: decision, merge, fork and join nodes",
+    variants: ["swimlane"],
+    examples: [
+      ...examples(FLOWCHART_EXAMPLES, {
+        "flowchart: harness turn (mermaid-demo)": "Agent turn",
+        "flowchart: login decisions": "Login decisions",
+        "flowchart: node shapes": "Node shapes",
+        "flowchart: nested subgraphs LR": "Nested groups",
+        "flowchart: CI pipeline (large)": "CI pipeline",
+      }),
+      ...examples(SWIMLANE_EXAMPLES, {
+        "swimlane: TAM flyer activity": "Order handling in lanes",
+        "swimlane: request and response (docs/tam.md)": "Request and response in lanes",
+        "swimlane: order fulfilment LR": "Order fulfilment in lanes",
+        "swimlane: incident handling (large)": "Incident handling in lanes",
+      }),
+    ],
+    about:
+      "Actions and control flow: decisions, forks and joins, and lanes for the agents responsible",
     starter: `flowchart TB
   start((Start)) --> check{In stock?}
   check -->|yes| ship[Ship order]
@@ -279,51 +275,6 @@ export const TYPES: TypeInfo[] = [
         icon: "group",
 
         text: "  subgraph part [A part]\n    x[Inside] --> y[Also inside]\n  end",
-      },
-    ],
-  },
-  {
-    type: "swimlane",
-    name: "Activity with lanes",
-    plural: "Activities with lanes",
-    icon: "swimlane",
-    mode: "text",
-    palette: [],
-    examples: examples(SWIMLANE_EXAMPLES, {
-      "swimlane: TAM flyer activity": "Order handling",
-      "swimlane: request and response (docs/tam.md)": "Request and response",
-      "swimlane: order fulfilment LR": "Order fulfilment",
-      "swimlane: incident handling (large)": "Incident handling",
-    }),
-    about: "Activity partitioned by the agents responsible for its actions",
-    starter: `swimlane-beta TB
-  subgraph Customer
-    start((Start)) --> order(Place Order)
-    receive(Receive Goods) --> stop(((End)))
-  end
-  subgraph Shop
-    check(Check Order) --> ship(Ship Goods)
-  end
-  order --> check
-  ship --> receive`,
-    snippets: [
-      {
-        name: "Lane",
-        icon: "uml-lane",
-
-        text: "  subgraph NewLane\n    step(New Step)\n  end",
-      },
-      {
-        name: "Action",
-        icon: "uml-step",
-
-        text: "  a(Do something) --> b(Do the next thing)",
-      },
-      {
-        name: "Decision",
-        icon: "uml-decision",
-
-        text: "  ask{ } -->|yes| one(One way)\n  ask -->|no| other(Other way)",
       },
     ],
   },
@@ -451,33 +402,22 @@ export const TYPES: TypeInfo[] = [
 // A type with a structure is edited on the canvas, whatever else the table says of it.
 for (const info of TYPES) if (structureOf(info.type)) info.mode = "structure";
 
+/** The type as the user sees it: an activity diagram with lanes is an activity diagram. */
 export const typeInfo = (type: DiagramType): TypeInfo =>
-  TYPES.find((item) => item.type === type) ?? TYPES[0];
+  TYPES.find((item) => item.type === type || item.variants?.includes(type)) ?? TYPES[0];
 
-/** The type of a source: a Mermaid header names a UML type, anything else is a block diagram. */
+/** Whether two kinds of source are one type to the user, as a flowchart and a swimlane are. */
+export const sameType = (a: DiagramType, b: DiagramType): boolean => typeInfo(a) === typeInfo(b);
+
+/**
+ * The type of a source: a Mermaid header names a UML type, anything else is a block diagram. An
+ * activity diagram says `flowchart` or `swimlane` by its header, whether it has lanes; `typeInfo`
+ * and `sameType` take the two as one.
+ */
 export const typeOf = (source: string): DiagramType => detectUml(source) ?? "tam";
 
 /** The name of an element kind as the palette says it. */
 export function kindName(kind: string): string {
   const shape = TYPES[0].palette.flatMap((group) => group.items).find((item) => item.kind === kind);
   return shape?.name ?? kind[0].toUpperCase() + kind.slice(1);
-}
-
-/**
- * A source with another title. A block diagram says it on a `title` line, which the library's edits
- * write; the other types say it in a frontmatter block before the diagram, which this writes.
- */
-export function withUmlTitle(source: string, title: string): string {
-  const name = title.trim().replace(/\s+/g, " "),
-    front = source.match(/^\s*---[ \t]*\n([\s\S]*?)\n---[ \t]*\n?/),
-    kept = (front?.[1].split("\n") ?? []).filter((line) => !/^title:/.test(line)),
-    // As YAML reads it: plain where that is safe, else in quotes.
-    quoted = /^[\p{L}\p{N}][^:#"']*$/u.test(name)
-      ? name
-      : !/["\\]/.test(name)
-        ? `"${name}"`
-        : `'${name.replace(/'/g, "''")}'`,
-    lines = name ? [`title: ${quoted}`, ...kept] : kept,
-    body = front ? source.slice(front[0].length) : source;
-  return lines.length ? `---\n${lines.join("\n")}\n---\n${body}` : body;
 }

@@ -173,10 +173,14 @@ function parseAutomatic(source: string): ParsedUml {
   }
 }
 
+/** What a picture of a UML type says it is to assistive technology: one activity diagram, with or without lanes. */
+export const umlRole = (kind: UmlKind) =>
+  kind === "flowchart" || kind === "swimlane" ? "activity diagram" : `${kind} diagram`;
+
 /** A laid-out scene drawn as a picture: the SVG, its size and description. */
 function picture(scene: Scene, colors: DiagramColors, description: string, kind: UmlKind) {
   return {
-    svg: drawScene(scene, colors, description, `${kind} diagram`),
+    svg: drawScene(scene, colors, description, umlRole(kind)),
     width: scene.bounds.width,
     height: scene.bounds.height,
     description,

@@ -4,7 +4,7 @@ import { type Box, type Point, STACK } from "./scene.ts";
 import type { TamDiagram, TamEdge, TamNode } from "./tam.ts";
 import { edgeOwner, type ElkLayout, layeredOptions } from "./elk.ts";
 import type { ElkExtendedEdge, ElkLabel, ElkNode } from "elkjs/lib/elk-api";
-import { FONT, LINE, type Measure, SMALL, wrap } from "./text.ts";
+import { breaks, FONT, LINE, type Measure, SMALL, SMALL_LINE, wrap } from "./text.ts";
 import { MARKER_LENGTH } from "./markers.ts";
 import { smallSize } from "./labels.ts";
 
@@ -31,6 +31,19 @@ export const TITLE_TOP = 9;
 /** ELK's spacing between elements, and between a wire and an element; the geometry passes keep both. */
 export const NODE_SPACING = 32,
   EDGE_SPACING = 18;
+
+/**
+ * A note's text is small, as UML notes are, and breaks at NOTE_WRAP unless the source sizes the note.
+ * The note keeps NOTE_SIDES beside its text (the inset on the left, the folded corner on the right) and
+ * NOTE_ENDS above and below it.
+ */
+export const NOTE_WRAP = 200,
+  NOTE_SIDES = 26,
+  NOTE_ENDS = 14;
+
+/** The lines of a note's text, broken where the author breaks them and where they grow wider than `width`. */
+export const noteLines = (text: string, width: number, measure: Measure) =>
+  breaks(text).flatMap((line) => wrap(line, width, SMALL, 400, measure));
 
 /** Wire ends on an element's side sit this far apart; a leaf grows along the side so they fit. */
 const WIRE_SPACING = 18;
@@ -131,7 +144,7 @@ export function tamGraph(source: TamDiagram, measure: Measure, options: LayoutOp
     const node = diagram.nodes.get(id)!,
       siblings = node.parent ? diagram.nodes.get(node.parent)!.children : diagram.roots,
       index = siblings.indexOf(id);
-    const real = (other: string) => diagram.nodes.get(other)!.kind !== "dots";
+    const real = (other: string) => !["dots", "note"].includes(diagram.nodes.get(other)!.kind);
     return siblings.slice(0, index).some(real) && siblings.slice(index + 1).some(real);
   };
   // Connections per element: a leaf grows along the side where they arrive, so their ends (and arrowheads) keep apart.
@@ -184,8 +197,10 @@ export function tamGraph(source: TamDiagram, measure: Measure, options: LayoutOp
     const container = children.length > 0;
     const row = id.endsWith("#row");
     const weight = container ? 600 : 400;
-    const lines =
-      node.label && node.kind !== "interface"
+    const note = node.kind === "note";
+    const lines = note
+      ? noteLines(node.label, Math.max(NOTE_WRAP, (node.at?.width ?? 0) - NOTE_SIDES), measure)
+      : node.label && node.kind !== "interface"
         ? // A name runs as wide as the size the source gives its element.
           wrap(
             node.label,
@@ -195,7 +210,10 @@ export function tamGraph(source: TamDiagram, measure: Measure, options: LayoutOp
             measure,
           )
         : [];
-    const textWidth = Math.max(0, ...lines.map((line) => measure(line, FONT, weight)));
+    const textWidth = Math.max(
+      0,
+      ...lines.map((line) => measure(line, note ? SMALL : FONT, note ? 400 : weight)),
+    );
     shapes.set(id, { node, lines, textWidth, container, depth });
     const extra = node.stack ? SHADOW : 0;
     if (container) {
@@ -460,6 +478,10 @@ export function tamGraph(source: TamDiagram, measure: Measure, options: LayoutOp
       const flipped = start !== edge.source;
       connect(`${edge.id}:a`, edge.source, id, [], true, flipped);
       connect(`${edge.id}:b`, id, edge.target, [], true, flipped);
+    } else if (edge.kind === "anchor") {
+      // ELK lays a note out a layer beyond the element it remarks on, so the note stands next to it.
+      const note = diagram.nodes.get(edge.source)!.kind === "note";
+      connect(edge.id, edge.source, edge.target, [], true, note);
     } else {
       const labels = edge.label
         ? [
@@ -504,6 +526,12 @@ export function leafSize(
 ): { width: number; height: number } {
   const text = lines.length * LINE;
   switch (node.kind) {
+    // A note is as large as its small text, as UML notes are.
+    case "note":
+      return {
+        width: Math.max(40, Math.ceil(textWidth) + NOTE_SIDES),
+        height: Math.max(1, lines.length) * SMALL_LINE + NOTE_ENDS,
+      };
     case "human":
       return lines.length
         ? { width: Math.max(76, textWidth + 2 * PAD), height: 38 + text + 10 }

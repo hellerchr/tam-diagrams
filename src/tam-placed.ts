@@ -228,8 +228,10 @@ export function placeElements(prepared: TamGraph, measure: Measure): PlacedEleme
       } else if (item.kind === "dots") {
         // Between the elements declared before and after it, or past the one it follows.
         const index = ids.indexOf(id);
-        const before = ids.slice(0, index).findLast((other) => boxes.has(other)),
-          after = ids.slice(index + 1).find((other) => boxes.has(other));
+        // Notes stand beside the elements they remark on and are no neighbours of the dots.
+        const real = (other: string) => boxes.has(other) && node(other).kind !== "note";
+        const before = ids.slice(0, index).findLast(real),
+          after = ids.slice(index + 1).find(real);
         const beside = before ?? after;
         if (!beside) continue;
         const box = boxes.get(beside)!,

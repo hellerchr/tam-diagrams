@@ -54,6 +54,9 @@ img.src = svgUrl(svg);
   web workers; `url` is where elkjs's `lib/elk-worker.min.js` is served (with Vite:
   `import url from "elkjs/lib/elk-worker.min.js?url"`).
 - **Caching.** Layouts are cached by source and font, so a theme change only redraws.
+- **Rounded connectors.** With `rounded: true` in the colors, connections bend round at their
+  corners, as draw.io draws them; without it their corners are square. `exportDrawio` takes the same
+  `rounded` option.
 - **Showing the result.** `svgUrl(svg)` gives a `data:` URL for an `<img>`; never insert the SVG into
   the page.
 - **Text metrics.** Rendering measures text with a canvas. Without one (Node), pass
@@ -69,7 +72,7 @@ package needs one of the others, or the command line, which runs from the bundle
 
 `npm run editor` serves a diagram editor (`npm run build:editor` writes it as a static page to
 `dist/editor`). It edits every diagram type on a canvas: TAM block diagrams with elements placed by
-hand, and the UML types (class, use case, activity with and without lanes, state machine, sequence,
+hand, and the UML types (class, use case, activity with lanes or without, state machine, sequence,
 entity relationship)
 by their structure, with the layout automatic until a part is moved.
 A first visit shows a sample block diagram and a note that says what to try. *File ▸ New* opens a
@@ -94,7 +97,9 @@ selected connection changes its kind there or in the Properties section. A doubl
 part or labels a connection; Delete removes what is selected with its connections. A class lists its
 members in the Properties section; an entity lists its attributes there, and a relationship says how
 many of each entity it joins (exactly one, zero or one, one or more, zero or more) and whether it
-identifies.
+identifies. An activity diagram is one type with lanes or without: the first lane added turns its
+`flowchart` header into `swimlane-beta`, removing the last lane turns it back, and lanes and groups
+do not mix, so the piece that does not fit is off with the reason.
 
 The source pane colors every type's syntax and completes it in context: statements and ids at the
 start of a line, the relations a part can start, the parts a relation can reach, members inside a
@@ -125,6 +130,12 @@ both download. *Export* opens a dialog with a preview: SVG or PNG, the PNG at on
 per unit, on white, on nothing, or in the colors of the editor's theme. A picture is exported in
 the light colors unless the theme is asked for, so one made in the dark theme reads on a white page.
 
+*View ▸ Rounded connectors* bends connections round at their corners, in the picture and in what
+is exported; the choice is remembered. *Export ▸ Export draw.io* downloads the diagram as a
+`.drawio` file, and *File ▸ Open* takes a
+draw.io file (`.drawio`, `.drawio.svg`) as well: see [draw.io](#drawio). Saving a diagram opened
+from draw.io writes its source beside the file, never over it.
+
 The document is the TAM source, shown beside the canvas and editable there: every gesture is an edit
 of that text, and every other line stays as its author wrote it. A source without positions is laid
 out automatically, as everywhere else; moving an element writes a position for every element
@@ -132,6 +143,45 @@ out automatically, as everywhere else; moving an element writes a position for e
 of a UML diagram are moved the same way, with the same snapping, arrow keys and alignment: the first
 move writes a place for every part (`%% @id x,y` at the end of the source), a part dropped onto a
 group moves into it, and the participants of a sequence diagram move along their row.
+
+## draw.io
+
+TAM block diagrams, activity diagrams (flowchart and swimlane), state machine diagrams and sequence
+diagrams go to [draw.io](https://www.drawio.com) and back. An exported diagram is laid out as here
+and drawn with the shapes of the TAM libraries for draw.io, [f-m-c/TAMshapes](https://github.com/f-m-c/TAMshapes)
+(TAM-BD, TAM-AD, TAM-SeqD, TAM-Ann and the State shape): agents are rectangles and storages rounded
+rectangles, a channel is a connector with a circle and the request marker "R ▸" on it, a human
+agent holds a stick figure, containers hold their parts. Opening the TAMshapes libraries in draw.io
+(*File ▸ Open Library*) gives the same shapes to go on drawing with; the file needs no plugin.
+
+An imported page becomes a source that places every part where the page shows it (`@x,y WxH` in a
+block diagram, `%% @id x,y` in the Mermaid types; a sequence diagram keeps its order instead), so
+the layout made in draw.io survives. It is rebuilt from the drawing: comments and the order of the
+old source are not kept. Parts are read by their picture: a diagram drawn by hand with the TAMshapes
+libraries reads as well as one exported here. An element inside another's box belongs to it
+whether or not draw.io nests it; a connector between an agent and a storage is an access whose
+arrows say whether it reads, writes or both, and the TAM-BD modifying access set between the two is
+one too; a channel's R says which way requests go; a dashed border across a channel names its
+protocol; a text beside a connection or a stick figure names it; an arrow end dropped beside a
+shape belongs to the shape it is nearest. The shapes of the
+[tam-drawio](https://github.com/ariel-bentu/tam-drawio) plugin are read as well (its agents,
+stacks, actors, channels with their R, accesses, queues and dots). The files in
+`test/fixtures/drawio` were made in draw.io itself, the way a user makes them, and the tests check
+that each reads as its picture shows. Every cell an export writes also carries a `tam=<role>`
+key in its style, for what the picture alone leaves open (a Mermaid shape, a protocol, a stack), so
+a file exported here comes back as it went. What a page holds that the diagram has no place for (a
+cloud, a curly brace) is named in a warning and left out; a page that breaks a rule of
+the notation still comes back, with the rule in a warning, to mend in the source. The type of a page
+is the one the export wrote, or else the one its shapes look most like; `importDrawio(text, { kind })`
+says it outright. A page of rounded boxes alone looks like storages to the guess, since TAMshapes
+draws actions and storages alike.
+
+```ts
+import { exportDrawio, importDrawio } from "tam-diagrams/drawio";
+
+const file = await exportDrawio(source); // the editor passes its picture: { scene }
+const { source: again, kind, warnings } = await importDrawio(file);
+```
 
 ## Command line
 
@@ -142,9 +192,15 @@ With the package installed in a project (`npm install --save-dev tam-diagrams`, 
 npx tam-diagrams render diagram.tam -o diagram.svg
 cat diagram.tam | npx tam-diagrams render - > diagram.svg
 npx tam-diagrams check docs/*.tam docs/*.mmd
+npx tam-diagrams convert diagram.tam -o diagram.drawio
+npx tam-diagrams convert diagram.drawio -o diagram.tam
 ```
 
-`render` writes the SVG to the file given with `-o`, or to stdout. `check` reads every file, prints
+`render` writes the SVG to the file given with `-o`, or to stdout; with `--rounded`, `render` and
+`convert` bend connections round at their corners. `convert` turns a source into a
+draw.io file and a draw.io file into its source; `render` and `check` read draw.io files as the
+diagrams they draw, and every command prints what a draw.io page holds that the diagram leaves out
+as `<file>: warning: …` on stderr. `check` reads every file, prints
 nothing when they are valid and a `<file>:<line>: <message>` for each broken file (`<stdin>` for
 `-`). To check diagram sources before each commit, add a local hook to `.pre-commit-config.yaml`:
 
@@ -182,6 +238,8 @@ widths and names that font stack in the SVG, so the picture is exact where those
 - `tam-diagrams/layout`: building blocks for further diagram types (`layoutGraph`, `addWire`,
   `attachEnds`, `hugLabels`, `straightenScene`, `bestScene`, scene helpers, `prepare`, ...) and the
   TAM layout steps (`layoutTam`, `bestLayout`).
+- `tam-diagrams/drawio`: `exportDrawio`, `importDrawio`, `isDrawio`, `exportsToDrawio`,
+  `DrawioError`: diagrams as draw.io files and back (see [draw.io](#drawio)).
 - `tam-diagrams/samples/tam-examples`, `tam-diagrams/samples/uml-examples`: example sources.
 - `tam-diagrams/samples/fuzz`: seeded generators of random diagrams, for tests and stress runs.
 
@@ -229,16 +287,21 @@ agent shop[Web Shop] {
   storage cart[Cart]
 }
 storage db[(Orders)]
+note keep[Kept for ten years]
 customer -- HTTPS --> api
 api -- reads/writes --> cart
 api -- writes --> db
+keep -.- db
 ```
 
 An **agent** (rectangle) does something; a **human** is an agent that is a person. A **storage**
 (rounded) keeps information. Agents talk through **channels** (`a -- protocol --> b`) and use
 storages through **accesses** (`reads`, `writes`, `reads/writes`). A storage is never joined to a
 storage by a flow, only by a `pointer`. Containers draw their parts inside; `group` frames elements.
-`package` elements with `-. use .->` and `-. import .->` make package diagrams.
+`package` elements with `-. use .->` and `-. import .->` make package diagrams. A **note**
+(`note keep[Kept for ten years]`, a box with a folded corner) remarks on an element it is attached to
+by a dotted line, `keep -.- db`; it stands at the top or in any container, holds nothing and takes part
+in no rule of the notation.
 
 The parser enforces the rules of the SAP TAM standard and reports the line of a broken one
 (`test/tam-standard.test.ts` lists them by section):
@@ -285,8 +348,8 @@ api -- reads/writes --> cart
   `agent worker[Worker] ... @450,90 @450,160`. Without it the copy stands beside its original.
 - One position is enough to lay the diagram out by hand; elements without one stand in a row below
   the placed ones of their container, so an element added as text shows up at once.
-- A source without positions is laid out automatically, exactly as before. Positions are the only
-  addition to the syntax; a protocol's `@` (inside a connection) is not one.
+- A source without positions is laid out automatically, exactly as before. A protocol's `@` (inside
+  a connection) is no position.
 
 A Mermaid source places its parts with comment lines, so it stays valid Mermaid. They stand as one
 block at the end of the source:
@@ -397,6 +460,13 @@ classDiagram
 | `cli/diagram.ts`             | Source to SVG with `arialMeasure`: TAM or Mermaid by content; the CLI's colors       |
 | `cli/report.ts`              | Error messages as `<file>:<line>: <message>`                                         |
 | `cli/node-io.ts`             | The I/O port on `node:fs` and the process streams                                    |
+| `src/drawio.ts`              | draw.io export and import: the `tam-diagrams/drawio` entry and the type dispatch     |
+| `src/drawio-file.ts`         | draw.io files: XML, compressed pages, `.drawio.svg`, cells, styles, a page to read   |
+| `src/drawio-shapes.ts`       | The TAMshapes styles, ids, and the geometry from a scene to cells and back           |
+| `src/drawio-tam.ts`          | TAM block diagrams as draw.io pages and back                                         |
+| `src/drawio-activity.ts`     | Activity diagrams (flowchart, swimlane) as draw.io pages and back                    |
+| `src/drawio-state.ts`        | State machine diagrams as draw.io pages and back                                     |
+| `src/drawio-sequence.ts`     | Sequence diagrams as draw.io pages and back                                          |
 | `editor/document.ts`         | The editor's document: the source, its picture, previews and history                 |
 | `editor/editor.ts`           | Selection, tools, gestures on the canvas and the commands of panels and keyboard     |
 | `editor/hit.ts`              | What of a picture lies at a point, in a frame, or under a dragged element            |
@@ -435,4 +505,5 @@ into a temporary directory, and runs it as a process. To stress-test with genera
 
 ## License
 
-MIT
+MIT. The draw.io styles in `src/drawio-shapes.ts` are those of
+[f-m-c/TAMshapes](https://github.com/f-m-c/TAMshapes), under the Apache License 2.0.

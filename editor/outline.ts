@@ -167,7 +167,8 @@ export class Outline {
       label = (part?.label ?? item.label).replace(/<br\s*\/?>/gi, " ").trim();
     if (!part)
       return {
-        icon: item.kind,
+        // A note is drawn as the UML note it is.
+        icon: item.kind === "note" ? "uml-note" : item.kind,
         name: label || item.id.replace(/#.*/, ""),
         kind: kindName(item.kind),
       };

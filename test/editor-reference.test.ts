@@ -20,7 +20,7 @@ import {
 } from "../editor/reference.ts";
 import { type GuideHost, GuideSheet } from "../editor/reference-dialog.ts";
 import { scanSource } from "../editor/syntax.ts";
-import { type DiagramType, TYPES, typeOf } from "../editor/types.ts";
+import { type DiagramType, sameType, TYPES, typeOf } from "../editor/types.ts";
 
 const parse = (guide: Guide, source: string) =>
   guide.type === "tam" ? parseTam(source) : parseUml(source);
@@ -70,7 +70,8 @@ describe("the guides", () => {
         if (item.refused) expect(read, `${guide.type} refuses:\n${source}`).toThrow();
         else {
           expect(read, `${guide.type} reads:\n${source}`).not.toThrow();
-          expect(typeOf(source), source).toBe(guide.type);
+          // A row may be read under another first line of its type: the lanes of an activity.
+          expect(sameType(typeOf(source), guide.type), source).toBe(true);
         }
       }
     },
@@ -223,6 +224,22 @@ describe("the guides and the completion", () => {
   );
 });
 
+describe("the activity guide", () => {
+  it("is the guide of activity diagrams with lanes and without, and reads its lanes under `swimlane-beta`", () => {
+    const guide = guideOf("flowchart")!;
+    expect(guideOf("swimlane")).toBe(guide);
+    expect(GUIDES.filter((item) => item.name.startsWith("Activity"))).toEqual([guide]);
+    const lanes = guide.sections.find((section) => section.id === "lanes")!;
+    expect(lanes.rules!.join(" ")).toContain("Lanes and groups do not mix");
+    for (const item of lanes.rows!)
+      expect(typeOf(rowSource(guide, lanes, item)), item.write).toBe("swimlane");
+    const refused = guide.sections.find((section) => section.id === "refused")!;
+    expect(
+      refused.rows!.filter((item) => typeOf(rowSource(guide, refused, item)) === "swimlane"),
+    ).toHaveLength(2);
+  });
+});
+
 describe("the guides as pages", () => {
   const folder = join(process.cwd(), "docs", "guides"),
     page = (type: string) => join(folder, `${type}.md`);
@@ -250,6 +267,7 @@ describe("the guides as pages", () => {
     expect(guideMarkdown("flowchart")).toContain("| `a -->\\|yes\\| b` |");
     expect(guideMarkdown("class")).toContain("| `` class `Order Item` `` |");
     expect(guideOf("nothing")).toBeUndefined();
+    expect(guideMarkdown("flowchart")).toContain("## Lanes");
     expect(() => guideMarkdown("nothing")).toThrow();
   });
 });

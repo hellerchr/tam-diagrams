@@ -28,13 +28,19 @@ const ABOUT: Record<string, string> = {
   class: "design level: a class",
   package: "a package of a package diagram",
   group: "a frame around elements",
+  note: "a remark, attached to an element with -.-",
 };
 
-/** Whether an element of a kind acts, keeps information, or is a person. */
-const acts = (kind: string) => kind !== "storage" && kind !== "package";
+/**
+ * The kinds the editor offers: block diagrams are drawn at TAM's conceptual level. A source that
+ * declares components, subsystems, classes or packages still reads and draws.
+ */
+const CONCEPTUAL = new Set(["agent", "human", "storage", "group", "note"]);
+
+/** Whether an element of a kind acts, keeps information, or is a person; a note does none of these. */
+const acts = (kind: string) => kind !== "storage" && kind !== "package" && kind !== "note";
 const talks = (kind: string) => kind === "agent" || kind === "human" || kind === "group";
 const keeps = (kind: string) => kind === "storage" || kind === "group";
-const design = (kind: string) => kind === "component" || kind === "subsystem" || kind === "class";
 
 /** The connections of the notation: what is typed after the first element, who can start one, and what it says. */
 const CONNECTIONS: { text: string; about: string; from: (kind: string) => boolean }[] = [
@@ -45,28 +51,13 @@ const CONNECTIONS: { text: string; about: string; from: (kind: string) => boolea
   { text: "-- reads --> ", about: "read access to a storage", from: acts },
   { text: "-- writes --> ", about: "write access to a storage", from: acts },
   { text: "-- reads/writes --> ", about: "modifying (read/write) access", from: acts },
-  {
-    text: "-- requires ${IName} --> ",
-    about: "requires the interface of",
-    from: (kind) => acts(kind) && kind !== "human",
-  },
-  { text: "-- delegates --> ", about: "delegation to a part", from: acts },
-  {
-    text: "provides ${IName}",
-    about: "provided interface",
-    from: (kind) => acts(kind) && kind !== "human",
-  },
-  {
-    text: "requires ${IName}",
-    about: "required interface",
-    from: (kind) => acts(kind) && kind !== "human",
-  },
   { text: "-. pointer .-> ", about: "reference to another storage", from: keeps },
   { text: "-. create .-> ", about: "creates at run time", from: acts },
   { text: "-. generate .-> ", about: "generates", from: acts },
-  { text: "-. use .-> ", about: "dependency", from: (kind) => design(kind) || kind === "package" },
-  { text: "-. import .-> ", about: "package import", from: (kind) => kind === "package" },
 ];
+
+/** The dotted line that attaches a note to an element: from a note, or to one where the diagram has notes. */
+const ANCHOR = { text: "-.- ", about: "attaches a note to an element" };
 
 /** Which elements a connection word reaches. */
 function reaches(word: string): (kind: string) => boolean {
@@ -148,16 +139,22 @@ export function completeTam(context: CompletionContext, known: Known[]): Complet
     return result(at(match[1].length), [
       ...ranked(
         [
-          ...ELEMENT_KINDS.map((kind) =>
-            filled(kind === "group" ? "group {\n\t${}\n}" : `${kind} \${id}[\${Name}]`, {
-              label: kind,
-              type: `declare-${kind}`,
-              detail: ABOUT[kind],
-            }),
+          ...ELEMENT_KINDS.filter((kind) => CONCEPTUAL.has(kind)).map((kind) =>
+            filled(
+              kind === "group"
+                ? "group {\n\t${}\n}"
+                : kind === "note"
+                  ? "note ${id}[${Text}]"
+                  : `${kind} \${id}[\${Name}]`,
+              {
+                label: kind,
+                type: `declare-${kind}`,
+                detail: ABOUT[kind],
+              },
+            ),
           ),
           option("title", "keyword", "the diagram's title", "title "),
           option("direction", "keyword", "TB, LR, BT or RL", "direction "),
-          option("level", "keyword", "conceptual or design", "level "),
         ],
         30,
       ),
@@ -182,21 +179,27 @@ export function completeTam(context: CompletionContext, known: Known[]): Complet
     byId.has(match[1].split(/\s*&\s*/)[0])
   ) {
     const { kind } = byId.get(match[1].split(/\s*&\s*/)[0])!;
+    const anchors =
+      kind === "note" || known.some((item) => item.kind === "note")
+        ? [{ ...ANCHOR, from: () => true }]
+        : [];
     return result(
       at(match[2].length),
       // In the order of the notation, not of the alphabet.
       ranked(
-        CONNECTIONS.filter((item) => item.from(kind)).map((item) =>
-          filled(item.text, {
-            label: item.text.replace(/\$\{(\w+)\}/g, "$1").trim(),
-            type: "connection",
-            detail: item.about,
-          }),
-        ),
+        [...CONNECTIONS, ...anchors]
+          .filter((item) => item.from(kind))
+          .map((item) =>
+            filled(item.text, {
+              label: item.text.replace(/\$\{(\w+)\}/g, "$1").trim(),
+              type: "connection",
+              detail: item.about,
+            }),
+          ),
         50,
       ),
       // Behind a whole arrow the elements it reaches are offered instead.
-      /^(?!.*(-->|---|\.->)\s)[-<.\w/ ]*$/,
+      /^(?!.*(-->|---|\.->|-\.-)\s)[-<.\w/ ]*$/,
     );
   }
   const source = before.match(/^(\w+)/)?.[1],
@@ -211,6 +214,14 @@ export function completeTam(context: CompletionContext, known: Known[]): Complet
   if ((match = before.match(/-\.\s*(\w+)\s*\.->\s*(?:\w+\s*&\s*)*(\w*)$/))) {
     const can = reaches(match[1].toLowerCase());
     return result(at(match[2].length), reached(can));
+  }
+  // After `-.-`: an element reaches the notes, a note the elements.
+  if ((match = before.match(/^\w+\s+-\.-\s*(\w*)$/))) {
+    const note = source !== undefined && byId.get(source)?.kind === "note";
+    return result(
+      at(match[1].length),
+      reached((kind) => (kind === "note") !== note),
+    );
   }
   if ((match = before.match(/^\w+\s+---\s*(\w*)$/)))
     return result(at(match[1].length), reached(talks));

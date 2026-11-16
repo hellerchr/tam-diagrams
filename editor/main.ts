@@ -5,7 +5,14 @@ import type { DiagramColors } from "../src/draw.ts";
 import { elkWorkerPool } from "../src/elk.ts";
 import { textMeasure } from "../src/text.ts";
 import type { Box, Scene } from "../src/scene.ts";
-import { type Backdrop, confirmDialog, exportDialog, type ExportOptions } from "./dialogs.ts";
+import { exportDrawio, importDrawio, isDrawio } from "../src/drawio.ts";
+import {
+  type Backdrop,
+  confirmDialog,
+  exportDialog,
+  type ExportOptions,
+  noticeDialog,
+} from "./dialogs.ts";
 import { Doc } from "./document.ts";
 import { Editor } from "./editor.ts";
 import {
@@ -23,7 +30,7 @@ import {
 } from "./files.ts";
 import type { ThemeChoice } from "./menus.ts";
 import { STARTER } from "./starter.ts";
-import { typeInfo, typeOf } from "./types.ts";
+import { sameType, typeInfo, typeOf } from "./types.ts";
 import { Panels } from "./ui.ts";
 import { View } from "./view.ts";
 
@@ -179,6 +186,8 @@ async function start() {
   const system = matchMedia("(prefers-color-scheme: dark)");
   let choice: ThemeChoice = (stored("theme") as ThemeChoice | null) ?? "system";
   const theme = () => (choice === "system" ? (system.matches ? "dark" : "light") : choice);
+  /** Whether connections bend round at their corners: a choice remembered across visits. */
+  let rounded = stored("rounded") === "1";
   const doc = new Steps(textMeasure(FONT), await elkWorkerPool(elkWorker).catch(() => undefined));
   const view = new View(canvas);
   const editor = new Editor(doc, view, THEMES[theme()].diagram);
@@ -187,7 +196,7 @@ async function start() {
     document.documentElement.dataset.theme = theme();
     // The page color of the diagram, for the small pictures of it elsewhere on the page.
     document.documentElement.style.setProperty("--page", diagram.background);
-    editor.colors = diagram;
+    editor.colors = { ...diagram, rounded };
     editor.accent = accent;
     view.colors = { page: diagram.background, dots };
     editor.refresh();
@@ -265,7 +274,7 @@ async function start() {
       shown = picture?.source === source && !doc.problem;
     // Not the sample, and not a diagram that draws nothing; one with an error is kept to be mended.
     if (!source.trim() || source === STARTER || (shown && !picture.scene.shapes.length)) return;
-    const title = picture?.type === type ? picture.title : undefined;
+    const title = picture && sameType(picture.type, type) ? picture.title : undefined;
     recents = withRecent(recents, {
       title: title || typeInfo(type).name,
       source,
@@ -302,8 +311,34 @@ async function start() {
     panels.toast(notice ?? "The diagram was replaced.", { name: "Undo", run: () => doc.undo() });
     return true;
   };
+  /**
+   * Shows the diagram of a draw.io file as a source that places its parts as the file does. The
+   * file stays as it is: saving writes a source file beside it. What the file holds that a diagram
+   * has no place for is listed.
+   */
+  const openedDrawio = async (name: string, content: string) => {
+    let imported;
+    try {
+      imported = await importDrawio(content);
+    } catch (reason) {
+      return panels.toast(`${name}: ${reason instanceof Error ? reason.message : String(reason)}`);
+    }
+    const { source, warnings } = imported;
+    const notice = `Opened ${name} from draw.io.`;
+    if (source === doc.source) panels.toast(notice);
+    else if (!(await replace(source, false, notice))) return;
+    file = { name: `${stemOf(name.replace(/\.drawio(\.\w+)?$/i, ""))}.${extensionOf(source)}` };
+    editor.refresh();
+    if (warnings.length)
+      noticeDialog(
+        "Read from draw.io, with remarks",
+        `${name} reads as a ${typeInfo(typeOf(source)).name.toLowerCase()}. Some of it needs a look:`,
+        warnings,
+      );
+  };
   /** Shows the diagram of a file, or says why the file has none; the diagram on show then stays. */
   const opened = async (name: string, content: string, handle?: FileHandle) => {
+    if (isDrawio(content)) return openedDrawio(name, content);
     const found = diagramIn(name, content);
     if ("refusal" in found) return panels.toast(found.refusal);
     const notice = found.fenced ? `Opened the first diagram in ${name}.` : `Opened ${name}.`;
@@ -316,7 +351,7 @@ async function start() {
   };
   const picker = document.createElement("input");
   picker.type = "file";
-  picker.accept = ".tam,.mmd,.txt,.md,text/plain";
+  picker.accept = ".tam,.mmd,.txt,.md,.drawio,.xml,.svg,text/plain";
   picker.addEventListener("change", async () => {
     const [chosen] = picker.files ?? [];
     picker.value = "";
@@ -330,6 +365,13 @@ async function start() {
           {
             description: "Diagrams",
             accept: { "text/plain": [".tam", ".mmd", ".md", ".txt"] },
+          },
+          {
+            description: "draw.io diagrams",
+            accept: {
+              "application/vnd.jgraph.mxfile": [".drawio", ".xml"],
+              "image/svg+xml": [".svg"],
+            },
           },
         ],
       });
@@ -347,6 +389,7 @@ async function start() {
     const colors = {
         ...(backdrop === "theme" ? THEMES[theme()] : THEMES.light).diagram,
         font: EXPORT_FONT,
+        rounded,
       },
       svg = doc.svg(colors),
       bounds = doc.picture?.scene.bounds;
@@ -377,6 +420,20 @@ async function start() {
     sheet.getContext("2d")!.drawImage(image, 0, 0, sheet.width, sheet.height);
     sheet.toBlob((blob) => blob && download(`${stem()}.png`, blob), "image/png");
   };
+  /** The diagram as a draw.io file, as it is drawn now, downloaded. */
+  const exportToDrawio = async () => {
+    const shown = doc.picture;
+    if (!shown?.scene.shapes.length)
+      return panels.toast("The diagram is empty: there is nothing to export.");
+    try {
+      const name = `${stem()}.drawio`;
+      const xml = await exportDrawio(shown.source, { scene: shown.scene, rounded });
+      download(name, new Blob([xml], { type: "application/vnd.jgraph.mxfile" }));
+      panels.toast(`${name} was downloaded. It opens in draw.io, drawn with the TAM shapes.`);
+    } catch (reason) {
+      panels.toast(reason instanceof Error ? reason.message : String(reason));
+    }
+  };
   const panels = new Panels(app, stage, editor, {
     openFile: () => void openFile(),
     saveFile: () => void save(),
@@ -400,6 +457,7 @@ async function start() {
         save: (options) => void exportAs(options),
       });
     },
+    exportDrawio: () => void exportToDrawio(),
     copySource: () =>
       void navigator.clipboard.writeText(doc.source).then(
         () => panels.toast("Source copied."),
@@ -419,6 +477,14 @@ async function start() {
     setTheme: (next) => {
       choice = next;
       store("theme", next);
+      applyTheme();
+    },
+    get rounded() {
+      return rounded;
+    },
+    setRounded: (next) => {
+      rounded = next;
+      store("rounded", next ? "1" : "0");
       applyTheme();
     },
     remember: store,
@@ -475,7 +541,7 @@ async function start() {
           { file, saved: saved === null || saved === last },
           doc.step ?? "edit",
         ),
-        other = !!kept || typeOf(last) !== typeOf(doc.source);
+        other = !!kept || !sameType(typeOf(last), typeOf(doc.source));
       last = doc.source;
       // The diagram that comes has its file again, and is saved or is not, as when it left.
       if (kept) {

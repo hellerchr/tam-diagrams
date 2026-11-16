@@ -4,7 +4,7 @@
  */
 
 import type { Structure } from "../src/structure.ts";
-import { flowStructure, swimlaneStructure } from "../src/uml-activity-edit.ts";
+import { activityStructure } from "../src/uml-activity-edit.ts";
 import {
   classStructure,
   duplicateClass,
@@ -40,8 +40,9 @@ import {
 import type { IconName } from "./icons.ts";
 
 const STRUCTURES: Record<string, Structure | undefined> = {
-  flowchart: flowStructure,
-  swimlane: swimlaneStructure,
+  // Activity diagrams with lanes and without are one type: the header says which they are.
+  flowchart: activityStructure,
+  swimlane: activityStructure,
   class: {
     ...classStructure,
     reverse: reverseClassRelation,

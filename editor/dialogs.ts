@@ -10,7 +10,7 @@ import { ageOf, type Recent } from "./files.ts";
 import type { Command } from "./menus.ts";
 import { STARTER } from "./starter.ts";
 import { structureOf } from "./structures.ts";
-import { type DiagramType, TYPES, type TypeInfo, typeInfo, typeOf } from "./types.ts";
+import { type DiagramType, sameType, TYPES, type TypeInfo, typeInfo, typeOf } from "./types.ts";
 
 /** The parts of a dialog below its title: what scrolls when the window is small, and the row of buttons that stays. */
 interface DialogParts {
@@ -138,7 +138,7 @@ const BLOCK_KEYS: SheetGroup[] = [
     "Add and connect",
     [
       ["Drag a shape", "Add it where it is dropped"],
-      [["A", "U", "S", "G"], "Agent, human, storage, group: then click"],
+      [["A", "U", "S", "G", "N"], "Agent, human, storage, group, note: then click"],
       ["Double-click a shape", "Keep the tool to place several; Escape ends it"],
       ["Double-click the canvas", "Add an agent"],
       ["Drag a dot", "Connect to another element; released on the empty canvas, to a new one"],
@@ -381,11 +381,11 @@ const UML_SYNTAX: Record<Exclude<DiagramType, "tam">, SheetRow[]> = {
     ["ship --> done(((End)))", "An activity final node"],
     [
       "subgraph pack [Packing]\n  box[Box it] --> label[Label it]\nend",
-      "A group of activity nodes",
+      "A group of activity nodes; a diagram with lanes has none",
     ],
   ],
   swimlane: [
-    ["swimlane-beta TB", "The first line: an activity with lanes that runs TB or LR"],
+    ["swimlane-beta TB", "The first line: an activity diagram with lanes, running TB or LR"],
     [
       "subgraph Customer\n  start((Start)) --> order(Place Order)\nend",
       "An activity partition with its nodes: an initial node and an action",
@@ -447,6 +447,11 @@ const UML_SYNTAX: Record<Exclude<DiagramType, "tam">, SheetRow[]> = {
   ],
 };
 
+/** The headings of the sheets of the kinds of source a type is also written as. */
+const VARIANT_SHEETS: Partial<Record<DiagramType, string>> = {
+  swimlane: "With lanes",
+};
+
 /** The rows of the syntax sheet of a Mermaid type, in their order. */
 export const syntaxRows = (type: Exclude<DiagramType, "tam">): string[] =>
   UML_SYNTAX[type].map(([code]) => code as string);
@@ -469,7 +474,11 @@ export function syntaxDialog(type: DiagramType) {
     body: [
       sheet(
         [
-          ["Statements", UML_SYNTAX[type]],
+          ["Statements", UML_SYNTAX[info.type as Exclude<DiagramType, "tam">]],
+          ...(info.variants ?? []).map((variant): [string, SheetRow[]] => [
+            VARIANT_SHEETS[variant] ?? variant,
+            UML_SYNTAX[variant as Exclude<DiagramType, "tam">],
+          ]),
           ["Every type", FRONT],
         ],
         true,
@@ -519,6 +528,21 @@ export function confirmDialog(title: string, message: string, action: string): P
       ],
     });
     box.addEventListener("close", () => resolve(answer));
+  });
+}
+
+/** Says what the user should know, as a list under a sentence; closes with its button. */
+export function noticeDialog(title: string, message: string, items: string[]) {
+  const box = dialog("notice", title, {
+    body: [h("p", {}, message), h("ul", {}, ...items.map((item) => h("li", {}, item)))],
+    footer: [
+      h("span", { class: "spacer" }),
+      h(
+        "button",
+        { class: "button primary", type: "button", autofocus: true, onClick: () => box.close() },
+        "OK",
+      ),
+    ],
   });
 }
 
@@ -902,16 +926,6 @@ const THUMBS: Partial<Record<DiagramType, string>> = {
   check -->|yes| ship[Ship order]
   check -->|no| wait[Wait]
   ship --> done(((End)))`,
-  swimlane: `swimlane-beta LR
-  subgraph Customer
-    start((Start)) --> order(Place Order)
-    receive(Receive Goods) --> stop(((End)))
-  end
-  subgraph Shop
-    check(Check Order) --> ship(Ship Goods)
-  end
-  order --> check
-  ship --> receive`,
   state: `stateDiagram-v2
   direction LR
   [*] --> Draft
@@ -975,7 +989,7 @@ export function startsOf(info: TypeInfo, recents: Recent[]): Start[] {
   return [
     ...first,
     ...recents
-      .filter((recent) => typeOf(recent.source) === info.type && !known.has(recent.source))
+      .filter((recent) => sameType(typeOf(recent.source), info.type) && !known.has(recent.source))
       .map((recent): Start => ({
         name: recent.title,
         source: recent.source,
@@ -994,7 +1008,7 @@ export function startsOf(info: TypeInfo, recents: Recent[]): Start[] {
 export function chooser(host: ChooserHost) {
   const existing = document.querySelector<HTMLDialogElement>("dialog.chooser");
   if (existing) return;
-  let type = host.current,
+  let type = typeInfo(host.current).type,
     source = "",
     turn = 0;
   const starts = h("div", { class: "starts", role: "listbox", "aria-label": "Start from" });

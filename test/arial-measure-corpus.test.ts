@@ -12,7 +12,7 @@ const measure = { measure: arialMeasure };
 // The sample diagrams were tuned with the canvas-less estimate; real widths move every layout.
 describe("sample diagrams with the Arial width table", () => {
   it("covers the whole corpus", () => {
-    expect(tam.length + uml.length).toBe(87);
+    expect(tam.length + uml.length).toBe(88);
   });
 
   it.each(tam)("lays out TAM %s without defects", async (_name, source) => {

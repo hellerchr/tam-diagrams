@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mix } from "../src/draw.ts";
+import { mix, roundedPath } from "../src/draw.ts";
 import { renderTam } from "../src/tam-layout.ts";
 import { colors } from "./fixtures.ts";
 
@@ -40,5 +40,41 @@ describe("mix", () => {
       text: "#111",
     });
     expect(picture.svg).not.toContain("NaN");
+  });
+});
+
+describe("rounded connectors", () => {
+  it("bends a polyline round at its corners, and leaves straight runs straight", () => {
+    expect(
+      roundedPath([
+        { x: 0, y: 0 },
+        { x: 100, y: 0 },
+        { x: 100, y: 100 },
+      ]),
+    ).toBe("M0 0L90 0Q100 0 100 10L100 100");
+    // A short leg takes half its length; a point on a straight run is no corner.
+    expect(
+      roundedPath([
+        { x: 0, y: 0 },
+        { x: 50, y: 0 },
+        { x: 100, y: 0 },
+        { x: 100, y: 8 },
+      ]),
+    ).toBe("M0 0L50 0L96 0Q100 0 100 4L100 8");
+  });
+
+  it("rounds the wires of a picture when the colors ask for it, and only then", async () => {
+    // Placed apart diagonally, so the wires turn corners.
+    const source =
+      "agent a[A] @0,0\nagent b[B] @240,160\nstorage s[S] @0,320\na -- calls --> b\nb -- reads --> s";
+    const square = (await renderTam(source, colors)).svg,
+      rounded = (await renderTam(source, { ...colors, rounded: true })).svg;
+    const wires = (svg: string) =>
+      [...svg.matchAll(/<path d="([^"]*)" fill="none" stroke="[^"]*" stroke-width="1\.3"/g)].map(
+        (m) => m[1],
+      );
+    expect(wires(square).some((d) => d.includes("Q"))).toBe(false);
+    expect(wires(rounded).some((d) => d.includes("Q"))).toBe(true);
+    expect(wires(rounded)).toHaveLength(wires(square).length);
   });
 });

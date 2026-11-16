@@ -1,11 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { parseFlowchart } from "../src/uml-activity.ts";
 import {
+  activityRefusal,
+  activityStructure,
   addFlowPiece,
   attachFlow,
   connectFlow,
   duplicateFlowNode,
-  flowStructure,
   groupFlowNodes,
   insertFlowOnEdge,
   isGeneratedFlowId,
@@ -19,7 +20,6 @@ import {
   restrokeFlow,
   retitleFlow,
   reverseFlow,
-  swimlaneStructure,
   ungroupFlow,
 } from "../src/uml-activity-edit.ts";
 import { FLOWCHART_EXAMPLES, SWIMLANE_EXAMPLES } from "../src/samples/uml-examples.ts";
@@ -132,10 +132,10 @@ describe("editing an activity diagram as text", () => {
 
 describe("an activity diagram as a structure", () => {
   it("reads parts and joins under the ids of the scene, and edits through one interface", async () => {
-    const { flowStructure } = await import("../src/uml-activity-edit.ts");
+    const { activityStructure } = await import("../src/uml-activity-edit.ts");
     const { parseUml } = await import("../src/index.ts");
     const { arialMeasure } = await import("../src/arial-measure.ts");
-    const { nodes, edges } = flowStructure.read(FLOW);
+    const { nodes, edges } = activityStructure.read(FLOW);
     expect(nodes.map((node) => `${node.id}:${node.kind}:${node.parent}`)).toEqual([
       "start:start:null",
       "check:decision:null",
@@ -152,10 +152,10 @@ describe("an activity diagram as a structure", () => {
       wires = new Set(scene.wires.map((wire) => wire.edge));
     for (const node of nodes) expect(shapes.has(node.id), node.id).toBe(true);
     for (const edge of edges) expect(wires.has(edge.id), edge.id).toBe(true);
-    const dotted = flowStructure.relink(FLOW, "e4", "dotted");
+    const dotted = activityStructure.relink(FLOW, "e4", "dotted");
     expect(dotted).toContain("  wait -.-> check\n");
     expect(
-      flowStructure.read(flowStructure.connect(FLOW, "wait", "done", "thick")).edges.at(-1),
+      activityStructure.read(activityStructure.connect(FLOW, "wait", "done", "thick")).edges.at(-1),
     ).toMatchObject({
       source: "wait",
       target: "done",
@@ -403,8 +403,8 @@ describe("edges of an activity diagram", () => {
 
   it("does not join twice what is joined", () => {
     expect(connectFlow(FLOW, "wait", "check")).toBe(FLOW);
-    expect(flowStructure.connect(FLOW, "ship", "done")).toBe(FLOW);
-    expect(edges(flowStructure.connect(FLOW, "ship", "done", "dotted"))).toHaveLength(8);
+    expect(activityStructure.connect(FLOW, "ship", "done")).toBe(FLOW);
+    expect(edges(activityStructure.connect(FLOW, "ship", "done", "dotted"))).toHaveLength(8);
     expect(edges(connectFlow(FLOW, "check", "wait"))).toHaveLength(7);
     expect(edges(connectFlow(FLOW, "check", "wait", "maybe"))).toHaveLength(8);
     // A lane is no end of a flow.
@@ -589,7 +589,7 @@ describe("restructuring an activity diagram", () => {
     expect(reverseFlow("flowchart LR\n  a --> a", "e1")).toBe("flowchart LR\n  a --> a");
     expect(reverseFlow(FLOW, "e99")).toBe(FLOW);
     expect(reverseFlow(FLOW, "ship")).toBe(FLOW);
-    expect(flowStructure.reverse!(FLOW, "e4")).toContain("  check --> wait\n");
+    expect(activityStructure.reverse!(FLOW, "e4")).toContain("  check --> wait\n");
   });
 
   it("copies a node beside it, without its flows", () => {
@@ -627,7 +627,7 @@ describe("restructuring an activity diagram", () => {
       "  paidFor{Paid for?}",
     );
     expect(retitleFlow(copy.source, "check", "Paid for?").id).toBe("check");
-    expect(flowStructure.copy!(FLOW, "wait").id).toBe("wait2");
+    expect(activityStructure.copy!(FLOW, "wait").id).toBe("wait2");
   });
 
   it("gives a node or a subgraph another id at every mention", () => {
@@ -669,7 +669,7 @@ describe("restructuring an activity diagram", () => {
       "flowchart LR\n  subgraph\n    a\n  end",
     );
     expect(renameFlowId(FLOW, "wait", "warte-zeit")).toContain("warte-zeit --> check");
-    expect(flowStructure.reid!(FLOW, "wait", "hold")).toContain("hold --> check");
+    expect(activityStructure.reid!(FLOW, "wait", "hold")).toContain("hold --> check");
   });
 
   it("moves a node into a subgraph or lane and out of it", () => {
@@ -769,7 +769,7 @@ describe("restructuring an activity diagram", () => {
     const [, loose] = SWIMLANE_EXAMPLES.find(([name]) => name.includes("loose nodes"))!;
     expect(parentOf(moveFlowInto(loose, "a", null), "a")).toBeNull();
     expect(parentOf(moveFlowInto(loose, "review", "Team"), "review")).toBe("Team");
-    expect(flowStructure.moveInto!(LANES, "order", "Shop")).toBe(
+    expect(activityStructure.moveInto!(LANES, "order", "Shop")).toBe(
       moveFlowInto(LANES, "order", "Shop"),
     );
   });
@@ -821,7 +821,7 @@ describe("restructuring an activity diagram", () => {
     expect(edges(freed).toSorted()).toEqual(edges(shared).toSorted());
     expect(ungroupFlow(FLOW, "wait")).toBe(FLOW);
     expect(ungroupFlow(FLOW, "nothing")).toBe(FLOW);
-    expect(flowStructure.ungroup!(FLOW, "part")).not.toContain("subgraph");
+    expect(activityStructure.ungroup!(FLOW, "part")).not.toContain("subgraph");
   });
 
   it("wraps nodes in a new subgraph", () => {
@@ -925,7 +925,7 @@ describe("restructuring an activity diagram", () => {
     expect(inner.edge).toBe("e6");
     expect(parseFlowchart(inner.source).edges[5]).toMatchObject({ source: "y", target: "x" });
     expect(joinFlow(FLOW, "wait", "check")).toEqual({ source: FLOW, edge: "" });
-    expect(flowStructure.join!(FLOW, "y", "x", "dotted").edge).toBe("e6");
+    expect(activityStructure.join!(FLOW, "y", "x", "dotted").edge).toBe("e6");
     expect(parseFlowchart(joinFlow(FLOW, "y", "x", "flow", "back").source).edges[5].label).toBe(
       "back",
     );
@@ -1000,32 +1000,110 @@ describe("restructuring an activity diagram", () => {
   });
 });
 
+describe("an activity diagram with lanes and without", () => {
+  const PLAIN = `---
+title: Shipping
+---
+%% level design
+flowchart LR
+  start((Start)) --> ship[Ship order]
+  %% the usual way
+  ship --> done(((End)))`;
+
+  it("takes its first lane under a `swimlane-beta` header, keeping the title, the direction and the comments", () => {
+    const { source, id } = activityStructure.add(PLAIN, { kind: "lane", label: "Shop" });
+    expect(id).toBe("lane1");
+    expect(source).toBe(`---
+title: Shipping
+---
+%% level design
+swimlane-beta LR
+  start((Start)) --> ship[Ship order]
+  %% the usual way
+  ship --> done(((End)))
+  subgraph lane1 [Shop]
+  end`);
+    const chart = parseFlowchart(source);
+    expect([chart.kind, chart.direction, chart.title, chart.level]).toEqual([
+      "swimlane",
+      "LR",
+      "Shipping",
+      "design",
+    ]);
+    // The nodes outside the new lane stand in the lane without a name.
+    expect(chart.nodes.get("ship")!.parent).toBeNull();
+    // The places of a layout without lanes go with the header, both ways: the lanes lay out anew.
+    const placed = `${PLAIN}\n%% @start 0,0\n%% @ship 120,0\n`,
+      lanes = activityStructure.add(placed, { kind: "lane" }).source;
+    expect(lanes).not.toContain("%% @");
+    expect(activityStructure.remove(`${lanes}\n%% @ship 40,40\n`, ["lane1"])).toBe(`${PLAIN}\n`);
+    // Other edits keep them.
+    expect(activityStructure.add(placed, { kind: "step" }).source).toContain("%% @ship 120,0");
+  });
+
+  it("is a flowchart again once its last lane goes, removed or ungrouped", () => {
+    const laned = activityStructure.add(PLAIN, { kind: "lane", label: "Shop" }).source;
+    expect(activityStructure.remove(laned, ["lane1"])).toBe(PLAIN);
+    const holding = activityStructure.moveInto!(laned, "ship", "lane1");
+    expect(parseFlowchart(holding).nodes.get("ship")!.parent).toBe("lane1");
+    const flat = activityStructure.ungroup!(holding, "lane1");
+    expect(flat.split("\n")[4]).toBe("flowchart LR");
+    expect(parseFlowchart(flat).nodes.get("ship")!.parent).toBeNull();
+    // With other lanes left the header stays.
+    expect(activityStructure.remove(LANES, ["Shop"]).split("\n")[0]).toBe("swimlane-beta TB");
+    expect(activityStructure.ungroup!(LANES, "Shop").split("\n")[0]).toBe("swimlane-beta TB");
+    // A `graph` header becomes `flowchart` with lanes gone, a `swimlane-beta` one without lanes stays one.
+    const graph = activityStructure.add("graph TD\n  a --> b", { kind: "lane" }).source;
+    expect(graph.split("\n")[0]).toBe("swimlane-beta TD");
+    expect(activityStructure.remove(graph, ["lane1"])).toBe("flowchart TD\n  a --> b");
+    expect(activityStructure.remove("swimlane-beta TB\n  a --> b", ["b"])).toBe(
+      "swimlane-beta TB\n  a",
+    );
+  });
+
+  it("does not mix lanes and groups", () => {
+    expect(activityRefusal(LANES, "group")).toMatch(/^Lanes and groups do not mix: .*add a lane/);
+    expect(activityRefusal(FLOW, "lane")).toMatch(/^Lanes and groups do not mix: .*ungroup/);
+    for (const kind of ["step", "decision", "start", "end", "lane"])
+      expect(activityRefusal(LANES, kind), kind).toBeUndefined();
+    for (const kind of ["step", "decision", "start", "end", "group"])
+      expect(activityRefusal(FLOW, kind), kind).toBeUndefined();
+    expect(activityRefusal(PLAIN, "lane")).toBeUndefined();
+    expect(activityRefusal(PLAIN, "group")).toBeUndefined();
+    expect(activityRefusal("flowchart TB\n  a -->", "lane")).toBeUndefined();
+    expect(activityStructure.refusal).toBe(activityRefusal);
+    // What is refused is not added.
+    expect(activityStructure.add(LANES, { kind: "group" })).toEqual({ source: LANES, id: "" });
+    expect(activityStructure.add(FLOW, { kind: "lane" })).toEqual({ source: FLOW, id: "" });
+    // A `swimlane-beta` source without lanes takes a group as a flowchart.
+    const grouped = activityStructure.add("swimlane-beta TB\n  a --> b", { kind: "group" });
+    expect(grouped.source).toBe("flowchart TB\n  a --> b\n  subgraph group1 [Group]\n  end");
+  });
+});
+
 describe("lanes of a swimlane", () => {
   it("are parts of their own kind", () => {
-    expect(swimlaneStructure.pieces.map((piece) => piece.kind)).toEqual([
+    expect(activityStructure.pieces.map((piece) => piece.kind)).toEqual([
       "step",
       "decision",
       "start",
       "end",
       "lane",
+      "group",
     ]);
-    expect(swimlaneStructure.pieces.at(-1)).toMatchObject({ name: "Lane", group: true });
-    expect(flowStructure.pieces.at(-1)).toMatchObject({ kind: "group", name: "Group" });
+    expect(activityStructure.pieces[4]).toMatchObject({ name: "Lane", group: true });
+    expect(activityStructure.pieces[5]).toMatchObject({ name: "Group", group: true });
     const kinds = (source: string) =>
-      flowStructure
+      activityStructure
         .read(source)
         .nodes.filter((node) => node.group)
         .map((node) => node.kind);
     expect(kinds(LANES)).toEqual(["lane", "lane"]);
     expect(kinds(FLOW)).toEqual(["group"]);
-    expect(swimlaneStructure.read(LANES)).toEqual(flowStructure.read(LANES));
-    // A lane is added as a lane, whatever the piece is called.
-    const lane = swimlaneStructure.add(LANES, { kind: "lane" });
+    const lane = activityStructure.add(LANES, { kind: "lane" });
     expect(lane.id).toBe("lane1");
     expect(lane.source).toContain("  end\n  subgraph lane1 [Lane]\n  end\n  order --> check");
-    expect(flowStructure.add(LANES, { kind: "group" })).toEqual(lane);
-    expect(swimlaneStructure.retitle!(lane.source, "lane1", "Bank")).toMatchObject({ id: "Bank" });
-    expect(flowStructure.add(FLOW, { kind: "lane" }).id).toBe("group1");
+    expect(activityStructure.retitle!(lane.source, "lane1", "Bank")).toMatchObject({ id: "Bank" });
   });
 
   it("take a piece when they hold nothing, and leave one beside a node in no lane where it is", () => {
@@ -1145,7 +1223,7 @@ describe.each([...FLOWCHART_EXAMPLES, ...SWIMLANE_EXAMPLES])(
       const scene = await parseUml(result).layout(arialMeasure),
         shapes = new Set(scene.shapes.map((shape) => shape.id)),
         wires = new Set(scene.wires.map((wire) => wire.edge)),
-        read = flowStructure.read(result);
+        read = activityStructure.read(result);
       for (const node of read.nodes)
         if (!node.group) expect(shapes.has(node.id), `${hint} ${node.id}`).toBe(true);
       // A flow that only says where its ends stand is not drawn.

@@ -18,6 +18,8 @@ export interface DiagramColors {
   series: string[];
   font: string;
   dark: boolean;
+  /** Connections bend round at their corners, as draw.io rounds them; square corners without it. */
+  rounded?: boolean;
 }
 
 /** `#rgb` as `#rrggbb`; throws for any other color. */
@@ -82,6 +84,56 @@ function tint(colors: DiagramColors, name: string, weight: number): string {
     : mix(colors.series[SERIES[name]] ?? colors.series[0], colors.background, weight);
 }
 
+/** How far a rounded corner reaches along each leg, as draw.io rounds connectors (arcSize 20). */
+const CORNER = 10;
+
+/**
+ * A polyline with its corners bent round: each corner becomes a curve that starts and ends CORNER
+ * along its legs, or halfway along a shorter leg; straight runs through a point stay straight.
+ */
+export function roundedPath(points: Point[]): string {
+  if (points.length < 3)
+    return points.map((p, i) => `${i ? "L" : "M"}${round1(p.x)} ${round1(p.y)}`).join("");
+  let d = `M${round1(points[0].x)} ${round1(points[0].y)}`;
+  for (let i = 1; i < points.length - 1; i++) {
+    const [p, q, n] = [points[i - 1], points[i], points[i + 1]];
+    const before = Math.hypot(q.x - p.x, q.y - p.y),
+      after = Math.hypot(n.x - q.x, n.y - q.y);
+    const turn = (q.x - p.x) * (n.y - q.y) - (q.y - p.y) * (n.x - q.x);
+    if (!before || !after || Math.abs(turn) < 0.01 * before * after) {
+      d += `L${round1(q.x)} ${round1(q.y)}`;
+      continue;
+    }
+    const radius = Math.min(CORNER, before / 2, after / 2);
+    const a = {
+        x: q.x - ((q.x - p.x) / before) * radius,
+        y: q.y - ((q.y - p.y) / before) * radius,
+      },
+      b = { x: q.x + ((n.x - q.x) / after) * radius, y: q.y + ((n.y - q.y) / after) * radius };
+    d += `L${round1(a.x)} ${round1(a.y)}Q${round1(q.x)} ${round1(q.y)} ${round1(b.x)} ${round1(b.y)}`;
+  }
+  const last = points.at(-1)!;
+  return `${d}L${round1(last.x)} ${round1(last.y)}`;
+}
+
+/** The fill of a shape in a theme: a color tints leaves lightly and containers one step deeper per level, as their neutral shades do. */
+export function shapeFill(shape: SceneShape, colors: DiagramColors): string {
+  const tone = tones(colors);
+  return shape.fill === "page"
+    ? shape.color
+      ? tint(colors, shape.color, colors.dark ? 0.3 : 0.16)
+      : colors.background
+    : shape.fill === "shade"
+      ? shape.color
+        ? tint(colors, shape.color, (colors.dark ? 0.2 : 0.12) + 0.06 * shape.depth)
+        : tone.shade(shape.depth)
+      : shape.fill === "strong"
+        ? tone.strong
+        : shape.fill === "ink"
+          ? tone.ink
+          : "none";
+}
+
 /**
  * Draws a scene as standalone SVG in the house style of TAM block diagrams:
  * shapes on the page color with ink outlines, containers one shade deeper per level, darker wires,
@@ -96,21 +148,7 @@ export function drawScene(
 ): string {
   const tone = tones(colors);
   const { ink, line, boundary } = tone;
-  // A color tints leaves lightly and containers one step deeper per level, as their neutral shades do.
-  const fillOf = (shape: SceneShape) =>
-    shape.fill === "page"
-      ? shape.color
-        ? tint(colors, shape.color, colors.dark ? 0.3 : 0.16)
-        : colors.background
-      : shape.fill === "shade"
-        ? shape.color
-          ? tint(colors, shape.color, (colors.dark ? 0.2 : 0.12) + 0.06 * shape.depth)
-          : tone.shade(shape.depth)
-        : shape.fill === "strong"
-          ? tone.strong
-          : shape.fill === "ink"
-            ? ink
-            : "none";
+  const fillOf = (shape: SceneShape) => shapeFill(shape, colors);
   // The color behind a point: the innermost filled container around it, or the page.
   const containers = scene.shapes
     .filter((shape) => shape.container && shape.fill !== "none")
@@ -358,6 +396,8 @@ export function drawScene(
     points
       .map((point, index) => `${index ? "L" : "M"}${round1(point.x)} ${round1(point.y)}`)
       .join("");
+  /** A wire's path: a polyline, its corners bent round when the colors ask for it. */
+  const wirePath = (points: Point[]) => (colors.rounded ? roundedPath(points) : polyline(points));
   const lineColors = { ink, line, boundary };
 
   // Paint order: containers outside-in, lines, wires, leaves, markers, text on top.
@@ -372,7 +412,7 @@ export function drawScene(
     ),
     ...scene.wires.map(
       (wire) =>
-        `<path d="${wire.path ?? polyline(trimmed(wire))}" fill="none" stroke="${line}" stroke-width="${wire.thick ? 2.6 : 1.3}"${wire.dashed ? ' stroke-dasharray="5 4"' : ""} stroke-linejoin="round"/>`,
+        `<path d="${wire.path ?? wirePath(trimmed(wire))}" fill="none" stroke="${line}" stroke-width="${wire.thick ? 2.6 : 1.3}"${wire.dashed ? ' stroke-dasharray="5 4"' : ""} stroke-linejoin="round"/>`,
     ),
     ...scene.shapes.filter((shape) => !shape.container).map(shapeSvg),
     ...scene.markers.map((marker) =>

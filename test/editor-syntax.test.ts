@@ -78,6 +78,16 @@ describe("the tokenizers of the source pane", () => {
       "db:variableName",
     ]);
     expect(tokens("tam", "title Order system")).toEqual(["title:keyword", "Order system:string"]);
+    expect(tokens("tam", "note vat[Remember VAT]")).toEqual([
+      "note:keyword",
+      "vat:variableName",
+      "[Remember VAT]:string",
+    ]);
+    expect(tokens("tam", "vat -.- api")).toEqual([
+      "vat:variableName",
+      "-.-:operator",
+      "api:variableName",
+    ]);
   });
 
   it("colors frontmatter, comments and directives of every Mermaid type", () => {

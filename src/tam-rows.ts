@@ -52,6 +52,11 @@ export function expandMultiples(diagram: TamDiagram, ids: string[]) {
   }
   const edges: TamEdge[] = [];
   for (const edge of diagram.edges) {
+    // A note remarks on the element, not on each copy.
+    if (edge.kind === "anchor") {
+      edges.push(edge);
+      continue;
+    }
     const sources = copies.get(edge.source) ?? [edge.source],
       targets = copies.get(edge.target) ?? [edge.target];
     // Two multiple ends pair up copy by copy instead of crossing.
@@ -86,10 +91,10 @@ export function rowDots(diagram: TamDiagram) {
     const parent = dots.parent ? diagram.nodes.get(dots.parent)! : null,
       siblings = parent ? parent.children : diagram.roots;
     const index = siblings.indexOf(dots.id);
-    const beforeId = siblings
-        .slice(0, index)
-        .findLast((id) => diagram.nodes.get(id)!.kind !== "dots"),
-      afterId = siblings.slice(index + 1).find((id) => diagram.nodes.get(id)!.kind !== "dots");
+    // Notes stand beside the elements they remark on and are no neighbours of the dots.
+    const real = (id: string) => !["dots", "note"].includes(diagram.nodes.get(id)!.kind);
+    const beforeId = siblings.slice(0, index).findLast(real),
+      afterId = siblings.slice(index + 1).find(real);
     if (!beforeId || !afterId) continue;
     const before = diagram.nodes.get(beforeId)!;
     // Extend the row the left neighbour already belongs to, or start one in its place.
@@ -133,8 +138,12 @@ export function rowPointers(diagram: TamDiagram) {
       b = diagram.nodes.get(edge.target)!;
     const leaf = (node: TamNode) => node.kind === "storage" && !node.children.length;
     if (!leaf(a) || !leaf(b) || a.parent !== b.parent) continue;
-    // Already in a row (around dots): ELK lays the pointer out like any other connection.
-    if (a.parent?.endsWith("#row")) continue;
+    // Already in a row (around dots): they stand side by side, and the pointer is drawn between
+    // them after layout. Given to ELK, it would put one a layer below the other and stretch the row.
+    if (a.parent?.endsWith("#row")) {
+      edge.aside = true;
+      continue;
+    }
     const siblings = a.parent ? diagram.nodes.get(a.parent)!.children : diagram.roots;
     const row: TamNode = {
       id: `pointer#${edge.id}#row`,

@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { arialMeasure } from "../src/arial-measure.ts";
 import { parseUml } from "../src/index.ts";
+import { addElement } from "../src/tam-edit.ts";
+import { parseTam } from "../src/tam.ts";
 import { findCommands, startsOf, syntaxRows, thumbOf } from "../editor/dialogs.ts";
 import { Doc } from "../editor/document.ts";
 import {
@@ -20,7 +22,7 @@ import {
 import type { Command } from "../editor/menus.ts";
 import { type MenuItem, refusal } from "../editor/menu.ts";
 import { STARTER } from "../editor/starter.ts";
-import { TYPES, typeInfo } from "../editor/types.ts";
+import { type DiagramType, sameType, TYPES, typeInfo, typeOf } from "../editor/types.ts";
 import { panTo, wheelZoom, ZOOM_LEVELS, zoomLevel } from "../editor/view.ts";
 
 describe("the name a diagram is saved under", () => {
@@ -425,6 +427,11 @@ describe("the help and the chooser", () => {
       const scene = await parsed.layout(arialMeasure);
       expect(scene.shapes.length, info.name).toBeGreaterThan(1);
       expect(source).not.toContain("…");
+      // The other kinds of source of the type have sheets that read as such: the lanes of an activity.
+      for (const variant of info.variants ?? []) {
+        const rows = syntaxRows(variant as Exclude<DiagramType, "tam">).join("\n");
+        expect(parseUml(rows).kind, variant).toBe(variant);
+      }
     }
   });
 
@@ -467,5 +474,38 @@ describe("the help and the chooser", () => {
       "Small starter diagram",
       "A class",
     ]);
+  });
+
+  it("has one type for activity diagrams with lanes and without", () => {
+    const activity = typeInfo("flowchart");
+    expect(typeInfo("swimlane")).toBe(activity);
+    expect(sameType("swimlane", "flowchart")).toBe(true);
+    expect(sameType("swimlane", "state")).toBe(false);
+    // One card in the chooser, and one entry wherever the types are listed.
+    expect(TYPES.filter((info) => info.name.startsWith("Activity"))).toEqual([activity]);
+    expect(TYPES.map((info) => info.type)).not.toContain("swimlane");
+    expect(activity.name).toBe("Activity diagram");
+    expect(activity.about).toContain("lanes");
+    expect(activity.starter.split("\n")[0]).toBe("flowchart TB");
+    // Its examples are of both kinds, and a recent one with lanes is offered with them.
+    const kinds = new Set(activity.examples.map(([, source]) => typeOf(source)));
+    expect([...kinds].toSorted()).toEqual(["flowchart", "swimlane"]);
+    const lanes = "swimlane-beta TB\n  subgraph Shop\n    a(A)\n  end";
+    expect(
+      startsOf(activity, [{ title: "My lanes", source: lanes }]).map((start) => start.name),
+    ).toContain("My lanes");
+  });
+});
+
+describe("the shapes of a block diagram", () => {
+  it("offers a note at every level, drawn as the note it is", () => {
+    const [blocks] = typeInfo("tam").palette,
+      note = blocks.items.find((item) => item.kind === "note");
+    expect(note).toMatchObject({ name: "Note", icon: "uml-note", key: "N" });
+    // The editor offers a shape where adding it parses: a note stands at either level.
+    for (const level of ["conceptual", "design"])
+      expect(() =>
+        parseTam(addElement(`level ${level}\nagent a[A]`, { kind: "note", label: "x" }).source),
+      ).not.toThrow();
   });
 });

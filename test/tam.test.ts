@@ -259,7 +259,8 @@ cart requires IStock`);
     ["CRLF", "\r\n"],
     ["lone CR", "\r"],
   ])("reads %s sources, with comments, like their LF versions", (_name, ending) => {
-    const lf = "title Shop %% the title\nagent a[A] %% note\nstorage s[S]\na -- reads --> s %% edge";
+    const lf =
+      "title Shop %% the title\nagent a[A] %% note\nstorage s[S]\na -- reads --> s %% edge";
     const crlf = lf.replaceAll("\n", ending);
     const [expected, actual] = [parseTam(lf), parseTam(crlf)];
     expect([...actual.nodes]).toEqual([...expected.nodes]);
@@ -336,5 +337,119 @@ describe("TAM block diagram rendering", () => {
   it("escapes labels", async () => {
     const { svg } = await renderTam('agent a[<b> & "x"]', colors);
     expect(svg).toContain("&lt;b&gt; &amp;");
+  });
+});
+
+describe("notes", () => {
+  it("reads a note, its text and its place, and the dotted line that attaches it", () => {
+    const diagram = parseTam(`agent shop[Web Shop] {
+  agent api[Order API]
+  note check[Check stock<br>first] @300,40 140x60
+}
+note [A free remark]
+check -.- api
+shop -.- check`);
+    expect(diagram.nodes.get("check")).toMatchObject({
+      kind: "note",
+      label: "Check stock<br>first",
+      parent: "shop",
+      at: { x: 300, y: 40, width: 140, height: 60 },
+    });
+    expect(diagram.nodes.get("note#1")).toMatchObject({ kind: "note", label: "A free remark" });
+    expect(diagram.edges.map((edge) => [edge.kind, edge.source, edge.target])).toEqual([
+      ["anchor", "check", "api"],
+      ["anchor", "shop", "check"],
+    ]);
+  });
+
+  it("takes part in no rule of the notation", () => {
+    // In a human agent, a storage or a package; beside dots; in a group of storages, which stays one.
+    const diagram = parseTam(`level conceptual
+storage db[DB] {
+  storage t[Tables]
+  note n1[Partitioned]
+}
+group g {
+  storage a[A]
+  note n2[Shared]
+}
+agent w1[Worker]
+note n3[Up to ten]
+...
+agent w2[Worker]
+n3 -.- w1`);
+    expect(diagram.nodes.get("g")!.passive).toBe(true);
+    expect(() => parseTam("package p[P] {\n  note n[About P]\n}\nn -.- p")).not.toThrow();
+  });
+
+  it("refuses what a note does not do", () => {
+    expect(() => parseTam("note n[N] {\n}")).toThrow(/A note holds nothing/);
+    expect(() => parseTam("note n[N]\nagent a[A]\nn -- calls --> a")).toThrow(
+      /`n` is a note: it is attached to an element with `n -.- a`/,
+    );
+    expect(() => parseTam("agent a[A]\nagent b[B]\na -.- b")).toThrow(
+      /needs one note and one element/,
+    );
+    expect(() => parseTam("note n[N]\nnote m[M]\nn -.- m")).toThrow(
+      /needs one note and one element/,
+    );
+    expect(() => parseTam("note n[N] stack")).toThrow(/Only agents and storages/);
+  });
+
+  it("attaches a note to an element shown as several once", () => {
+    const diagram = parseTam("agent w[Worker] ...\nnote n[Pool]\nn -.- w");
+    expect(diagram.edges.filter((edge) => edge.kind === "anchor")).toHaveLength(1);
+  });
+});
+
+describe("a pointer between storages in a row of dots", () => {
+  const source = (pointer: boolean) => `agent app[App] {
+  agent worker[Worker]
+}
+storage db[Database] {
+  storage tables[Tables]
+  ...
+  storage index[Index]
+}
+worker -- writes --> tables
+worker -- writes --> index
+${pointer ? "tables -. pointer .-> index" : ""}`;
+
+  it("keeps the two side by side, the picture no larger, and draws the pointer above the dots", async () => {
+    const { layoutDiagram } = await import("../src/tam-layout.ts");
+    const { arialMeasure } = await import("../src/arial-measure.ts");
+    const [plain, pointed] = await Promise.all(
+      [false, true].map((pointer) => layoutDiagram(parseTam(source(pointer)), arialMeasure)),
+    );
+    const box = (id: string) => pointed.shapes.find((shape) => shape.id === id)!.box;
+    expect(box("tables").y).toBe(box("index").y);
+    expect(pointed.bounds.height).toBeLessThanOrEqual(plain.bounds.height + 20);
+    const dots = pointed.shapes.find((shape) => shape.kind === "dots")!.box,
+      line = pointed.wires.find((wire) => wire.dashed)!;
+    expect(line.points.every((point) => point.y < dots.y)).toBe(true);
+    expect(auditScene(pointed)).toEqual([]);
+  });
+});
+
+describe("a group's color", () => {
+  it("highlights the group with a tint; without a color of its own the frame stays empty", async () => {
+    const { layoutDiagram } = await import("../src/tam-layout.ts");
+    const { arialMeasure } = await import("../src/arial-measure.ts");
+    const scene = await layoutDiagram(
+      parseTam(`agent shop[Shop]:::blue {
+  group plain[Plain] {
+    agent a[A]
+  }
+}
+group marked[Marked]:::gray {
+  agent b[B]
+}`),
+      arialMeasure,
+    );
+    const shape = (id: string) => scene.shapes.find((item) => item.id === id)!;
+    expect(shape("marked")).toMatchObject({ fill: "shade", color: "gray", thin: true });
+    // A group in a colored container takes none of its color: it shows the container behind it.
+    expect(shape("plain").fill).toBe("none");
+    expect(renderTam).toBeDefined();
   });
 });

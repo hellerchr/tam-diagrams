@@ -10,7 +10,7 @@ import { isPlaced, parseTam, TamError, type TamDiagram } from "../src/tam.ts";
 import { bestLayout, layoutPlaced } from "../src/tam-layout.ts";
 import { layoutWithin, overlapping, pin } from "../src/tam-pin.ts";
 import type { Measure } from "../src/text.ts";
-import { parseUml } from "../src/index.ts";
+import { parseUml, umlRole } from "../src/index.ts";
 import { UmlError } from "../src/uml.ts";
 import { keepAutomatic, placesOf } from "../src/uml-placed.ts";
 import { hasPlaces, prunePlaces, setPlaces } from "../src/uml-places.ts";
@@ -362,7 +362,7 @@ export class Doc {
       const type = typeOf(source);
       if (type !== "tam") {
         const scene = await parseUml(source).layout(this.measure, this.elk);
-        return drawScene(scene, colors, typeInfo(type).name, `${type} diagram`);
+        return drawScene(scene, colors, typeInfo(type).name, umlRole(type));
       }
       const diagram = parseTam(source);
       const scene = isPlaced(diagram)
@@ -383,7 +383,7 @@ export class Doc {
         picture.scene,
         colors,
         picture.title || typeInfo(picture.type).name,
-        picture.type === "tam" ? "tam" : `${picture.type} diagram`,
+        picture.type === "tam" ? "tam" : umlRole(picture.type),
       )
     );
   }

@@ -21,6 +21,7 @@ type NodeKind =
   | "package"
   | "group"
   | "dots"
+  | "note"
   | "channel"
   | "interface";
 
@@ -33,7 +34,9 @@ type EdgeKind =
   | "dependency"
   | "assembly"
   | "provided"
-  | "required";
+  | "required"
+  /** The dotted line that attaches a note to an element. */
+  | "anchor";
 
 export interface TamNode {
   id: string;
@@ -112,6 +115,7 @@ export const ELEMENT_KINDS = [
   "class",
   "package",
   "group",
+  "note",
 ] as const;
 
 const ACTIVE = new Set<NodeKind>(["agent", "human", "component", "subsystem", "class"]);
@@ -155,7 +159,7 @@ export const INTERFACE = new RegExp(`^(${ID})\\s+(provides|requires)\\s+(.+)$`);
  * it acts on: `api -- reads --> db`, `a <-- calls --> b`, `a --- b`, `a -- label --- b`, `a -. use .-> b`.
  * The word may be followed by `: label` and `@Protocol`, inside the edge.
  */
-const LINK = /\s*(?:(<--|--)\s*([^\s-].*?)\s*(-->|---)|-\.\s*(.+?)\s*\.->|(---))\s*/g;
+const LINK = /\s*(?:(<--|--)\s*([^\s-].*?)\s*(-->|---)|-\.\s*(.+?)\s*\.->|(---)|(-\.-)(?!>))\s*/g;
 
 /** The words of solid edges; anything else goes in the label after a colon. */
 const WORDS: Word[] = [
@@ -295,7 +299,7 @@ export function parseTam(source: string): TamDiagram {
       const [, kind, id, bracketed, quoted, modifiers, opens] = match;
       // A blank label (`[]` or `[ ]`) shows no text.
       const label = (bracketed ?? quoted)?.trim();
-      if (!id && kind !== "group")
+      if (!id && kind !== "group" && kind !== "note")
         throw new TamError(
           line,
           `\`${kind}\` needs an id, for example \`${kind} web "Web Server"\`.`,
@@ -324,9 +328,9 @@ export function parseTam(source: string): TamDiagram {
       if (color && !COLORS.has(color))
         throw new TamError(line, `Unknown color \`${color}\`; use ${[...COLORS].join(", ")}.`);
       const node: TamNode = {
-        id: id || `group#${++anonymous}`,
+        id: id || `${kind}#${++anonymous}`,
         kind: kind as NodeKind,
-        label: label ?? (kind === "group" ? "" : id!),
+        label: label ?? (kind === "group" || kind === "note" ? "" : id!),
         parent: stack.at(-1)?.id ?? null,
         children: [],
         stack: options.includes("stack"),
@@ -346,6 +350,8 @@ export function parseTam(source: string): TamDiagram {
         );
       }
       const container = opens === "{";
+      if (kind === "note" && opens)
+        throw new TamError(line, "A note holds nothing; it stands beside what it remarks on.");
       if (container && options.includes("..."))
         throw new TamError(line, "A container cannot use `...`; use `stack` instead.");
       add(node);
@@ -391,7 +397,7 @@ export function parseTam(source: string): TamDiagram {
     if (node.kind === "group") {
       const children = node.children
         .map((child) => diagram.nodes.get(child)!)
-        .filter((child) => child.kind !== "dots");
+        .filter((child) => child.kind !== "dots" && child.kind !== "note");
       node.passive = children.length > 0 && children.every(isStorage);
     }
   }
@@ -403,8 +409,10 @@ export function parseTam(source: string): TamDiagram {
       (id) => diagram.nodes.get(id)!,
     );
     const index = siblings.indexOf(dots),
-      before = siblings.slice(0, index).findLast((node) => node.kind !== "dots"),
-      after = siblings.slice(index + 1).find((node) => node.kind !== "dots");
+      before = siblings
+        .slice(0, index)
+        .findLast((node) => node.kind !== "dots" && node.kind !== "note"),
+      after = siblings.slice(index + 1).find((node) => node.kind !== "dots" && node.kind !== "note");
     if (
       before &&
       after &&
@@ -468,7 +476,7 @@ export function parseTam(source: string): TamDiagram {
     checkWord(diagram, word, a, b, protocol, line, both);
     const nested = isAncestor(diagram, a.id, b.id) || isAncestor(diagram, b.id, a.id);
     if (
-      (nested && word !== "delegates") ||
+      (nested && word !== "delegates" && word !== "anchor") ||
       (word === "delegates" && (!isActive(a) || !isActive(b)))
     ) {
       throw new TamError(
@@ -477,7 +485,7 @@ export function parseTam(source: string): TamDiagram {
       );
     }
     const pkg = [a, b].find((node) => node.kind === "package");
-    if (pkg && word !== "dependency")
+    if (pkg && word !== "dependency" && word !== "anchor")
       throw new TamError(
         line,
         `Package \`${pkg.id}\` connects only through dependencies such as \`-. import .->\`.`,
@@ -526,6 +534,9 @@ export function parseTam(source: string): TamDiagram {
           protocol,
           flow: { toSource: false, toTarget: false },
         });
+        break;
+      case "anchor":
+        edge({ kind: "anchor", source: a.id, target: b.id });
         break;
       case "dependency": {
         const keyword = KEYWORDS[label!];
@@ -609,7 +620,9 @@ export type Word =
   | "delegates"
   | "requires"
   | "---"
-  | "dependency";
+  | "dependency"
+  /** `-.-`: a note attached to an element. */
+  | "anchor";
 
 /** `both` marks `<--`: data or requests in both directions. */
 export type Connection = {
@@ -641,9 +654,10 @@ export function readConnections(statement: string, line: number): Connection[] |
   const ends = pieces.map((piece) => piece.split("&").map((end) => end.trim()));
   const connections: Connection[] = [];
   links.forEach((link, index) => {
-    const [, open, text, close, dotted, bare] = link;
+    const [, open, text, close, dotted, bare, anchor] = link;
     let word: Word, label: string | undefined, protocol: string | undefined;
-    if (bare) word = "---";
+    if (anchor) word = "anchor";
+    else if (bare) word = "---";
     else if (dotted) {
       const keyword = dotted.toLowerCase();
       if (/[:@]/.test(dotted) && KEYWORDS[keyword.split(/[:@\s]/)[0]])
@@ -707,6 +721,21 @@ function checkWord(
   line: number,
   both = false,
 ) {
+  // A note takes part in no connection of the notation: a dotted line attaches it to what it remarks on.
+  const note = [a, b].find((node) => node.kind === "note");
+  if (word === "anchor") {
+    if (!note || (a.kind === "note" && b.kind === "note"))
+      throw new TamError(
+        line,
+        `\`-.-\` attaches a note to an element: \`${note ? a.id : "note"} -.- ${note ? b.id : a.id}\` needs one note and one element.`,
+      );
+    return;
+  }
+  if (note)
+    throw new TamError(
+      line,
+      `\`${note.id}\` is a note: it is attached to an element with \`${note.id} -.- ${(note === a ? b : a).id}\`, and connects in no other way.`,
+    );
   if (word === "reads" || word === "writes" || word === "reads/writes") {
     if (isStorage(a) && isActive(b))
       throw new TamError(
@@ -774,7 +803,7 @@ function talks(diagram: TamDiagram, node: TamNode): boolean {
   if (node.kind !== "group" || node.passive) return false;
   return node.children
     .map((child) => diagram.nodes.get(child)!)
-    .filter((child) => child.kind !== "dots")
+    .filter((child) => child.kind !== "dots" && child.kind !== "note")
     .every((child) => isStorage(child) || talks(diagram, child));
 }
 
@@ -788,9 +817,10 @@ function isAncestor(diagram: TamDiagram, ancestor: string, id: string): boolean 
 function validateNesting(diagram: TamDiagram) {
   for (const node of diagram.nodes.values()) {
     if (!node.children.length) continue;
+    // Notes stand anywhere: they remark on a part of the diagram and take part in none of its rules.
     const children = node.children
       .map((child) => diagram.nodes.get(child)!)
-      .filter((child) => child.kind !== "dots");
+      .filter((child) => child.kind !== "dots" && child.kind !== "note");
     if (!children.length) continue;
     if (node.kind === "human")
       throw new TamError(node.line, `Human agent \`${node.id}\` cannot contain elements.`);

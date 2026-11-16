@@ -4,6 +4,7 @@
  * reads the same wherever it is offered.
  */
 
+import { exportsToDrawio } from "../src/drawio.ts";
 import type { Point } from "../src/scene.ts";
 import type { Connection, Word } from "../src/tam.ts";
 import type { ElementKind } from "../src/tam-edit.ts";
@@ -13,7 +14,7 @@ import type { IconName } from "./icons.ts";
 import { ageOf, type Recent } from "./files.ts";
 import { type MenuEntry, type MenuItem, refusal } from "./menu.ts";
 import { GUIDES, guideOf } from "./reference.ts";
-import { type DiagramType, kindName, TYPES, typeInfo, typeOf } from "./types.ts";
+import { type DiagramType, kindName, sameType, TYPES, typeInfo, typeOf } from "./types.ts";
 
 /** How the page follows light and dark: one of them, or the system's choice. */
 export type ThemeChoice = "light" | "dark" | "system";
@@ -27,6 +28,8 @@ export interface Shell {
   saveFileAs(): void;
   /** Opens the export dialog for a picture of the diagram. */
   exportPicture(format: "svg" | "png"): void;
+  /** Saves the diagram as a draw.io file, drawn with the TAM shapes of draw.io. */
+  exportDrawio(): void;
   copySource(): void;
   /** The diagrams that were on show lately, the newest first, without the one on show. */
   recents(): Recent[];
@@ -41,6 +44,9 @@ export interface Shell {
   readonly fileName: string | undefined;
   readonly theme: ThemeChoice;
   setTheme(theme: ThemeChoice): void;
+  /** Whether connections bend round at their corners, in the picture and what is exported. */
+  readonly rounded: boolean;
+  setRounded(rounded: boolean): void;
   /** Remembers a choice across visits. */
   remember(key: string, value: string): void;
   recall(key: string): string | null;
@@ -88,6 +94,7 @@ export const WIRES: { value: string; name: string; word: Word; keyword?: string 
     word: "dependency" as Word,
     keyword,
   })),
+  { value: "anchor", name: "Attaches a note", word: "anchor" },
 ];
 
 /** The change that makes a connection one of the kinds in `WIRES`. */
@@ -172,12 +179,9 @@ export const arrangeRefusal = (action: ArrangeAction, selected: number) =>
 
 /** The boxes a selection may be put in, with the keys that do so. */
 const BOXES: [ElementKind, string][] = [
-  ["agent", "Ctrl+G"],
+  ["agent", ""],
   ["storage", ""],
-  ["component", ""],
-  ["subsystem", ""],
-  ["package", ""],
-  ["group", "Ctrl+Shift+G"],
+  ["group", "Ctrl+G"],
 ];
 
 const ELEMENTS: ElementKind[] = TYPES[0].palette.flatMap((group) =>
@@ -250,7 +254,7 @@ export class Menus {
       ? editor.structure.pieces.map((piece) => ({
           name: `Add ${piece.name.toLowerCase()}`,
           path: "Shapes",
-          off: stuck,
+          off: stuck ?? editor.pieceRefusal(piece.kind),
           run: () => editor.addPiece(piece.kind),
         }))
       : info.palette.flatMap((group) =>
@@ -338,7 +342,7 @@ export class Menus {
         name: "Open example",
         // The examples of the type on show come first.
         items: [...TYPES]
-          .sort((a, b) => Number(b.type === current) - Number(a.type === current))
+          .sort((a, b) => Number(sameType(b.type, current)) - Number(sameType(a.type, current)))
           .map((info) => ({
             name: info.name,
             items: info.examples.map(([name, source]) => ({
@@ -371,6 +375,15 @@ export class Menus {
     return [
       { name: "Export SVG…", off: nothing, run: () => shell.exportPicture("svg") },
       { name: "Export PNG…", off: nothing, run: () => shell.exportPicture("png") },
+      {
+        name: "Export draw.io",
+        off:
+          nothing ??
+          (exportsToDrawio(this.editor.doc.source)
+            ? undefined
+            : `${typeInfo(this.editor.type).plural} are not exported to draw.io`),
+        run: () => shell.exportDrawio(),
+      },
       {
         name: "Copy source",
         off: this.editor.doc.source.trim() ? undefined : "The diagram is empty",
@@ -501,6 +514,11 @@ export class Menus {
         name: "Theme",
         items: [theme("Light", "light"), theme("Dark", "dark"), theme("System", "system")],
       },
+      {
+        name: "Rounded connectors",
+        checked: shell.rounded,
+        run: () => shell.setRounded(!shell.rounded),
+      },
     ];
   }
 
@@ -531,7 +549,9 @@ export class Menus {
       items: kinds.map(([kind, key]) => ({
         name: kindName(kind),
         key: key || undefined,
-        run: () => editor.wrapSelection(kind),
+        // A group of one group, or of the parts of one, groups nothing.
+        off: kind === "group" ? editor.groupedAlready : undefined,
+        run: () => (kind === "group" ? editor.groupSelection() : editor.wrapSelection(kind)),
       })),
     };
   }
@@ -570,6 +590,12 @@ export class Menus {
         name: "Take out of its box",
         off: editor.selectionHolder ? undefined : "Select elements that stand in a box",
         run: () => editor.takeOut(),
+      },
+      {
+        name: "Ungroup",
+        key: "Ctrl+Shift+G",
+        off: editor.ungroupable ? undefined : "Select one element that holds others",
+        run: () => editor.ungroupSelection(),
       },
       "line",
       ...this.layouts(),
@@ -642,6 +668,7 @@ export class Menus {
         pieces = (at?: string | null): MenuEntry[] =>
           structure.pieces.map((piece) => ({
             name: piece.name,
+            off: editor.pieceRefusal(piece.kind),
             run: () => editor.addPiece(piece.kind, at),
           }));
       if (!editor.selection.length) return [{ name: "Add", items: pieces(null) }, "line", ...fits];
@@ -676,7 +703,11 @@ export class Menus {
               run: () => editor.duplicateSelection(),
             },
           editor.can("ungroup") &&
-            !!part?.group && { name: "Ungroup", run: () => editor.ungroup(id) },
+            !!part?.group && {
+              name: "Ungroup",
+              key: "Ctrl+Shift+G",
+              run: () => editor.ungroup(id),
+            },
           "line",
           remove,
         ];
@@ -738,6 +769,11 @@ export class Menus {
         "line",
         this.boxes(),
         !!editor.selectionHolder && { name: "Take out of its box", run: () => editor.takeOut() },
+        !!editor.ungroupable && {
+          name: "Ungroup",
+          key: "Ctrl+Shift+G",
+          run: () => editor.ungroupSelection(),
+        },
         { name: "Arrange", items: [...align, "line", ...distribute, "line", ...size] },
         editor.canLayoutSelection && inside,
         "line",

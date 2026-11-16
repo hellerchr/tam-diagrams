@@ -324,6 +324,27 @@ router requires IMonitoring`,
   ],
 
   [
+    "variant: notes on agents and storages",
+    `title Order handling
+%% Notes remark on elements: one at the top level, one in a container, on dotted lines.
+human clerk[Sales Clerk]
+agent shop[Order Service] {
+  agent api[Order API]
+  agent worker[Worker] ...
+  storage orders[Orders]
+  note retention[Orders are kept<br>for ten years]
+}
+note peak[Up to 200 orders<br>a minute at peak]
+note scaling[Scaled by load]
+clerk -- calls --> api
+api -- sends data --> worker
+worker -- reads/writes --> orders
+peak -.- api
+retention -.- orders
+worker -.- scaling`,
+  ],
+
+  [
     "variant: BT single chain",
     `direction BT
 human user[User]

@@ -5,6 +5,7 @@
   "keywords": [
     "architecture",
     "diagram",
+    "drawio",
     "elk",
     "fmc",
     "mermaid",
@@ -36,7 +37,8 @@
     "./samples/tam-examples": "./src/samples/tam-examples.ts",
     "./samples/uml-examples": "./src/samples/uml-examples.ts",
     "./samples/fuzz": "./src/samples/fuzz.ts",
-    "./edit": "./src/edit.ts"
+    "./edit": "./src/edit.ts",
+    "./drawio": "./src/drawio.ts"
   },
   "scripts": {
     "build": "rolldown -c",

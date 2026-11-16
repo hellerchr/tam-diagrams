@@ -2,11 +2,11 @@
 
 <!-- Written by guideMarkdown in editor/reference.ts: change the guide there, not here. -->
 
-Actions and control flow: decision, merge, fork, join, initial and final nodes.
+Actions and control flow: decision, merge, fork, join, initial and final nodes, and lanes for the agents responsible.
 
 ## What it shows
 
-An activity diagram shows the control flow between actions: their order, decision and merge nodes, concurrency through fork and join nodes, and initial and final nodes. Use it for a business process or an algorithm. It is written in Mermaid's `flowchart` syntax and drawn as a UML activity diagram.
+An activity diagram shows the control flow between actions: their order, decision and merge nodes, concurrency through fork and join nodes, and initial and final nodes. Use it for a business process or an algorithm. It is written in Mermaid's `flowchart` syntax and drawn as a UML activity diagram. Lanes are optional: in a diagram with lanes every lane is an activity partition that holds the actions of one agent, for a process that spans human agents, organizational units or systems. Such a diagram starts with `swimlane-beta` instead, and its subgraphs are its lanes.
 
 ## Rules of the notation
 
@@ -18,6 +18,7 @@ An activity diagram shows the control flow between actions: their order, decisio
 - Decisions, merges, initial and final nodes have no flow to themselves.
 - A node exists as soon as a statement names it. Its shape and text may be given at any mention; the last one given counts.
 - A node stands in the subgraph where it is named first inside one.
+- Lanes and groups do not mix: under `flowchart` every subgraph is a group, under `swimlane-beta` every subgraph is a lane.
 - `end`, `subgraph`, `graph`, `flowchart`, `direction`, `style`, `linkStyle`, `classDef`, `class` and `click` are keywords, not ids.
 - A diagram has at most 300 nodes, 500 flows and 20,000 characters.
 
@@ -92,6 +93,21 @@ A flow may be written with or without spaces around its arrow.
 | `subgraph`<br>&nbsp;&nbsp;`box(Box it)`<br>`end` | A frame without a title. |
 | `subgraph outer`<br>&nbsp;&nbsp;`subgraph inner`<br>&nbsp;&nbsp;&nbsp;&nbsp;`box(Box it)`<br>&nbsp;&nbsp;`end`<br>`end`<br>`start --> outer` | Subgraphs nest, and a flow may end at a subgraph's id. |
 
+## Lanes
+
+- A diagram with lanes starts with `swimlane-beta` instead of `flowchart`, and every `subgraph` of it is a lane: an activity partition named after the agent responsible for its actions. Lanes stand side by side in the order of the source.
+- A node stands in the lane where it is named first inside one. Nodes named in no lane share a lane without a name.
+- Flows run from node to node, also across lanes. A flow does not end at a lane, and lanes do not nest.
+- Lanes and groups do not mix: a diagram with lanes has no groups. A placed node stays in its lane.
+
+| You write | It means |
+| --- | --- |
+| `swimlane-beta TB` | The first line of a diagram with lanes, with the way the flow runs. `TB` (the default) and `BT`: lanes are columns. `LR` and `RL`: lanes are rows. `TD` is `TB`; `>`, `<`, `^` and `v` point the way too. |
+| `subgraph Customer`<br>&nbsp;&nbsp;`order(Place order)`<br>`end` | A lane with its nodes, between its line and `end`. The id is its title. |
+| `subgraph shop [Web Shop]`<br>&nbsp;&nbsp;`check(Check order)`<br>`end` | An id, and the title in square brackets. |
+| `subgraph "Web Shop"`<br>&nbsp;&nbsp;`check(Check order)`<br>`end` | A title in quotes, without an id. |
+| `subgraph Customer`<br>&nbsp;&nbsp;`order(Place order)`<br>`end`<br>`subgraph Shop`<br>&nbsp;&nbsp;`check(Check order)`<br>`end`<br>`order --> check` | A flow from lane to lane. It may stand after the lanes or inside one. |
+
 ## Read and not drawn
 
 | You write | It means |
@@ -137,3 +153,5 @@ flowchart TB
 | `a --> b %% the usual way` | A comment is a line of its own. |
 | `title Shipping` | Write the title in frontmatter. |
 | `subgraph packing`<br>&nbsp;&nbsp;`box(Box it)` | A subgraph ends with `end`. |
+| `order --> Shop` | A flow to a lane. Name a node in it. |
+| `subgraph Store`<br>&nbsp;&nbsp;`subgraph Desk`<br>&nbsp;&nbsp;&nbsp;&nbsp;`serve(Serve)`<br>&nbsp;&nbsp;`end`<br>`end` | A subgraph inside a lane: lanes do not nest, and a diagram with lanes has no groups. |

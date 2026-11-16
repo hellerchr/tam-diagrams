@@ -34,6 +34,7 @@ import {
   setElement,
   setHeader,
   unplace,
+  unwrap,
   wrap,
 } from "../src/tam-edit.ts";
 import { declaredElements } from "../src/tam-pin.ts";
@@ -66,9 +67,18 @@ import type { Structure, StructureEdge } from "../src/structure.ts";
 import { classMembers, setClassMembers } from "../src/uml-class-edit.ts";
 import { moveMessage, moveParticipant } from "../src/uml-sequence-edit.ts";
 import { placeable } from "../src/uml-placed.ts";
-import { followPlaces, hasPlaces, removePlaces, setPlaces } from "../src/uml-places.ts";
+import { followPlaces, hasPlaces, readPlaces, removePlaces, setPlaces } from "../src/uml-places.ts";
+import {
+  setUmlHeader,
+  turnPlaces,
+  type UmlHeader,
+  umlHeader,
+  type UmlHeaderChange,
+  umlSettings,
+  withTitle,
+} from "../src/uml-header-edit.ts";
 import { structureOf } from "./structures.ts";
-import { type DiagramType, typeInfo, typeOf, withUmlTitle } from "./types.ts";
+import { type DiagramType, typeInfo, typeOf } from "./types.ts";
 import type { View } from "./view.ts";
 
 /** An element in the tree of the diagram. */
@@ -81,6 +91,11 @@ export interface TreeItem {
 
 /** What the pointer does on the canvas: select and move, pan, draw a connection, or place an element of a kind. */
 export type Tool = "select" | "pan" | "connect" | ElementKind;
+
+/** A change of the header of a block diagram: its title, direction and level. */
+type TamHeader = Parameters<typeof setHeader>[1];
+/** A change of the settings of a whole diagram, of any type. */
+export type HeaderChange = TamHeader & UmlHeaderChange;
 
 /** Elements snap to this grid; Alt moves them freely. */
 const GRID = 10;
@@ -173,9 +188,11 @@ type Gesture =
 const sizeOf = (kind: ElementKind) =>
   kind === "group"
     ? { width: 160, height: 100 }
-    : kind === "human"
-      ? { width: 76, height: 66 }
-      : { width: 96, height: kind === "storage" ? 36 : 40 };
+    : kind === "note"
+      ? { width: 80, height: 30 }
+      : kind === "human"
+        ? { width: 76, height: 66 }
+        : { width: 96, height: kind === "storage" ? 36 : 40 };
 
 /** Where a new element of a kind stands when dropped at a point: around it, on the grid. */
 const dropPlace = (kind: ElementKind, at: Point, free: boolean): Point => ({
@@ -195,6 +212,7 @@ const NAMES: Record<ElementKind, string> = {
   class: "Class",
   package: "Package",
   group: "",
+  note: "Note",
 };
 
 /** Whether a kind of piece is of a family, by the word in its name. */
@@ -224,6 +242,13 @@ export class Editor {
     done: (text: string | undefined) => void,
   ) => void = () => {};
   private gesture: Gesture | undefined;
+  /** Why the header may not change in ways asked lately, while the source is the one they were asked of. */
+  private refusals: { source: string; reasons: Map<string, string | undefined> } = {
+    source: "",
+    reasons: new Map(),
+  };
+  /** The header of the source last read. */
+  private headerRead: { source: string; header?: UmlHeader } = { source: "" };
   /** The kind of join picked for new connections. */
   private picked: string | undefined;
   /** The part just added that has no name of its own yet. */
@@ -453,6 +478,8 @@ export class Editor {
     const { picture, structure } = this,
       piece = structure?.pieces.find((item) => item.kind === kind);
     if (!structure || !piece || !picture) return;
+    const refused = this.pieceRefusal(kind);
+    if (refused) return this.notify(`${refused}.`);
     const [only] = this.selectedElements,
       chosen =
         at === null ? undefined : (at ?? (this.selectedElements.length === 1 ? only : undefined)),
@@ -483,8 +510,9 @@ export class Editor {
           : piece.joins === "before"
             ? edits.connect(added.source, made, node.id)
             : edits.connect(added.source, node.id, made);
-      // Where the parts are placed, the new one stands where it was dropped.
-      return made && spot && hasPlaces(source)
+      // Where the parts are placed, the new one stands where it was dropped: unless the edit
+      // dropped the places, as the first lane of an activity does.
+      return made && spot && hasPlaces(added.source)
         ? setPlaces(
             next,
             new Map([[made, { x: snap(spot.x - 48, false), y: snap(spot.y - 18, false) }]]),
@@ -508,6 +536,14 @@ export class Editor {
       this.reveal(made);
       if (piece.named) this.rename(made);
     });
+  }
+
+  /**
+   * Why a piece cannot be added to the diagram as it stands, as its structure says: a group to an
+   * activity diagram with lanes. Undefined when it can, or while the source has an error.
+   */
+  pieceRefusal(kind: string): string | undefined {
+    return this.doc.problem ? undefined : this.structure?.refusal?.(this.doc.source, kind);
   }
 
   /** A piece dragged from the palette is over a point of the canvas: the part it would join shows. */
@@ -804,8 +840,56 @@ export class Editor {
   }
 
   /** Why the diagram's header may not change this way; undefined when it may. */
-  headerRefusal(header: Parameters<typeof setHeader>[1]) {
-    return this.refusal((source) => setHeader(source, header));
+  headerRefusal(header: HeaderChange): string | undefined {
+    if (this.editable) return this.refusal((source) => setHeader(source, header as TamHeader));
+    if (this.doc.problem) return "The source has an error.";
+    const { source } = this.doc,
+      key = JSON.stringify(header);
+    // The panels ask again at every change of state: the answers hold while the source does.
+    if (this.refusals.source !== source) this.refusals = { source, reasons: new Map() };
+    if (!this.refusals.reasons.has(key)) {
+      let reason: string | undefined;
+      try {
+        setUmlHeader(source, header);
+      } catch (error) {
+        reason = (error instanceof Error ? error.message : String(error)).replace(
+          /^Line \d+: /,
+          "",
+        );
+      }
+      this.refusals.reasons.set(key, reason);
+    }
+    return this.refusals.reasons.get(key);
+  }
+
+  /** What the source says of the whole diagram: its title, direction, level and the like. */
+  get header(): UmlHeader | undefined {
+    if (this.editable) {
+      const diagram = this.picture?.diagram;
+      return (
+        diagram && { title: diagram.title, direction: diagram.direction, level: diagram.level }
+      );
+    }
+    const { source } = this.doc;
+    if (this.headerRead.source !== source) {
+      let header: UmlHeader | undefined;
+      try {
+        header = umlHeader(source);
+      } catch {
+        // While the source has an error the fields keep what they showed.
+      }
+      this.headerRead = { source, header };
+    }
+    return this.headerRead.header;
+  }
+
+  /** The settings of the whole diagram its type has besides the title, which every type has. */
+  get settings(): { direction: boolean; level: boolean; numbering: boolean } {
+    const type = this.type;
+    // Block diagrams are drawn at the conceptual level only: the editor offers no level to choose.
+    if (type === "tam") return { direction: true, level: false, numbering: false };
+    const settings = umlSettings(type);
+    return { ...settings, direction: !!settings.direction };
   }
 
   /** Why the selected elements may not change this way; undefined when they may. */
@@ -1314,6 +1398,62 @@ export class Editor {
     if (kind !== "group") void this.whenShown().then(() => this.rename(made));
   }
 
+  /**
+   * Why the selection takes no new group: it is one group, or the very parts of one, which are
+   * grouped already. Undefined when it may be grouped.
+   */
+  get groupedAlready(): string | undefined {
+    const { picture } = this,
+      ids = this.selectedElements;
+    if (!picture || !ids.length) return undefined;
+    const { diagram } = picture;
+    if (ids.length === 1 && diagram.nodes.get(ids[0])?.kind === "group")
+      return "This is a group already";
+    const holders = new Set(ids.map((id) => holder(diagram, id)));
+    const [around] = holders;
+    if (holders.size !== 1 || !around || diagram.nodes.get(around)?.kind !== "group")
+      return undefined;
+    const parts = [...diagram.nodes.values()].filter(
+      (node) =>
+        node.kind !== "dots" &&
+        node.kind !== "interface" &&
+        !node.id.endsWith("#row") &&
+        (!node.origin || node.origin === node.id) &&
+        holder(diagram, node.id) === around,
+    );
+    return parts.length === ids.length ? "These are grouped already" : undefined;
+  }
+
+  /** Ctrl+G: the selected elements of a block diagram go in a new group, unless they are grouped already. */
+  groupSelection() {
+    if (!this.editable) return;
+    const already = this.groupedAlready;
+    if (already) return this.notify(`${already}.`);
+    this.wrapSelection("group");
+  }
+
+  /** The one selected part that holds others and can be taken apart, if there is one. */
+  get ungroupable(): string | undefined {
+    const [only] = this.selectedElements,
+      { picture } = this;
+    if (!only || this.selectedElements.length !== 1 || !picture) return undefined;
+    if (this.editable)
+      return [...picture.diagram.nodes.values()].some(
+        (node) => node.id !== only && holder(picture.diagram, node.id) === only,
+      )
+        ? only
+        : undefined;
+    return this.can("ungroup") && picture.parts?.get(only)?.group ? only : undefined;
+  }
+
+  /** Ctrl+Shift+G: the selected box goes, and what it held stays where it stood. */
+  ungroupSelection() {
+    const id = this.ungroupable;
+    if (!id) return;
+    if (!this.editable) return this.ungroup(id);
+    if (this.edit((source) => unwrap(source, id))) this.select([]);
+  }
+
   /** The element that holds all selected elements, when one does. */
   get selectionHolder(): string | null {
     const { picture } = this,
@@ -1384,17 +1524,45 @@ export class Editor {
     this.edit((source) => addInterface(source, id, offers, name));
   }
 
-  setHeader(header: Parameters<typeof setHeader>[1]) {
-    this.edit((source) => setHeader(source, header));
+  /**
+   * Changes the settings of the whole diagram, as one edit. A UML diagram whose parts are placed
+   * turns their places with its direction, so the picture turns as the automatic layout would.
+   */
+  setHeader(header: HeaderChange) {
+    if (this.editable) {
+      this.edit((source) => setHeader(source, header as TamHeader));
+      return;
+    }
+    const turned = (source: string) => {
+      const next = setUmlHeader(source, header),
+        from = umlHeader(source).direction,
+        to = header.direction;
+      if (!to || !from || from === to || !hasPlaces(source)) return next;
+      const sizes = new Map(this.picture?.scene.shapes.map((shape) => [shape.id, shape.box]));
+      return setPlaces(next, turnPlaces(readPlaces(source), sizes, from, to));
+    };
+    if (this.structural) this.structEdit((_, source) => turned(source));
+    else if (this.doc.problem) this.change(undefined);
+    else
+      try {
+        void this.doc.apply(turned(this.doc.source));
+      } catch (reason) {
+        this.notify(
+          (reason instanceof Error ? reason.message : String(reason)).replace(/^Line \d+: /, ""),
+        );
+      }
   }
 
-  /** Gives the diagram another title, in the way its type writes one. */
+  /**
+   * Gives the diagram another title, in the way its type writes one. A UML source with an error
+   * takes it in its frontmatter all the same.
+   */
   setTitle(title: string) {
-    if (this.editable) this.setHeader({ title: title.trim() });
-    else void this.doc.apply(withUmlTitle(this.doc.source, title));
+    if (this.editable || !this.doc.problem) this.setHeader({ title: title.trim() });
+    else void this.doc.apply(withTitle(this.doc.source, title));
   }
 
-  allowsHeader(header: Parameters<typeof setHeader>[1]) {
+  allowsHeader(header: TamHeader) {
     return this.allows((source) => setHeader(source, header));
   }
 
@@ -2428,7 +2596,8 @@ export class Editor {
       if (key === "y") return (done(), this.doc.redo());
       if (key === "d") return (done(), this.duplicateSelection());
       if (key === "a") return (done(), this.selectAll());
-      if (key === "g") return (done(), this.wrapSelection(event.shiftKey ? "group" : "agent"));
+      if (key === "g")
+        return (done(), event.shiftKey ? this.ungroupSelection() : this.groupSelection());
       if (key === "0") return (done(), this.view.zoomTo(1));
       if (key === "=" || key === "+") return (done(), this.view.zoomBy(1.25));
       if (key === "-") return (done(), this.view.zoomBy(0.8));
@@ -2477,6 +2646,8 @@ export class Editor {
         return this.setTool("human");
       case "g":
         return this.setTool("group");
+      case "n":
+        return this.setTool("note");
       case "1":
         return this.fit();
       case "2":

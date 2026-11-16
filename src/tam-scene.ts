@@ -16,6 +16,7 @@ import { fallback, outline } from "./route.ts";
 import {
   addText,
   breaks,
+  drawNote,
   finishBounds,
   FONT,
   LINE,
@@ -179,6 +180,13 @@ export function tamScene(prepared: TamGraph, geometry: TamGeometry, measure: Mea
     if (!shape || !full || shape.node.kind === "interface" || shape.node.kind === "dots") continue;
     const { node } = shape;
     if (id.endsWith("#row")) continue;
+    if (node.kind === "note") {
+      drawNote(scene, measure, id, shape.lines.join("<br>"), full, {
+        depth: shape.depth,
+        color: node.color,
+      });
+      continue;
+    }
     const box = node.stack
       ? { ...full, width: full.width - SHADOW, height: full.height - SHADOW }
       : full;
@@ -219,7 +227,9 @@ export function tamScene(prepared: TamGraph, geometry: TamGeometry, measure: Mea
       box,
       container: shape.container,
       depth: shape.depth,
-      fill: thin ? "none" : shape.container ? "shade" : "page",
+      // A group is a thin frame that shows what is behind it; given a color of its own, it is
+      // highlighted with a tint of it.
+      fill: thin ? (node.color ? "shade" : "none") : shape.container ? "shade" : "page",
       ...(kind === "round" ? { radius: storage ? 18 : 4 } : {}),
       ...(tab !== undefined ? { tab: { width: tab, height: TAB } } : {}),
       ...(thin ? { thin } : {}),
@@ -276,8 +286,10 @@ export function tamScene(prepared: TamGraph, geometry: TamGeometry, measure: Mea
     }
     const siblings = dots_.parent ? diagram.nodes.get(dots_.parent)!.children : diagram.roots,
       index = siblings.indexOf(dots_.id);
-    const before = siblings.slice(0, index).findLast((id) => boxes.has(id)),
-      after = siblings.slice(index + 1).find((id) => boxes.has(id));
+    // Notes stand beside the elements they remark on and are no neighbours of the dots.
+    const real = (id: string) => boxes.has(id) && diagram.nodes.get(id)?.kind !== "note";
+    const before = siblings.slice(0, index).findLast(real),
+      after = siblings.slice(index + 1).find(real);
     if (!before || !after) {
       // Dots at the end of a row were laid out as a node of their own.
       const own = boxes.get(dots_.id);
@@ -286,24 +298,41 @@ export function tamScene(prepared: TamGraph, geometry: TamGeometry, measure: Mea
     }
     // The declared neighbours normally sit side by side; when crossing minimization put another sibling between
     // them, the dots take the gap next to the declared neighbour in that row instead: they still read "more of these".
+    // The geometry passes may have moved the elements of a row apart across it: a row is every sibling level with
+    // the declared neighbour, and the dots stand on the declared neighbour's center line, within the level the two elements beside them share.
     const ca = centerOf(boxes.get(before)!),
       cb = centerOf(boxes.get(after)!);
     const across = Math.abs(cb.x - ca.x) >= Math.abs(cb.y - ca.y),
       axis = across ? "x" : "y",
-      cross = across ? "y" : "x";
+      cross = across ? "y" : "x",
+      thick = across ? "height" : "width";
+    const level = (p: Box, q: Box) => ({
+      low: Math.max(p[cross], q[cross]),
+      high: Math.min(p[cross] + p[thick], q[cross] + q[thick]),
+    });
+    const home = boxes.get(before)!;
     const row = siblings
-      .filter((id) => boxes.has(id) && Math.abs(centerOf(boxes.get(id)!)[cross] - ca[cross]) < 4)
+      .filter((id) => {
+        if (!real(id)) return false;
+        const shared = level(home, boxes.get(id)!);
+        return shared.high - shared.low > 0;
+      })
       .toSorted((p, q) => boxes.get(p)![axis] - boxes.get(q)![axis]);
     const at = row.indexOf(before),
       toward = ca[axis] <= cb[axis] ? 1 : -1;
     const neighbour = row[at + toward] ?? row[at - toward];
-    if (!neighbour) continue;
-    const [first, second] = [boxes.get(before)!, boxes.get(neighbour)!].toSorted(
+    // Without a sibling level with the declared neighbour, the dots stand in the gap between the two neighbours.
+    const [first, second] = [home, boxes.get(neighbour ?? after)!].toSorted(
       (p, q) => p[axis] - q[axis],
     );
+    const shared = level(first, second),
+      middle =
+        shared.high - shared.low >= 8
+          ? Math.min(Math.max(ca[cross], shared.low + 4), shared.high - 4)
+          : (centerOf(first)[cross] + centerOf(second)[cross]) / 2;
     const gap = across
-      ? { x: (first.x + first.width + second.x) / 2, y: ca.y }
-      : { x: ca.x, y: (first.y + first.height + second.y) / 2 };
+      ? { x: (first.x + first.width + second.x) / 2, y: middle }
+      : { x: middle, y: (first.y + first.height + second.y) / 2 };
     dots(dots_.id, gap, across);
   }
 
@@ -600,8 +629,17 @@ export function tamScene(prepared: TamGraph, geometry: TamGeometry, measure: Mea
           high = Math.min(a[cross] + a[thick], b[cross] + b[thick]);
         return (low + high) / 2;
       };
-      const at = level(from, to);
       const edgeOf = (box: Box, outward: number) => box[axis] + (outward > 0 ? box[extent] : 0);
+      // Dots between the two (a row of several) keep the middle: the line runs above them.
+      const low = Math.min(edgeOf(from, sign), edgeOf(to, -sign)),
+        high = Math.max(edgeOf(from, sign), edgeOf(to, -sign));
+      const dotted = scene.shapes.some(
+        (shape) =>
+          shape.kind === "dots" &&
+          shape.box[axis] >= low &&
+          shape.box[axis] + shape.box[extent] <= high,
+      );
+      const at = level(from, to) - (dotted ? 9 : 0);
       const start = { [axis]: edgeOf(from, sign), [cross]: at } as unknown as Point,
         end = { [axis]: edgeOf(to, -sign), [cross]: at } as unknown as Point;
       wire(edge, [start, end], [edge.source, edge.target], { dashed: true });
@@ -623,6 +661,11 @@ export function tamScene(prepared: TamGraph, geometry: TamGeometry, measure: Mea
     const route = routes.get(edge.id);
     if (!route) continue;
     const ends = [edge.source, edge.target];
+    // A note hangs on a thin dashed line without heads.
+    if (edge.kind === "anchor") {
+      wire(edge, route, ends, { dashed: true });
+      continue;
+    }
     if (edge.kind === "provided" || edge.kind === "required") {
       const middle = centerOf(boxes.get(edge.target)!),
         shaped = snapEnd(route, middle);

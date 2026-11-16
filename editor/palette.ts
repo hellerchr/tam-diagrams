@@ -5,11 +5,11 @@
  */
 
 import type { ElementKind } from "../src/tam-edit.ts";
-import { h, icon, tipped } from "./dom.ts";
+import { h, icon, isOff, setOff, tipped } from "./dom.ts";
 import type { Editor } from "./editor.ts";
 import type { Link, Piece } from "../src/structure.ts";
 import { linkIcon, pieceIcon, structureOf } from "./structures.ts";
-import { type DiagramType, type Shape, type Snippet, typeInfo } from "./types.ts";
+import { type DiagramType, sameType, type Shape, type Snippet, typeInfo } from "./types.ts";
 
 export class Palette {
   readonly element = h("div", { class: "tab-body" });
@@ -162,7 +162,7 @@ export class Palette {
       editor.showPieceTarget(undefined);
     };
     control.addEventListener("pointerdown", (event) => {
-      if (event.button !== 0) return;
+      if (event.button !== 0 || isOff(control)) return;
       start = { x: event.clientX, y: event.clientY };
       control.setPointerCapture(event.pointerId);
     });
@@ -189,7 +189,7 @@ export class Palette {
     control.addEventListener("pointercancel", end);
     // The keyboard adds a piece as a click does.
     control.addEventListener("click", (event) => {
-      if (event.detail === 0) editor.addPiece(piece.kind);
+      if (event.detail === 0 && !isOff(control)) editor.addPiece(piece.kind);
     });
     return control;
   }
@@ -298,7 +298,8 @@ export class Palette {
   update() {
     const { editor } = this,
       { doc } = editor;
-    if (editor.type !== this.type) this.build(editor.type);
+    // An activity diagram that takes its first lane stays the type it was: its list stays.
+    if (!this.type || !sameType(editor.type, this.type)) this.build(editor.type);
     const words = this.search.value.trim().toLowerCase();
     let found = false;
     // Only the shapes the diagram takes are offered: a conceptual one has no components.
@@ -317,8 +318,10 @@ export class Palette {
       group.box.hidden = !any;
       found ||= any;
     }
+    // A piece the diagram does not take as it stands is off, with the reason: a group beside lanes.
     for (const { tile, piece } of this.pieces) {
       tile.hidden = !!words && !piece.name.toLowerCase().includes(words);
+      setOff(tile, editor.pieceRefusal(piece.kind));
       found ||= !tile.hidden;
     }
     for (const [kind, tile] of this.links)

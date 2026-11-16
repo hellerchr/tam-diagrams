@@ -1,10 +1,12 @@
 import type { TamError, UmlError } from "../src/index.ts";
+import type { DrawioError } from "../src/drawio.ts";
 
 /** How an input is named in messages: its path as given, or `<stdin>` for `-`. */
 export const inputName = (input: string) => (input === "-" ? "<stdin>" : input);
 
 /** The message without the `Line <n>: ` prefix both error classes put in front of it. */
-function bareMessage(error: TamError | UmlError): string {
+function bareMessage(error: TamError | UmlError | DrawioError): string {
+  if (!("line" in error)) return error.message;
   const prefix = `Line ${error.line}: `;
   return error.line && error.message.startsWith(prefix)
     ? error.message.slice(prefix.length)
@@ -15,8 +17,8 @@ function bareMessage(error: TamError | UmlError): string {
  * Stderr lines for a diagram error: `<name>:<line>: <message>`, or `<name>: <message>` when the
  * error has no line.
  */
-export function diagramMessage(name: string, error: TamError | UmlError): string[] {
-  const where = error.line ? `${name}:${error.line}` : name;
+export function diagramMessage(name: string, error: TamError | UmlError | DrawioError): string[] {
+  const where = "line" in error && error.line ? `${name}:${error.line}` : name;
   return [`${where}: ${bareMessage(error)}`];
 }
 
@@ -30,3 +32,7 @@ export function internalMessage(name: string, error: unknown): string {
   const detail = error instanceof Error ? (error.stack ?? error.message) : String(error);
   return `tam-diagrams: internal error while drawing ${name}: ${detail}`;
 }
+
+/** What a draw.io file holds that its diagram has no place for, one stderr line each. */
+export const warningLines = (name: string, warnings: string[]) =>
+  warnings.map((warning) => `${name}: warning: ${warning}\n`).join("");

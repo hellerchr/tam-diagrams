@@ -831,7 +831,7 @@ const tam: StreamParser<SyntaxState> = {
     )
       return "number";
     if (stream.match(/^@\s*[^-\s][^-]*?(?=\s*-->|\s*---|$)/)) return "meta";
-    if (stream.match(/^(<--|-->|---|--|-\.|\.->)/)) return "operator";
+    if (stream.match(/^(<--|-->|---|-\.-(?!>)|--|-\.|\.->)/)) return "operator";
     if (stream.match(/^\.\.\./) || stream.match(/^[{}]/)) return "punctuation";
     for (const word of TAM_WORDS) if (stream.match(word)) return "typeName";
     if (stream.match(/^[A-Za-z_]\w*/)) return "variableName";

@@ -1011,7 +1011,7 @@ const HEADERS: [header: string, template: string, type: string, detail: string][
   ["classDiagram", "classDiagram", "declare-uml-class", "Class diagram"],
   ["usecase-beta", "usecase-beta", "declare-uml-usecase", "Use case diagram"],
   ["flowchart", "flowchart ${TB}", "declare-uml-step", "Activity diagram"],
-  ["swimlane-beta", "swimlane-beta ${TB}", "declare-uml-lanes", "Activity with lanes"],
+  ["swimlane-beta", "swimlane-beta ${TB}", "declare-uml-lanes", "Activity diagram with lanes"],
   ["stateDiagram-v2", "stateDiagram-v2", "declare-uml-state", "State machine"],
   ["sequenceDiagram", "sequenceDiagram", "declare-uml-participant", "Sequence diagram"],
   ["erDiagram", "erDiagram", "declare-uml-class", "Entity relationship diagram"],

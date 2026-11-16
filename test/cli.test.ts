@@ -126,6 +126,49 @@ describe("check", () => {
   });
 });
 
+describe("draw.io files", () => {
+  it("converts a source to a draw.io file and the file back to a source", async () => {
+    const port = memoryIo({ "a.tam": TAM });
+    expect(await main(["convert", "a.tam", "-o", "a.drawio"], port.io)).toBe(0);
+    expect(port.written["a.drawio"]).toMatch(/^<mxfile host="tam-diagrams">/);
+    expect(port.written["a.drawio"]).toContain("tam=agent;");
+    const back = memoryIo({ "a.drawio": port.written["a.drawio"] });
+    expect(await main(["convert", "a.drawio"], back.io)).toBe(0);
+    expect(back.stdout()).toMatch(
+      /^agent web\[Web Server\] @\d+,\d+ \d+x\d+\nstorage db\[Orders\] @/,
+    );
+    expect(back.stdout()).toContain("web -- reads/writes --> db");
+    expect(back.stderr()).toBe("");
+  });
+
+  it("renders and checks a draw.io file as the diagram it draws, warning of what it leaves out", async () => {
+    const drawio = `<mxfile><diagram name="Page-1"><mxGraphModel><root><mxCell id="0"/><mxCell id="1" parent="0"/>
+<mxCell id="a" value="Web" style="rounded=0;whiteSpace=wrap;html=1;strokeWidth=2;" vertex="1" parent="1"><mxGeometry x="0" y="0" width="120" height="60" as="geometry"/></mxCell>
+<mxCell id="n" value="A cloud" style="ellipse;shape=cloud;" vertex="1" parent="1"><mxGeometry x="0" y="100" width="80" height="60" as="geometry"/></mxCell>
+</root></mxGraphModel></diagram></mxfile>`;
+    const port = memoryIo({ "a.drawio": drawio });
+    expect(await main(["render", "a.drawio"], port.io)).toBe(0);
+    expect(port.stdout()).toMatch(/^<svg\b/);
+    expect(port.stderr()).toBe(
+      "a.drawio: warning: The shape cloud “A cloud” has no meaning in a TAM block diagram; it is left out.\n",
+    );
+    const check = memoryIo({ "a.drawio": drawio });
+    expect(await main(["check", "a.drawio"], check.io)).toBe(0);
+  });
+
+  it("exits 1 for a draw.io file with nothing to read, or a source of a type it does not carry", async () => {
+    const port = memoryIo({
+      "e.drawio":
+        '<mxfile><diagram name="P"><mxGraphModel><root/></mxGraphModel></diagram></mxfile>',
+      "c.mmd": "classDiagram\n  class A",
+    });
+    expect(await main(["convert", "e.drawio"], port.io)).toBe(1);
+    expect(port.stderr()).toMatch(/^e\.drawio: The page “P” is empty\.\n$/);
+    expect(await main(["convert", "c.mmd"], port.io)).toBe(1);
+    expect(port.stderr()).toMatch(/c\.mmd: draw\.io files carry TAM block diagrams/);
+  });
+});
+
 describe("usage", () => {
   it("prints help to stdout and exits 0", async () => {
     const port = memoryIo();

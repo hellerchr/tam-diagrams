@@ -136,6 +136,9 @@ export const ICONS = {
   ),
   copy: svg('<rect x="7" y="7" width="10" height="10" rx="1.500"/><path d="M13 7V3H3v10h4"/>'),
   theme: svg('<path d="M16.500 11.500A7 7 0 0 1 8.500 3.500a7 7 0 1 0 8 8z"/>'),
+  sun: svg(
+    '<circle cx="10" cy="10" r="3.500"/><path d="M10 1.500v2M10 16.500v2M1.500 10h2M16.500 10h2M4 4l1.400 1.400M14.600 14.600L16 16M4 16l1.400-1.400M14.600 5.400L16 4"/>',
+  ),
   "align-left": svg(
     '<path d="M3 2.500v15"/><rect x="5.500" y="5" width="10" height="3.500"/><rect x="5.500" y="11.500" width="6" height="3.500"/>',
   ),

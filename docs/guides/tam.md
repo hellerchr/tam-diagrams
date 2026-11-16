@@ -22,6 +22,8 @@ The parser enforces the SAP TAM standard and names the line that breaks a rule.
 - A container stands for its parts: a container and one of its own parts are never connected, except by `delegates` at design level.
 - A package connects only through dependencies. A `pointer` joins two storages; `create` and `generate` join active elements.
 - Only agents and storages are shown as several (`stack`, `...`). Dots stand between elements of one kind.
+- A note remarks on the diagram and takes part in no rule of the notation: it is neither active nor passive, holds nothing, and stands at the top or in any container. Dots and groups do not count it.
+- `-.-` attaches a note to an element: it joins exactly one note and one element. A note has no other connection. A note on an element shown as several is attached to the original.
 - `level conceptual` allows agents, storages, channels and accesses only. Components, subsystems, classes, packages, interfaces and delegation belong to `level design`. Without a level line everything is allowed.
 - Elements do not overlap. In a layout by hand the editor and `check` say which do.
 - An id starts with a letter or `_` and goes on with letters, digits and `_`. Every id is declared once; a connection may stand before or after the declarations of its ends.
@@ -69,6 +71,18 @@ The parser enforces the SAP TAM standard and names the line that breaks a rule.
 | `agent worker[Worker] stack` | Several, drawn as a stack. A container may be a stack. |
 | `storage log[Log] ...` | Several, drawn as two with dots between. Each connection goes to both. Not for containers. |
 | `agent first[First]`<br>`...`<br>`agent last[Last]` | A line of three dots between two elements of one kind: more of them stand between, side by side. |
+
+## Notes
+
+A note is a remark in a box with a folded corner, attached to what it remarks on by a dotted line.
+
+| You write | It means |
+| --- | --- |
+| `note vat[Remember VAT]` | A note: the kind, an id and its text in brackets. `<br>` breaks the text. |
+| `note [Remember VAT]` | Without an id: a note that stands alone, since no line can name it. |
+| `note vat[Remember VAT]:::yellow @40,400 140x60` | Color, position and size as for any element. |
+| `vat -.- a` | A dotted line attaches the note to an element, in either order: `a -.- vat` is the same. |
+| `agent shop[Web Shop] {`<br>&nbsp;&nbsp;`agent api[Order API]`<br>&nbsp;&nbsp;`note check[Check stock first]`<br>`}` | A note in a container stands among its parts. |
 
 ## Color, position and size
 
@@ -176,5 +190,8 @@ The syntax borrows Mermaid's arrows, not Mermaid's flowchart: shapes in brackets
 | `a -- calls --> x` | Every id is declared: `agent x[Name]`. |
 | `agent web-server[Web]` | An id has letters, digits and `_` only. |
 | `agent api[API]:::teal` | No such color. |
+| `n -- calls --> a` | A note only hangs on a dotted line: `n -.- a`. |
+| `a -.- b` | `-.-` attaches a note: one of its ends is a note. |
+| `note n[N] {`<br>&nbsp;&nbsp;`agent x[X]`<br>`}` | A note holds nothing. |
 | `subgraph backend` | Write a container, `agent backend[Backend] {`, or a `group {`. |
 | `style a fill:#f96` | Colors are given with `:::name` on the declaration. |

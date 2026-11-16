@@ -28,7 +28,7 @@ import type { Problem } from "./document.ts";
 import { SourcePane } from "./source.ts";
 import { StatusBar } from "./statusbar.ts";
 import { installTooltips } from "./tooltip.ts";
-import { typeInfo } from "./types.ts";
+import { sameType, typeInfo } from "./types.ts";
 
 /** The pointer tools of the rail. */
 const POINTERS: { tool: Tool; icon: IconName; name: string; key: string }[] = [
@@ -76,6 +76,8 @@ export class Panels {
   private readonly root: HTMLElement;
   private readonly editor: Editor;
   private readonly shell: Shell;
+  /** The button between light and dark, showing the mode a click switches to. */
+  private readonly themeToggle: HTMLButtonElement;
   private readonly stage: HTMLElement;
   private readonly menus: Menus;
   private readonly status: StatusBar;
@@ -328,6 +330,12 @@ export class Panels {
       icon("chevron"),
     );
     menuButton(exporting, () => this.menus.exports(), { right: true });
+    // One click between light and dark; View ▸ Theme also follows the system.
+    this.themeToggle = iconButton("theme", { tip: "Dark mode" }, () => {
+      shell.setTheme(this.dark ? "light" : "dark");
+      this.showTheme();
+    });
+    this.showTheme();
     const header = h(
       "header",
       { class: "bar" },
@@ -344,6 +352,7 @@ export class Panels {
         this.undo,
         this.redo,
         exporting,
+        this.themeToggle,
         iconButton("help", { tip: "Keyboard and mouse", key: "?" }, () => helpDialog(editor.type)),
       ),
     );
@@ -1249,14 +1258,30 @@ export class Panels {
   }
 
   /** Shows the editor's state: called whenever it changed. */
+  /** Whether the page is dark now, by choice or by the system's. */
+  private get dark() {
+    return document.documentElement.dataset.theme === "dark";
+  }
+
+  /** The theme button shows the mode a click switches to: the moon in light mode, the sun in dark. */
+  private showTheme() {
+    const tip = this.dark ? "Light mode" : "Dark mode";
+    this.themeToggle.replaceChildren(icon(this.dark ? "sun" : "theme"));
+    this.themeToggle.dataset.tip = tip;
+    this.themeToggle.setAttribute("aria-label", tip);
+  }
+
   update() {
+    this.showTheme();
     const { editor, shell } = this,
       { doc } = editor,
       info = typeInfo(editor.type),
       text = info.mode === "text",
       // The picture of an earlier type that shows under an error: the window stays that type's.
       earlier =
-        doc.problem && doc.picture && doc.picture.type !== editor.type ? doc.picture : undefined,
+        doc.problem && doc.picture && !sameType(doc.picture.type, editor.type)
+          ? doc.picture
+          : undefined,
       shown = earlier ? typeInfo(earlier.type) : info;
     this.reselect();
     // An offer of a step goes when its source is no longer the one on show.

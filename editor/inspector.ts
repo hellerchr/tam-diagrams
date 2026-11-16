@@ -38,6 +38,42 @@ const CARDINALITY_NAMES: { value: Cardinality; name: string }[] = [
   { value: "zero-or-more", name: "Zero or more" },
 ];
 
+/** What each level means in a diagram of a type, as the Level buttons' tooltips say it. */
+const LEVELS: Partial<Record<string, { any: string; conceptual: string; design: string }>> = {
+  tam: {
+    any: "Conceptual and design level elements together",
+    conceptual: "Agents, storages, channels and accesses only",
+    design: "Components, interfaces and connectors",
+  },
+  class: {
+    any: "No level: everything a class diagram has",
+    conceptual:
+      "Classes and their relations, without visibility, interfaces, templates, realization or dependencies",
+    design: "Everything a class diagram has, as no level",
+  },
+  state: {
+    any: "No level said",
+    conceptual: "States and transitions, without fork or join bars",
+    design: "State machines belong to the conceptual level in TAM",
+  },
+  usecase: {
+    any: "No level said",
+    conceptual: "Actors, use cases and their relations",
+    design: "Use case diagrams belong to the conceptual level in TAM",
+  },
+  sequence: {
+    any: "No level said",
+    conceptual: "Messages between participants, without creating or destroying objects",
+    design: "Objects created and destroyed too",
+  },
+  flowchart: {
+    any: "No level said",
+    conceptual: "TAM's conceptual level: what is done, by whom",
+    design: "TAM's design level: how the system does it",
+  },
+};
+LEVELS.swimlane = LEVELS.flowchart;
+
 /** One of the buttons of a segmented control: a name or an icon, and what its tooltip says. */
 interface Segment<T extends string> {
   value: T;
@@ -442,20 +478,24 @@ export class Inspector {
     this.sync.push(() => {
       interfaces.hidden = !single || !editor.allowsInterface(id);
     });
-    const first = nodes()[0];
+    const first = nodes()[0],
+      // A note is text attached to an element: it has no count, no copy and no interfaces.
+      notes = nodes().every((node) => node.kind === "note");
     return [
       single
-        ? this.subject((first?.kind as IconName) ?? "agent", "Element")
+        ? first?.kind === "note"
+          ? this.subject("uml-note", "Note")
+          : this.subject((first?.kind as IconName) ?? "agent", "Element")
         : this.subject("shapes", `${ids.length} elements`),
       this.group(
         "Identity",
         single &&
           this.row(
-            "Name",
+            notes ? "Text" : "Name",
             this.text(
               () => (nodes()[0]?.label ?? "").replace(/<br\s*\/?>/gi, "\n"),
               (label) => editor.setElements({ label }),
-              "Name",
+              notes ? "Text" : "Name",
               true,
             ),
           ),
@@ -481,22 +521,23 @@ export class Inspector {
       this.group(
         "Style",
         this.row("Color", h("div", { class: "swatches" }, ...colors), "div"),
-        this.row(
-          "Count",
-          this.segments(
-            [
-              { value: "one", name: "One" },
-              { value: "stack", name: "Stack", tip: "Several, drawn as a stack" },
-              { value: "several", name: "A … B", tip: "Several, drawn as two with dots between" },
-            ],
-            () => shared(multiple),
-            (value) =>
-              editor.setElements({ stack: value === "stack", multiple: value === "several" }),
-            (value) =>
-              editor.elementsRefusal({ stack: value === "stack", multiple: value === "several" }),
+        !notes &&
+          this.row(
+            "Count",
+            this.segments(
+              [
+                { value: "one", name: "One" },
+                { value: "stack", name: "Stack", tip: "Several, drawn as a stack" },
+                { value: "several", name: "A … B", tip: "Several, drawn as two with dots between" },
+              ],
+              () => shared(multiple),
+              (value) =>
+                editor.setElements({ stack: value === "stack", multiple: value === "several" }),
+              (value) =>
+                editor.elementsRefusal({ stack: value === "stack", multiple: value === "several" }),
+            ),
+            "div",
           ),
-          "div",
-        ),
         single && copyRow,
       ),
       ...(single
@@ -576,7 +617,8 @@ export class Inspector {
       ),
     );
     const from = h("code", { class: "id" }),
-      to = h("code", { class: "id" });
+      to = h("code", { class: "id" }),
+      text = this.group("Text", label, protocol);
     const reverse = h(
       "button",
       {
@@ -589,12 +631,16 @@ export class Inspector {
     this.sync.push(() => {
       const connection = read();
       both.checked = !!connection?.both;
-      bothRow.hidden = !connection?.both && !editor.allowsWire(id, { both: true });
+      bothRow.hidden =
+        connection?.word === "anchor" ||
+        (!connection?.both && !editor.allowsWire(id, { both: true }));
       setOff(
         reverse,
         !editor.allowsWire(id, { reverse: true }) && "This connection only goes this way",
       );
-      label.hidden = connection?.word === "dependency";
+      // A dependency says its keyword, and the line that attaches a note says nothing.
+      label.hidden = connection?.word === "dependency" || connection?.word === "anchor";
+      text.hidden = connection?.word === "anchor";
       protocol.hidden = !channel();
       from.textContent = connection?.from ?? "";
       to.textContent = connection?.to ?? "";
@@ -623,7 +669,7 @@ export class Inspector {
         this.row("To", to, "div"),
         bothRow,
       ),
-      this.group("Text", label, protocol),
+      text,
       h("div", { class: "actions end" }, reverse, this.remove()),
     ];
   }
@@ -816,7 +862,7 @@ export class Inspector {
         h("div", { class: "actions end" }, this.remove()),
       ];
     return [
-      this.subject(info.icon, info.name),
+      ...this.diagramPane(),
       h("p", { class: "note" }, `${info.about}.`),
       h(
         "p",
@@ -826,12 +872,12 @@ export class Inspector {
     ];
   }
 
-  /** A diagram edited as text has its properties in the source. */
+  /** A diagram edited as text has its other properties in the source. */
   private textPane(): HTMLElement[] {
     const { editor } = this,
       info = typeInfo(editor.type);
     return [
-      this.subject(info.icon, info.name),
+      ...this.diagramPane(),
       h("p", { class: "note" }, `${info.about}.`),
       h(
         "p",
@@ -841,57 +887,85 @@ export class Inspector {
     ];
   }
 
+  /**
+   * The properties of the whole diagram: its title, and those of the direction, the level and the
+   * numbering of messages its type has. A level the diagram refuses is off and says why.
+   */
   private diagramPane(): HTMLElement[] {
     const { editor } = this,
-      diagram = () => editor.doc.picture?.diagram;
+      info = typeInfo(editor.type),
+      settings = editor.settings,
+      header = () => editor.header,
+      levels = LEVELS[editor.type] ?? LEVELS.tam!;
+    const numbered = h("input", {
+      type: "checkbox",
+      onChange: () => editor.setHeader({ numbered: numbered.checked }),
+    }) as HTMLInputElement;
+    this.sync.push(() => {
+      numbered.checked = !!header()?.numbered;
+    });
     return [
-      this.subject("logo", "Diagram"),
+      editor.editable
+        ? this.subject("logo", "Diagram")
+        : this.subject(info.icon, "Diagram", info.name),
       this.group(
         "Identity",
         this.row(
           "Title",
           this.text(
-            () => diagram()?.title ?? "",
+            () => header()?.title ?? "",
             (title) => editor.setHeader({ title }),
             "Untitled",
           ),
         ),
       ),
-      this.group(
-        "Layout",
-        this.row(
-          "Direction",
-          this.segments<Direction>(
-            [
-              { value: "TB", icon: "arrow-down", tip: "Top to bottom" },
-              { value: "LR", icon: "arrow-right", tip: "Left to right" },
-              { value: "BT", icon: "arrow-up", tip: "Bottom to top" },
-              { value: "RL", icon: "arrow-left", tip: "Right to left" },
-            ],
-            () => diagram()?.direction,
-            (direction) => editor.setHeader({ direction }),
-          ),
-          "div",
+      (settings.direction || settings.level) &&
+        this.group(
+          "Layout",
+          settings.direction &&
+            this.row(
+              "Direction",
+              this.segments<Direction>(
+                [
+                  { value: "TB", icon: "arrow-down", tip: "Top to bottom" },
+                  { value: "LR", icon: "arrow-right", tip: "Left to right" },
+                  { value: "BT", icon: "arrow-up", tip: "Bottom to top" },
+                  { value: "RL", icon: "arrow-left", tip: "Right to left" },
+                ],
+                () => header()?.direction,
+                (direction) => editor.setHeader({ direction }),
+              ),
+              "div",
+            ),
+          settings.level &&
+            this.row(
+              "Level",
+              this.segments<"" | "conceptual" | "design">(
+                [
+                  { value: "", name: "Any", tip: levels.any },
+                  { value: "conceptual", name: "Conceptual", tip: levels.conceptual },
+                  { value: "design", name: "Design", tip: levels.design },
+                ],
+                () => header()?.level ?? "",
+                (level) => editor.setHeader({ level }),
+                (level) => editor.headerRefusal({ level }),
+              ),
+              "div",
+            ),
         ),
-        this.row(
-          "Level",
-          this.segments<"" | "conceptual" | "design">(
-            [
-              { value: "", name: "Any", tip: "Conceptual and design level elements together" },
-              {
-                value: "conceptual",
-                name: "Conceptual",
-                tip: "Agents, storages, channels and accesses only",
-              },
-              { value: "design", name: "Design", tip: "Components, interfaces and connectors" },
-            ],
-            () => diagram()?.level ?? "",
-            (level) => editor.setHeader({ level }),
-            (level) => editor.headerRefusal({ level }),
+      settings.numbering &&
+        this.group(
+          "Messages",
+          h(
+            "label",
+            {
+              class: "row check",
+              ...tipped({ tip: "Numbers the messages, from 1: `autonumber`" }),
+            },
+            h("span", {}, "Numbered"),
+            numbered,
           ),
-          "div",
         ),
-      ),
-    ];
+    ].filter((item) => item !== false);
   }
 }

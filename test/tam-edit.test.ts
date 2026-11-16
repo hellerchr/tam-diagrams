@@ -13,6 +13,7 @@ import {
   setElement,
   setHeader,
   unplace,
+  unwrap,
 } from "../src/tam-edit.ts";
 
 const SHOP = `title Shop  %% the shop
@@ -228,5 +229,83 @@ describe("giving an element another id", () => {
       true,
       false,
     ]);
+  });
+});
+
+describe("editing notes", () => {
+  const NOTED = `agent api[Order API]
+storage db[Orders]
+note keep[Kept for ten years] @200,40
+api -- reads/writes --> db
+keep -.- db
+`;
+
+  it("adds a note, at the top or inside an element, and changes its text, color and place", () => {
+    const { source, id } = addElement(SHOP, { kind: "note", label: "Check stock", parent: "shop" });
+    expect(id).toBe("check_stock");
+    expect(source).toContain('  storage cart "Cart"\n  note check_stock[Check stock]\n}');
+    expect(parseTam(source).nodes.get(id)).toMatchObject({ kind: "note", parent: "shop" });
+    const top = addElement(NOTED, { kind: "note", at: { x: 0, y: 0 } });
+    expect(top.source).toContain("note note1 @0,0\n");
+    let changed = setElement(NOTED, "keep", { label: "Kept\nfor ten years", color: "yellow" });
+    changed = place(changed, new Map([["keep", { x: 300, y: 60, width: 140, height: 60 }]]));
+    expect(changed).toContain("note keep[Kept<br>for ten years]:::yellow @300,60 140x60\n");
+  });
+
+  it("attaches a note to an element with a dotted line, the note first", () => {
+    const added = addElement(NOTED, { kind: "note", label: "Busy" }).source;
+    expect(connect(added, "api", "busy")).toContain("\nbusy -.- api\n");
+    expect(connect(added, "busy", "api")).toContain("\nbusy -.- api\n");
+    expect(connectionOf(NOTED, "e2")).toMatchObject({ from: "keep", to: "db", word: "anchor" });
+    // A note written without an id gets one, so the line can name it.
+    const free = connect("agent a[A]\nnote [A free remark]", "note#1", "a");
+    expect(free).toBe("agent a[A]\nnote a_free_remark[A free remark]\na_free_remark -.- a");
+    expect(() => parseTam(free)).not.toThrow();
+  });
+
+  it("removes a note with its dotted lines, and renames, duplicates, copies and pastes notes", async () => {
+    const { copyOf, paste, renameId } = await import("../src/tam-edit.ts");
+    expect(remove(NOTED, ["keep"])).toBe(
+      "agent api[Order API]\nstorage db[Orders]\napi -- reads/writes --> db\n",
+    );
+    expect(remove(NOTED, ["db"])).toBe(
+      "agent api[Order API]\nnote keep[Kept for ten years] @200,40\n",
+    );
+    expect(renameId(NOTED, "keep", "retention")).toContain(
+      "note retention[Kept for ten years] @200,40\napi -- reads/writes --> db\nretention -.- db\n",
+    );
+    const doubled = duplicate(NOTED, ["keep"], { x: 20, y: 20 });
+    expect(doubled.source).toContain("note keep2[Kept for ten years] @220,60\n");
+    const fragment = copyOf(NOTED, ["db", "keep"]);
+    expect(fragment).toBe("storage db[Orders]\nnote keep[Kept for ten years] @200,40\nkeep -.- db");
+    const pasted = paste(NOTED, fragment, { at: { x: 400, y: 0 } }).source;
+    expect(pasted).toContain("keep2 -.- db2");
+    expect(parseTam(pasted).edges.filter((edge) => edge.kind === "anchor")).toHaveLength(2);
+  });
+});
+
+describe("taking an element apart", () => {
+  it("keeps the parts where it stood, and drops it with its connections", () => {
+    const source = `agent shop[Web Shop] {
+  group pool[Workers] {
+    agent a[A]
+    agent b[B]
+  }
+  storage db[DB]
+}
+agent client[Client]
+client -- calls --> pool
+a -- writes --> db
+`;
+    expect(unwrap(source, "pool")).toBe(`agent shop[Web Shop] {
+  agent a[A]
+  agent b[B]
+  storage db[DB]
+}
+agent client[Client]
+a -- writes --> db
+`);
+    // An element that holds nothing stays.
+    expect(unwrap(source, "db")).toBe(source);
   });
 });

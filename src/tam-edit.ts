@@ -143,6 +143,7 @@ function writeConnection(connection: Connection): string {
     label = connection.label && cleanWire(connection.label),
     protocol = connection.protocol && cleanWire(connection.protocol),
     at = protocol ? ` @${protocol}` : "";
+  if (word === "anchor") return `${from} -.- ${to}`;
   if (word === "dependency") return `${from} -. ${label ?? "use"} .-> ${to}`;
   if (word === "---")
     return label || protocol
@@ -369,7 +370,8 @@ export function connectionOf(source: string, edge: string): Connection | undefin
 /**
  * The word that connects two elements when nothing else is said: an agent reads and writes a
  * storage, calls another agent, and holds what it delegates to; storages point at each other and
- * packages use each other. `from` and `to` swap where only the other element can act.
+ * packages use each other; a note is attached to an element, the note first. `from` and `to` swap
+ * where only the other element can act.
  */
 export function defaultConnection(diagram: TamDiagram, from: string, to: string): Connection {
   const a = declared(diagram, from)!,
@@ -382,6 +384,8 @@ export function defaultConnection(diagram: TamDiagram, from: string, to: string)
     both: false,
     ...(label ? { label } : {}),
   });
+  if (a.kind === "note" || b.kind === "note")
+    return connection("anchor", undefined, a.kind !== "note");
   if (a.kind === "package" || b.kind === "package") return connection("dependency", "use");
   if (isStorage(a) && isStorage(b)) return connection("dependency", "pointer");
   if (isStorage(a) || isStorage(b)) return connection("reads/writes", undefined, isStorage(a));
@@ -399,6 +403,15 @@ export function connect(
   const diagram = parseTam(source),
     lines = linesOf(source);
   const connection = { ...defaultConnection(diagram, from, to), ...change };
+  // A note written without an id (`note [text]`) gets one, so a line can name it.
+  for (const end of ["from", "to"] as const) {
+    const node = declared(diagram, connection[end]),
+      declaration = isElement(node) ? read(lines[node.line - 1]) : undefined;
+    if (!declaration || declaration.id) continue;
+    const id = freshId(idsOf(diagram), declaration.label || declaration.kind);
+    lines[node!.line - 1] = write({ ...declaration, id });
+    connection[end] = id;
+  }
   // After the last statement, before blank lines at the end of the source.
   let end = lines.length;
   while (end > 0 && !lines[end - 1].trim()) end--;
@@ -512,7 +525,7 @@ export function renameId(source: string, id: string, next: string): string {
       const renamed = (text: string) =>
         text.replace(new RegExp(`(^|[^\\w])${node.id}(?![\\w])`, "g"), `$1${next}`);
       const [connection] = connections,
-        end = tail.match(/(-->|---|\.->)\s*\w+\s*(%%.*)?$/);
+        end = tail.match(/(-->|---|\.->|-\.-)\s*\w+\s*(%%.*)?$/);
       if (end && left !== undefined) {
         const at = tail.lastIndexOf(end[0]) + end[1].length;
         lines[index] =
@@ -651,6 +664,36 @@ export function moveInto(source: string, ids: Iterable<string>, parent: string |
   } else at = afterElements(lines);
   lines.splice(at, 0, ...blocks.flat().map((line) => (line.trim() ? indent + line : line)));
   return tidy(lines).join("\n");
+}
+
+/**
+ * Takes an element that holds others apart: its parts take its place, in the source and in the
+ * element around it, and it goes with its connections. The source stays as it is for an element
+ * that holds nothing.
+ */
+export function unwrap(source: string, id: string): string {
+  const diagram = parseTam(source),
+    node = declared(diagram, id);
+  if (!isElement(node) || !node.children.length) return source;
+  const joins = diagram.edges
+    .filter((edge) => edge.source === node.id || edge.target === node.id)
+    .map((edge) => edge.id);
+  const lines = linesOf(joins.length ? remove(source, joins) : source);
+  // The declaration may have moved up when connections above it went: find it again by its id.
+  const start = lines.findIndex((line) => read(line)?.id === node.id),
+    end = blockEnd(lines, start);
+  if (start < 0 || end === start) return source;
+  const outer = indentOf(lines[start]).length,
+    inner =
+      lines
+        .slice(start + 1, end)
+        .find((line) => line.trim())
+        ?.match(/^\s*/)![0].length ?? outer;
+  const shift = Math.max(0, inner - outer);
+  const parts = lines
+    .slice(start + 1, end)
+    .map((line) => (line.slice(0, shift).trim() ? line : line.slice(shift)));
+  return [...lines.slice(0, start), ...parts, ...lines.slice(end + 1)].join("\n");
 }
 
 /**

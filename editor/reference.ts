@@ -18,6 +18,8 @@ export interface GuideRow {
   context?: string;
   /** The lines that stand after the statement for it to be read: what closes a block it opens. */
   after?: string;
+  /** The first line the row is read under, where it is not its section's or its guide's. */
+  header?: string;
   /** The row is a source of its own: the header of the type is not put before it. */
   whole?: boolean;
   /** The row is no statement, such as an operator or a list of words on its own: it is not parsed. */
@@ -35,6 +37,11 @@ export interface GuideSection {
   prose?: string;
   /** The rules of the notation, one sentence or two each; `backticks` mark code. */
   rules?: string[];
+  /**
+   * The first line the rows of the section are read under, where it is not the guide's: the
+   * lanes of an activity diagram are read under `swimlane-beta`.
+   */
+  header?: string;
   /** The lines that stand before each row of the section, where the row says nothing else. */
   context?: string;
   rows?: GuideRow[];
@@ -135,6 +142,8 @@ const TAM: Guide = {
         "A container stands for its parts: a container and one of its own parts are never connected, except by `delegates` at design level.",
         "A package connects only through dependencies. A `pointer` joins two storages; `create` and `generate` join active elements.",
         "Only agents and storages are shown as several (`stack`, `...`). Dots stand between elements of one kind.",
+        "A note remarks on the diagram and takes part in no rule of the notation: it is neither active nor passive, holds nothing, and stands at the top or in any container. Dots and groups do not count it.",
+        "`-.-` attaches a note to an element: it joins exactly one note and one element. A note has no other connection. A note on an element shown as several is attached to the original.",
         "`level conceptual` allows agents, storages, channels and accesses only. Components, subsystems, classes, packages, interfaces and delegation belong to `level design`. Without a level line everything is allowed.",
         "Elements do not overlap. In a layout by hand the editor and `check` say which do.",
         "An id starts with a letter or `_` and goes on with letters, digits and `_`. Every id is declared once; a connection may stand before or after the declarations of its ends.",
@@ -207,6 +216,36 @@ const TAM: Guide = {
         row(
           "agent first[First]\n...\nagent last[Last]",
           "A line of three dots between two elements of one kind: more of them stand between, side by side.",
+        ),
+      ],
+    },
+    {
+      id: "notes",
+      title: "Notes",
+      prose:
+        "A note is a remark in a box with a folded corner, attached to what it remarks on by a dotted line.",
+      context: TAM_CONTEXT,
+      rows: [
+        row(
+          "note vat[Remember VAT]",
+          "A note: the kind, an id and its text in brackets. `<br>` breaks the text.",
+        ),
+        row(
+          "note [Remember VAT]",
+          "Without an id: a note that stands alone, since no line can name it.",
+        ),
+        row(
+          "note vat[Remember VAT]:::yellow @40,400 140x60",
+          "Color, position and size as for any element.",
+        ),
+        row(
+          "vat -.- a",
+          "A dotted line attaches the note to an element, in either order: `a -.- vat` is the same.",
+          { context: `${TAM_CONTEXT}\nnote vat[Remember VAT]` },
+        ),
+        row(
+          "agent shop[Web Shop] {\n  agent api[Order API]\n  note check[Check stock first]\n}",
+          "A note in a container stands among its parts.",
         ),
       ],
     },
@@ -377,6 +416,11 @@ api <-- calls --> payment`,
         no("a -- calls --> x", "Every id is declared: `agent x[Name]`."),
         no("agent web-server[Web]", "An id has letters, digits and `_` only."),
         no("agent api[API]:::teal", "No such color."),
+        no("n -- calls --> a", "A note only hangs on a dotted line: `n -.- a`.", {
+          context: `${TAM_CONTEXT}\nnote n[N]`,
+        }),
+        no("a -.- b", "`-.-` attaches a note: one of its ends is a note."),
+        no("note n[N] {\n  agent x[X]\n}", "A note holds nothing."),
         no("subgraph backend", "Write a container, `agent backend[Backend] {`, or a `group {`."),
         no("style a fill:#f96", "Colors are given with `:::name` on the declaration."),
       ],
@@ -877,14 +921,15 @@ const ACTIVITY_RULES = [
 const FLOWCHART: Guide = {
   type: "flowchart",
   name: "Activity diagram",
-  about: "Actions and control flow: decision, merge, fork, join, initial and final nodes",
+  about:
+    "Actions and control flow: decision, merge, fork, join, initial and final nodes, and lanes for the agents responsible",
   header: "flowchart TB",
   sections: [
     {
       id: "about",
       title: "What it shows",
       prose:
-        "An activity diagram shows the control flow between actions: their order, decision and merge nodes, concurrency through fork and join nodes, and initial and final nodes. Use it for a business process or an algorithm. It is written in Mermaid's `flowchart` syntax and drawn as a UML activity diagram.",
+        "An activity diagram shows the control flow between actions: their order, decision and merge nodes, concurrency through fork and join nodes, and initial and final nodes. Use it for a business process or an algorithm. It is written in Mermaid's `flowchart` syntax and drawn as a UML activity diagram. Lanes are optional: in a diagram with lanes every lane is an activity partition that holds the actions of one agent, for a process that spans human agents, organizational units or systems. Such a diagram starts with `swimlane-beta` instead, and its subgraphs are its lanes.",
     },
     {
       id: "rules",
@@ -892,6 +937,7 @@ const FLOWCHART: Guide = {
       rules: [
         ...ACTIVITY_RULES,
         "A node stands in the subgraph where it is named first inside one.",
+        "Lanes and groups do not mix: under `flowchart` every subgraph is a group, under `swimlane-beta` every subgraph is a lane.",
         "`end`, `subgraph`, `graph`, `flowchart`, `direction`, `style`, `linkStyle`, `classDef`, `class` and `click` are keywords, not ids.",
         "A diagram has at most 300 nodes, 500 flows and 20,000 characters.",
       ],
@@ -941,6 +987,37 @@ const FLOWCHART: Guide = {
         ),
       ],
     },
+    {
+      id: "lanes",
+      title: "Lanes",
+      header: "swimlane-beta TB",
+      rules: [
+        "A diagram with lanes starts with `swimlane-beta` instead of `flowchart`, and every `subgraph` of it is a lane: an activity partition named after the agent responsible for its actions. Lanes stand side by side in the order of the source.",
+        "A node stands in the lane where it is named first inside one. Nodes named in no lane share a lane without a name.",
+        "Flows run from node to node, also across lanes. A flow does not end at a lane, and lanes do not nest.",
+        "Lanes and groups do not mix: a diagram with lanes has no groups. A placed node stays in its lane.",
+      ],
+      rows: [
+        row(
+          "swimlane-beta TB",
+          "The first line of a diagram with lanes, with the way the flow runs. `TB` (the default) and `BT`: lanes are columns. `LR` and `RL`: lanes are rows. `TD` is `TB`; `>`, `<`, `^` and `v` point the way too.",
+          { whole: true, after: "a --> b" },
+        ),
+        row(
+          "subgraph Customer\n  order(Place order)\nend",
+          "A lane with its nodes, between its line and `end`. The id is its title.",
+        ),
+        row(
+          "subgraph shop [Web Shop]\n  check(Check order)\nend",
+          "An id, and the title in square brackets.",
+        ),
+        row('subgraph "Web Shop"\n  check(Check order)\nend', "A title in quotes, without an id."),
+        row(
+          "subgraph Customer\n  order(Place order)\nend\nsubgraph Shop\n  check(Check order)\nend\norder --> check",
+          "A flow from lane to lane. It may stand after the lanes or inside one.",
+        ),
+      ],
+    },
     { id: "ignored", title: "Read and not drawn", context: "a --> b", rows: FLOW_IGNORED },
     place("pack", "pack(Pack goods)", "A node is placed by its id."),
     {
@@ -976,124 +1053,15 @@ const FLOWCHART: Guide = {
         no("a --> b %% the usual way", "A comment is a line of its own."),
         no("title Shipping", "Write the title in frontmatter."),
         no("subgraph packing\n  box(Box it)", "A subgraph ends with `end`."),
-      ],
-    },
-  ],
-};
-
-const SWIMLANE: Guide = {
-  type: "swimlane",
-  name: "Activity diagram with lanes",
-  about: "Actions in activity partitions: the agent responsible for each",
-  header: "swimlane-beta TB",
-  sections: [
-    {
-      id: "about",
-      title: "What it shows",
-      prose:
-        "An activity diagram with lanes shows the control flow between actions, partitioned by responsibility: every lane is an activity partition that holds the actions of one agent. Use it when a process spans human agents, organizational units or systems. It is written in Mermaid's `swimlane-beta` syntax: a flowchart whose subgraphs are the lanes.",
-    },
-    {
-      id: "rules",
-      title: "Rules of the notation",
-      rules: [
-        "Every `subgraph` is a lane, an activity partition named after the agent responsible for its actions. Lanes stand side by side in the order of the source.",
-        "A node stands in the lane where it is named first inside one. Nodes named in no lane share a lane without a name.",
-        "Flows run from node to node, also across lanes. A flow does not end at a lane, and lanes do not nest.",
-        ...ACTIVITY_RULES,
-        "`end`, `subgraph`, `graph`, `flowchart`, `direction`, `style`, `linkStyle`, `classDef`, `class` and `click` are keywords, not ids.",
-        "A diagram has at most 300 nodes, 500 flows and 20,000 characters.",
-      ],
-    },
-    {
-      id: "diagram",
-      title: "Diagram",
-      context: "a --> b",
-      rows: [
-        row(
-          "swimlane-beta TB",
-          "The first line, with the way the flow runs. `TB` (the default) and `BT`: lanes are columns. `LR` and `RL`: lanes are rows. `TD` is `TB`; `>`, `<`, `^` and `v` point the way too.",
-          { whole: true, after: "a --> b" },
-        ),
-        ...front(
-          "swimlane-beta TB",
-          "a --> b",
-          "TAM's level, as a comment before or after the first line. An activity diagram may be of either level.",
-        ),
-      ],
-    },
-    {
-      id: "lanes",
-      title: "Lanes",
-      rows: [
-        row(
-          "subgraph Customer\n  order(Place order)\nend",
-          "A lane with its nodes, between its line and `end`. The id is its title.",
-        ),
-        row(
-          "subgraph shop [Web Shop]\n  check(Check order)\nend",
-          "An id, and the title in square brackets.",
-        ),
-        row('subgraph "Web Shop"\n  check(Check order)\nend', "A title in quotes, without an id."),
-        row(
-          "subgraph Customer\n  order(Place order)\nend\nsubgraph Shop\n  check(Check order)\nend\norder --> check",
-          "A flow from lane to lane. It may stand after the lanes or inside one.",
-        ),
-      ],
-    },
-    { id: "nodes", title: "Nodes", rows: FLOW_NODES },
-    {
-      id: "flows",
-      title: "Flows",
-      prose: "A flow may be written with or without spaces around its arrow.",
-      rows: FLOW_EDGES,
-    },
-    { id: "ignored", title: "Read and not drawn", context: "a --> b", rows: FLOW_IGNORED },
-    place(
-      "order",
-      "subgraph Customer\n  order(Place order)\nend",
-      "A node is placed by its id, and stays in its lane.",
-    ),
-    {
-      id: "example",
-      title: "Example",
-      example: `swimlane-beta TB
-  subgraph Customer
-    start((Start)) --> order(Place order)
-    receive(Receive goods) --> done(((End)))
-  end
-  subgraph Shop
-    check{In stock?}
-    pack(Pack goods)
-    refuse(Cancel order) --> stop(((End)))
-  end
-  subgraph Carrier
-    deliver(Deliver)
-  end
-  order --> check
-  check -->|yes| pack
-  check -->|no| refuse
-  pack --> deliver
-  deliver --> receive`,
-    },
-    {
-      id: "refused",
-      title: "Not supported",
-      context: "subgraph Shop\n  check(Check order)\nend",
-      rows: [
-        no("order --> Shop", "A flow to a lane. Name a node in it."),
+        no("order --> Shop", "A flow to a lane. Name a node in it.", {
+          header: "swimlane-beta TB",
+          context: "subgraph Shop\n  check(Check order)\nend",
+        }),
         no(
           "subgraph Store\n  subgraph Desk\n    serve(Serve)\n  end\nend",
-          "A subgraph inside a lane.",
+          "A subgraph inside a lane: lanes do not nest, and a diagram with lanes has no groups.",
+          { header: "swimlane-beta TB" },
         ),
-        no(
-          "ok{In stock?} --> ok",
-          "A flow from a decision, merge, initial or final node to itself.",
-        ),
-        no("c@{ shape: cloud }", "Mermaid's other shapes: only the ones under Nodes are drawn."),
-        no("end --> check", "`end` is a keyword. Name the node otherwise."),
-        no("order --> check %% next", "A comment is a line of its own."),
-        no("title Shipping", "Write the title in frontmatter."),
       ],
     },
   ],
@@ -1710,11 +1678,14 @@ const ER: Guide = {
 };
 
 /** The guides, in the order the editor lists them. */
-export const GUIDES: Guide[] = [TAM, CLASS, USECASE, FLOWCHART, SWIMLANE, STATE, SEQUENCE, ER];
+export const GUIDES: Guide[] = [TAM, CLASS, USECASE, FLOWCHART, STATE, SEQUENCE, ER];
+
+/** Kinds of source whose guide is another type's: an activity diagram with lanes is an activity diagram. */
+const GUIDED: Record<string, string> = { swimlane: "flowchart" };
 
 /** The guide of a diagram type; undefined for a type that has none. */
 export const guideOf = (type: string): Guide | undefined =>
-  GUIDES.find((guide) => guide.type === type);
+  GUIDES.find((guide) => guide.type === (GUIDED[type] ?? type));
 
 /**
  * The source a row is read in: the lines before it, the row, the lines after it, under the header
@@ -1723,8 +1694,9 @@ export const guideOf = (type: string): Guide | undefined =>
 export function rowSource(guide: Guide, section: GuideSection, item: GuideRow): string {
   // A source of its own stands without the lines its section puts before a statement.
   const before = item.context ?? (item.whole ? undefined : section.context);
-  const lines = [before, item.write, item.after].filter((text): text is string => !!text);
-  if (guide.header && !item.whole) lines.unshift(guide.header);
+  const lines = [before, item.write, item.after].filter((text): text is string => !!text),
+    header = item.header ?? section.header ?? guide.header;
+  if (header && !item.whole) lines.unshift(header);
   return lines.join("\n");
 }
 

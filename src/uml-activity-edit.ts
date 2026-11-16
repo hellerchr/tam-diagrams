@@ -10,6 +10,7 @@
 import type { Structure, StructureNode } from "./structure.ts";
 import { type FlowEdge, type Flowchart, parseFlowchart } from "./uml-activity.ts";
 import { accessibilityLines, labelText as shownText, scan, STYLING } from "./uml.ts";
+import { removePlaces } from "./uml-places.ts";
 
 /** What a canvas adds to an activity diagram. */
 export type FlowPiece = "step" | "decision" | "start" | "end" | "group" | "lane";
@@ -1864,38 +1865,126 @@ export function groupFlowNodes(
   return { source: result, id: added.id };
 }
 
-/** The pieces of a flowchart and of a swimlane alike: the nodes of a flow. */
-const NODES: Structure["pieces"] = [
-  {
-    kind: "step",
-    name: "Action",
-    about: "Executable node of the activity",
-    joins: "after",
-    named: true,
-  },
-  {
-    kind: "decision",
-    name: "Decision",
-    about: "Decision node: outgoing flows are selected by their guards",
-    joins: "after",
-    named: true,
-  },
-  {
-    kind: "start",
-    name: "Initial node",
-    about: "Starts the control flow of the activity",
-    joins: "before",
-  },
-  { kind: "end", name: "Final node", about: "Activity final: ends all flows", joins: "after" },
-];
+/**
+ * An activity diagram's source under the other header: `swimlane-beta` once it has lanes,
+ * `flowchart` once it has none, since only the header says whether a subgraph is a lane or a
+ * group. The direction stays, and so does every other line: the title, the comments, the
+ * statements. The places go: the layout with lanes and the one without stand the nodes apart in
+ * other ways, and a node placed for one would be held in a lane it was not placed for.
+ */
+function reheaded(source: string, kind: Flowchart["kind"]): string {
+  const model = readModel(source);
+  if (!model || model.chart.kind === kind) return source;
+  const lines = [...model.lines];
+  lines[model.header] = lines[model.header].replace(
+    /^(\s*)(?:flowchart(?:-elk)?|graph|swimlane-beta)/,
+    `$1${kind === "swimlane" ? "swimlane-beta" : "flowchart"}`,
+  );
+  return removePlaces(lines.join("\n"));
+}
+
+/** Whether an activity diagram has lanes: a swimlane's subgraphs are its lanes. */
+const laned = (chart: Flowchart) => chart.kind === "swimlane" && chart.subgraphs.size > 0;
 
 /**
- * Flowcharts as a structure a canvas edits. It reads swimlanes too, and says of each subgraph
- * what it is there: a `group` in a flowchart, a `lane` in a swimlane.
+ * Why a piece cannot be added to an activity diagram as it stands. Lanes and groups do not mix: in
+ * a diagram with lanes every subgraph is a lane, so a group has no place there, and a diagram with
+ * groups takes its first lane once its groups are gone.
  */
-export const flowStructure: Structure = {
+export function activityRefusal(source: string, kind: string): string | undefined {
+  let chart: Flowchart;
+  try {
+    chart = parseFlowchart(source);
+  } catch {
+    return undefined;
+  }
+  if (kind === "group" && laned(chart))
+    return "Lanes and groups do not mix: this diagram has lanes, add a lane instead";
+  if (kind === "lane" && chart.kind === "flowchart" && chart.subgraphs.size)
+    return "Lanes and groups do not mix: ungroup the groups of this diagram to add a lane";
+  return undefined;
+}
+
+/**
+ * Adds a piece to an activity diagram as `addFlowPiece` does. The first lane makes the diagram one
+ * with lanes: its header becomes `swimlane-beta`, and the nodes outside the new lane stand in the
+ * lane without a name. A group added to a `swimlane-beta` source without lanes makes it a
+ * flowchart again. A piece `activityRefusal` refuses is not added: the id is empty.
+ */
+export function addActivityPiece(
+  source: string,
+  piece: { kind: string; label?: string; parent?: string | null },
+): { source: string; id: string } {
+  if (activityRefusal(source, piece.kind)) return { source, id: "" };
+  const chart = parseFlowchart(source),
+    kind =
+      piece.kind === "lane"
+        ? "swimlane"
+        : piece.kind === "group" && !chart.subgraphs.size
+          ? "flowchart"
+          : chart.kind;
+  return addFlowPiece(reheaded(source, kind), { ...piece, kind: piece.kind as FlowPiece });
+}
+
+/** A source that had lanes and has none left after an edit: a flowchart again. */
+function unlaned(before: string, after: string): string {
+  try {
+    return laned(parseFlowchart(before)) && !laned(parseFlowchart(after))
+      ? reheaded(after, "flowchart")
+      : after;
+  } catch {
+    return after;
+  }
+}
+
+/**
+ * Takes a subgraph away as `ungroupFlow` does. The last lane of a diagram with lanes goes too,
+ * with what it holds kept: the diagram becomes a flowchart without lanes.
+ */
+export function ungroupActivity(source: string, id: string): string {
+  const chart = parseFlowchart(source);
+  if (!laned(chart) || chart.subgraphs.size > 1 || !chart.subgraphs.has(id))
+    return ungroupFlow(source, id);
+  const flat = reheaded(source, "flowchart"),
+    made = ungroupFlow(flat, id);
+  return made === flat ? source : made;
+}
+
+/**
+ * Activity diagrams as a structure a canvas edits, with lanes and without: it says of each
+ * subgraph what it is, a `lane` under a `swimlane-beta` header and a `group` under a `flowchart`
+ * one, and changes the header as the first lane comes and the last one goes.
+ */
+export const activityStructure: Structure = {
   pieces: [
-    ...NODES,
+    {
+      kind: "step",
+      name: "Action",
+      about: "Executable node of the activity",
+      joins: "after",
+      named: true,
+    },
+    {
+      kind: "decision",
+      name: "Decision",
+      about: "Decision node: outgoing flows are selected by their guards",
+      joins: "after",
+      named: true,
+    },
+    {
+      kind: "start",
+      name: "Initial node",
+      about: "Starts the control flow of the activity",
+      joins: "before",
+    },
+    { kind: "end", name: "Final node", about: "Activity final: ends all flows", joins: "after" },
+    {
+      kind: "lane",
+      name: "Lane",
+      about: "Activity partition: the agent responsible for its actions",
+      group: true,
+      named: true,
+    },
     {
       kind: "group",
       name: "Group",
@@ -1909,6 +1998,7 @@ export const flowStructure: Structure = {
     { kind: "dotted", name: "Dotted flow" },
     { kind: "thick", name: "Thick flow" },
   ],
+  refusal: activityRefusal,
   read(source) {
     const chart = parseFlowchart(source);
     const kindOf = (shape: string) =>
@@ -1948,32 +2038,17 @@ export const flowStructure: Structure = {
       })),
     };
   },
-  add: (source, piece) => addFlowPiece(source, { ...piece, kind: piece.kind as FlowPiece }),
+  add: addActivityPiece,
   connect: (source, from, to, kind) => connectFlow(source, from, to, undefined, kind),
   join: (source, from, to, kind) => joinFlow(source, from, to, kind),
   rename: renameFlow,
   retitle: retitleFlow,
   label: labelFlowEdge,
   relink: restrokeFlow,
-  remove: (source, ids) => removeFlow(source, ids),
+  remove: (source, ids) => unlaned(source, removeFlow(source, ids)),
   reverse: reverseFlow,
   copy: duplicateFlowNode,
   moveInto: moveFlowInto,
-  ungroup: ungroupFlow,
+  ungroup: ungroupActivity,
   reid: renameFlowId,
-};
-
-/** Swimlanes as a structure a canvas edits: the one of flowcharts, with a lane where that has a group. */
-export const swimlaneStructure: Structure = {
-  ...flowStructure,
-  pieces: [
-    ...NODES,
-    {
-      kind: "lane",
-      name: "Lane",
-      about: "Activity partition: the agent responsible for its actions",
-      group: true,
-      named: true,
-    },
-  ],
 };

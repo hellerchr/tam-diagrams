@@ -174,7 +174,7 @@ export function drawNote(
   id: string,
   text: string,
   box: Box,
-  { depth = 0, inset = 9 }: { depth?: number; inset?: number } = {},
+  { depth = 0, inset = 9, color }: { depth?: number; inset?: number; color?: string } = {},
 ) {
   scene.shapes.push({
     id,
@@ -184,6 +184,7 @@ export function drawNote(
     depth,
     fill: "page",
     thin: true,
+    ...(color ? { color } : {}),
   });
   breaks(text).forEach((line, row, all) =>
     addText(

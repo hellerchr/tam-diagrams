@@ -14,6 +14,12 @@ describe("parseCommand", () => {
     [["check", "-"], { kind: "check", inputs: ["-"] }],
     [["check", "a.tam", "b.md", "-"], { kind: "check", inputs: ["a.tam", "b.md", "-"] }],
     [["render", "--", "-x"], { kind: "render", input: "-x" }],
+    [
+      ["convert", "a.drawio", "-o", "a.tam"],
+      { kind: "convert", input: "a.drawio", output: "a.tam" },
+    ],
+    [["render", "a.tam", "--rounded"], { kind: "render", input: "a.tam", rounded: true }],
+    [["convert", "--rounded", "a.tam"], { kind: "convert", input: "a.tam", rounded: true }],
     [["-h"], { kind: "help" }],
     [["--help"], { kind: "help" }],
   ])("reads %j", (argv, expected) => {
@@ -28,7 +34,9 @@ describe("parseCommand", () => {
     ["render with two inputs", ["render", "a.tam", "b.tam"], /exactly one input/],
     ["-o without a file name", ["render", "a.tam", "-o"], /-o/],
     ["-o -", ["render", "a.tam", "-o", "-"], /stdout/],
-    ["-o with check", ["check", "a.tam", "-o", "a.svg"], /render only/],
+    ["-o with check", ["check", "a.tam", "-o", "a.svg"], /render and convert only/],
+    ["convert with two inputs", ["convert", "a.drawio", "b.drawio"], /exactly one input/],
+    ["--rounded with check", ["check", "a.tam", "--rounded"], /render and convert only/],
     ["check without an input", ["check"], /at least one input/],
     ["stdin read twice", ["check", "-", "a.tam", "-"], /stdin/],
   ])("rejects %s", (_name, argv, message) => {
@@ -59,6 +67,7 @@ describe("parseCommand", () => {
   it("describes both commands and the exit codes in the usage text", () => {
     expect(USAGE).toMatch(/render <file \| ->/);
     expect(USAGE).toMatch(/check <file \| ->/);
+    expect(USAGE).toMatch(/convert <file \| ->/);
     expect(USAGE).toMatch(/0 success, 1 diagram error, 2 usage or I\/O error/);
   });
 });

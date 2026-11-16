@@ -2,7 +2,7 @@
  * What an editor needs to change the structure of a diagram that lays itself out: the parts and
  * joins a source declares, the pieces that can be added, and the edits, each of which returns the
  * source with one change made and every other line as it was. One `Structure` per diagram type;
- * uml-activity-edit.ts has the one for flowcharts and swimlanes.
+ * uml-activity-edit.ts has the one for activity diagrams, with lanes and without.
  */
 
 /** A part of a diagram: a node, or a group that holds others. Its id is the id of its shape in the scene. */
@@ -68,6 +68,11 @@ export interface Structure {
   pieces: Piece[];
   /** The kinds of join, the usual one first. */
   links: Link[];
+  /**
+   * Why a piece of a kind cannot be added to a source as it stands, such as a group to an activity
+   * diagram with lanes; undefined when it can. `add` adds nothing it refuses.
+   */
+  refusal?(source: string, kind: string): string | undefined;
   /** The parts, parents before what they hold and else in the order of the source, and the joins. */
   read(source: string): { nodes: StructureNode[]; edges: StructureEdge[] };
   /** Adds a piece, inside a group when given, and returns the id it got. */

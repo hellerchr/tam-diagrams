@@ -25,6 +25,9 @@ const offered = (text: string, explicit = false) => {
 describe("completing a block diagram source", () => {
   it("offers kinds, header lines and ids at the start of a line", () => {
     expect(offered("a")).toEqual(expect.arrayContaining(["agent", "api", "storage", "title"]));
+    // Only the conceptual kinds are offered.
+    expect(offered("", true)).not.toContain("component");
+    expect(offered("", true)).not.toContain("level");
     expect(offered("")).toEqual([]);
     expect(offered("", true)).toContain("agent");
     expect(offered("direction ")).toEqual(["TB", "LR", "BT", "RL"]);
@@ -34,13 +37,15 @@ describe("completing a block diagram source", () => {
   it("offers the connections the first element can make", () => {
     const agent = offered("api ");
     expect(agent[0]).toBe("-- calls -->");
-    expect(agent).toEqual(expect.arrayContaining(["-- reads -->", "---", "provides IName"]));
+    expect(agent).toEqual(expect.arrayContaining(["-- reads -->", "---"]));
     expect(agent).not.toContain("-. pointer .->");
-    // A storage only points; a person offers no interface; a component does not talk through channels.
+    // Block diagrams are drawn at the conceptual level: no interfaces, delegation or package dependencies.
+    expect(agent).not.toContain("provides IName");
+    expect(agent).not.toContain("-- delegates -->");
+    expect(offered("pay -")).not.toContain("-- requires IName -->");
+    // A storage only points; a component, read from the source, does not talk through channels.
     expect(offered("db ")).toEqual(["-. pointer .->"]);
-    expect(offered("user ")).not.toContain("provides IName");
     expect(offered("pay -")).not.toContain("-- calls -->");
-    expect(offered("pay -")).toContain("-- requires IName -->");
     expect(offered("unknown ")).toEqual([]);
   });
 
@@ -58,5 +63,27 @@ describe("completing a block diagram source", () => {
       expect.arrayContaining(["calls", "sends data", "reads", "reads/writes"]),
     );
     expect(offered("api -. ")).toEqual(["use", "import", "create", "generate", "pointer"]);
+  });
+});
+
+describe("completing notes", () => {
+  const NOTED: Known[] = [...KNOWN, { id: "busy", kind: "note", label: "Busy at noon" }];
+  const offeredWith = (text: string) => {
+    const state = EditorState.create({ doc: text });
+    return (
+      completeTam(new CompletionContext(state, text.length, false), NOTED)?.options.map(
+        (item) => item.label,
+      ) ?? []
+    );
+  };
+
+  it("offers the note among the kinds, and the dotted line that attaches it", () => {
+    expect(offered("n")).toContain("note");
+    // A note connects only by its dotted line, to elements; an element reaches the notes by it.
+    expect(offeredWith("busy ")).toEqual(["-.-"]);
+    expect(offeredWith("api ")).toContain("-.-");
+    expect(offered("api ")).not.toContain("-.-");
+    expect(offeredWith("busy -.- ")).toEqual(["user", "api", "worker", "db", "log", "pay"]);
+    expect(offeredWith("api -.- ")).toEqual(["busy"]);
   });
 });

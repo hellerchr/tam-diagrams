@@ -16,7 +16,7 @@ import {
   rowSource,
 } from "./reference.ts";
 import { scanSource } from "./syntax.ts";
-import { type DiagramType, typeInfo } from "./types.ts";
+import { type DiagramType, sameType, typeInfo, typeOf } from "./types.ts";
 
 /** What the sheet asks of the window around it. */
 export interface GuideHost {
@@ -55,10 +55,13 @@ function colored(type: DiagramType, source: string, first: number, count: number
 /** The code of a row, colored as it reads among the lines it stands in. */
 function rowCode(guide: Guide, section: GuideSection, item: GuideRow): Node[] {
   if (item.fragment) return [document.createTextNode(item.write)];
-  const before = rowSource(guide, section, { ...item, write: "", after: undefined });
+  const before = rowSource(guide, section, { ...item, write: "", after: undefined }),
+    source = rowSource(guide, section, item),
+    // A row read under another first line of the type is colored as that one: the lanes of an activity.
+    kind = guide.type === "tam" ? guide.type : typeOf(source);
   return colored(
-    guide.type,
-    rowSource(guide, section, item),
+    sameType(kind, guide.type) ? kind : guide.type,
+    source,
     before ? before.split("\n").length : 0,
     item.write.split("\n").length,
   );
@@ -146,7 +149,7 @@ export class GuideSheet {
 
   /** Opens the guide of the diagram on show, or closes the sheet when it shows that guide. */
   toggle() {
-    if (this.type === this.host.type()) this.close();
+    if (this.type && sameType(this.type, this.host.type())) this.close();
     else this.open();
   }
 
@@ -305,7 +308,7 @@ export class GuideSheet {
   /** Writes a row into the source, when the source is of the guide's type. */
   private insert(guide: Guide, text: string) {
     const type = this.host.type();
-    if (type !== guide.type)
+    if (!sameType(type, guide.type))
       return this.host.notify(
         `This is ${lower(guide.name)} syntax; the diagram on show is ${article(lower(typeInfo(type).name))}.`,
       );
