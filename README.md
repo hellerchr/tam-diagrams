@@ -107,7 +107,14 @@ identifies.
 
 The source pane colors every type's syntax and completes it in context: statements and ids at the
 start of a line, the relations a part can start, the parts a relation can reach, members inside a
-class, types and keys inside an entity, the branches of a fragment.
+class, types and keys inside an entity, the branches of a fragment. In a block diagram the list
+opens as the line is typed, at every place of it: the kinds, `title`, `direction` and the ids of
+the elements at its start; the connections an element's kind can start after its id; the
+elements a connection may reach after the arrow, with their names, its own parts, its containers
+and elements of the wrong kind left out and those beside it first; the colors after `:::`; and
+behind a declaration, once a space follows it or on Ctrl+Space, a color, `{` for a kind that holds
+others, `stack` or `...`, and the connections from the new element on the next line. Elements
+are offered as the text declares them, before the picture shows them.
 
 *Help ▸ … guide* (F1, or the question mark above the source) opens the guide of the diagram type
 beside the source: its rules, every statement the parser reads, an example, and what is refused,

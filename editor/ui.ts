@@ -23,6 +23,7 @@ import { Minimap } from "./minimap.ts";
 import { Outline, within } from "./outline.ts";
 import { Palette } from "./palette.ts";
 import { GuideSheet } from "./reference-dialog.ts";
+import type { Known } from "./completion.ts";
 import { declarationLines } from "./completion-uml.ts";
 import type { Problem } from "./document.ts";
 import { SourcePane } from "./source.ts";
@@ -433,10 +434,14 @@ export class Panels {
         window.clearTimeout(this.resting);
         this.resting = window.setTimeout(() => this.update(), REST + 20);
       },
+      // The elements with what holds them: a connection reaches no element its end holds.
       elements: () => {
-        const flat = (items: TreeItem[]): TreeItem[] =>
-          items.flatMap((item) => [item, ...flat(item.children)]);
-        return flat(editor.tree).filter((item) => !item.id.includes("#"));
+        const flat = (items: TreeItem[], parent: string | null): Known[] =>
+          items.flatMap((item) => [
+            { id: item.id, kind: item.kind, label: item.label, parent },
+            ...flat(item.children, item.id),
+          ]);
+        return flat(editor.tree, null).filter((item) => !item.id.includes("#"));
       },
       completes: () => editor.editable,
       type: () => editor.type,
