@@ -27,7 +27,7 @@ A state machine diagram shows the states of one object and the transitions betwe
 | `stateDiagram-v2` | The first line. `stateDiagram` is read the same. |
 | `---`<br>`title: Order system`<br>`---` | The title, in a frontmatter block before the first line. |
 | `%% a remark` | A comment: a line of its own that starts with `%%`. |
-| `direction LR` | The way the layout runs: `TB` (the default), `LR`, `BT` or `RL`. `TD` is `TB`. Inside a composite state the line is ignored. |
+| `direction LR` | The way the layout runs: `TB` (the default) or `LR`. `TD` is `TB`. Inside a composite state the line is ignored. |
 
 ## States
 

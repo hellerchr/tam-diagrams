@@ -870,8 +870,6 @@ export class Inspector {
             [
               { value: "TB", icon: "arrow-down", tip: "Top to bottom" },
               { value: "LR", icon: "arrow-right", tip: "Left to right" },
-              { value: "BT", icon: "arrow-up", tip: "Bottom to top" },
-              { value: "RL", icon: "arrow-left", tip: "Right to left" },
             ],
             () => diagram()?.direction,
             (direction) => editor.setHeader({ direction }),

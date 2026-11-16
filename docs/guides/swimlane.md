@@ -27,7 +27,7 @@ An activity diagram with lanes shows the control flow between actions, partition
 
 | You write | It means |
 | --- | --- |
-| `swimlane-beta TB` | The first line, with the way the flow runs. `TB` (the default) and `BT`: lanes are columns. `LR` and `RL`: lanes are rows. `TD` is `TB`; `>`, `<`, `^` and `v` point the way too. |
+| `swimlane-beta TB` | The first line, with the way the flow runs. `TB` (the default): lanes are columns. `LR`: lanes are rows. `TD` is `TB`; `>` and `v` point the way too. |
 | `---`<br>`title: Order system`<br>`---` | The title, in a frontmatter block before the first line. |
 | `%% level conceptual` | TAM's level, as a comment before or after the first line. An activity diagram may be of either level. |
 | `%% a remark` | A comment: a line of its own that starts with `%%`. |

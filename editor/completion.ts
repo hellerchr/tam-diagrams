@@ -145,8 +145,6 @@ export const DIRECTIONS: Completion[] = ranked(
   [
     option("TB", "constant", "top to bottom"),
     option("LR", "constant", "left to right"),
-    option("BT", "constant", "bottom to top"),
-    option("RL", "constant", "right to left"),
   ],
   9,
 );
@@ -182,7 +180,7 @@ export function completeTam(context: CompletionContext, given: Known[]): Complet
             }),
           ),
           option("title", "keyword", "the diagram's title", "title "),
-          option("direction", "keyword", "TB, LR, BT or RL", "direction "),
+          option("direction", "keyword", "TB or LR", "direction "),
         ],
         30,
       ),

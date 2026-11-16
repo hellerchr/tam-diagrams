@@ -27,7 +27,7 @@ describe("completing a block diagram source", () => {
     expect(offered("a")).toEqual(expect.arrayContaining(["agent", "api", "storage", "title"]));
     expect(offered("")).toEqual([]);
     expect(offered("", true)).toContain("agent");
-    expect(offered("direction ")).toEqual(["TB", "LR", "BT", "RL"]);
+    expect(offered("direction ")).toEqual(["TB", "LR"]);
     expect(offered("agent x[X]:::")).toContain("blue");
   });
 

@@ -30,7 +30,7 @@ The parser enforces the SAP TAM standard and names the line that breaks a rule.
 | You write | It means |
 | --- | --- |
 | `title Order system` | The title above the diagram. Quotes around it are optional. |
-| `direction LR` | The way the automatic layout runs: `TB` (top to bottom, the default), `LR`, `BT` or `RL`. `TD` is `TB`. |
+| `direction LR` | The way the automatic layout runs: `TB` (top to bottom, the default) or `LR` (left to right). `TD` is `TB`. |
 | `%% a remark` | A comment, to the end of its line. It may follow a statement. |
 
 ## Elements

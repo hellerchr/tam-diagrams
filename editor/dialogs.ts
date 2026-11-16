@@ -297,7 +297,7 @@ const TAM_SYNTAX: SheetGroup[] = [
     "Diagram",
     [
       ["title Order system", "The title"],
-      ["direction LR", "The way an automatic layout runs: TB, LR, BT or RL"],
+      ["direction LR", "The way an automatic layout runs: TB or LR"],
       ["%% a remark", "A comment"],
     ],
   ],
@@ -376,7 +376,7 @@ const UML_SYNTAX: Record<Exclude<DiagramType, "tam">, SheetRow[]> = {
     ["User --> order", "Every line is one association"],
   ],
   flowchart: [
-    ["flowchart TB", "The first line: an activity diagram that runs TB, LR, BT or RL"],
+    ["flowchart TB", "The first line: an activity diagram that runs TB or LR"],
     ["start((Start)) --> check{In stock?}", "An initial node, a control flow, and a decision node"],
     ["check -->|yes| ship[Ship order]", "A flow with a guard, to an action"],
     ["check -->|no| wait[Wait for supply]", "The other branch"],
@@ -427,7 +427,7 @@ const UML_SYNTAX: Record<Exclude<DiagramType, "tam">, SheetRow[]> = {
   ],
   er: [
     ["erDiagram", "The first line: an entity relationship diagram"],
-    ["direction LR", "The way the layout runs: TB, LR, BT or RL"],
+    ["direction LR", "The way the layout runs: TB or LR"],
     ["CUSTOMER", "An entity type"],
     [
       'ORDER {\n  int id PK\n  int customerId FK\n  string status "open or closed"\n}',

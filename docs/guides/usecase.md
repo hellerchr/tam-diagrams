@@ -28,7 +28,7 @@ A use case diagram shows the functional requirements of a subject: the actors ex
 | `usecase-beta` | The first line. |
 | `---`<br>`title: Order system`<br>`---` | The title, in a frontmatter block before the first line. |
 | `%% a remark` | A comment: a line of its own that starts with `%%`. |
-| `direction TB` | The way the layout runs: `LR` (the default), `TB`, `BT` or `RL`, in capitals. `TD` is `TB`. |
+| `direction TB` | The way the layout runs: `LR` (the default) or `TB`, in capitals. `TD` is `TB`. |
 
 ## Actors
 

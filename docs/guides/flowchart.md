@@ -25,7 +25,7 @@ An activity diagram shows the control flow between actions: their order, decisio
 
 | You write | It means |
 | --- | --- |
-| `flowchart TB` | The first line, with the way the flow runs: `TB` (top to bottom, the default), `LR`, `BT` or `RL`. `TD` is `TB`; `>`, `<`, `^` and `v` point the way too. |
+| `flowchart TB` | The first line, with the way the flow runs: `TB` (top to bottom, the default) or `LR` (left to right). `TD` is `TB`; `>` and `v` point the way too. |
 | `graph LR` | `graph` and `flowchart-elk` are read as `flowchart`. |
 | `---`<br>`title: Order system`<br>`---` | The title, in a frontmatter block before the first line. |
 | `%% level conceptual` | TAM's level, as a comment before or after the first line. An activity diagram may be of either level. |

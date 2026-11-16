@@ -53,7 +53,7 @@ describe("the order of a completion list", () => {
       "stateDiagram-v2\n  direction ",
       "usecase-beta\n  direction ",
     ])
-      expect(ordered(text), text).toEqual(["TB", "LR", "BT", "RL"]);
+      expect(ordered(text), text).toEqual(["TB", "LR"]);
   });
 
   it("has the statements before the elements, and the elements as the source declares them", () => {
@@ -108,7 +108,7 @@ describe("a completion list where nothing is left to complete", () => {
     for (const text of [
       "flowchart LR",
       "swimlane-beta TB",
-      "direction RL",
+      "direction LR",
       "classDiagram\n  direction LR",
       "classDiagram\n  class A",
       "flowchart TB\n  subgraph s\n    a --> b\n  end",

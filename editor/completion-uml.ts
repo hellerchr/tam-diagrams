@@ -105,7 +105,7 @@ const over = (label: string, type: string, detail: string, text: string, closer:
   },
 });
 
-const DIRECTION_LINE: Completion = option("direction", "keyword", "TB, LR, BT or RL", "direction ");
+const DIRECTION_LINE: Completion = option("direction", "keyword", "TB or LR", "direction ");
 
 const END: Completion = option("end", "keyword", "closes the block");
 

@@ -27,7 +27,7 @@ An entity relationship diagram shows the entity types of a data model, their att
 | `---`<br>`title: Order system`<br>`---` | The title, in a frontmatter block before the first line. |
 | `%% a remark` | A comment: a line of its own that starts with `%%`. |
 | `title Order model` | The title as a statement. A title in frontmatter comes first. |
-| `direction LR` | The way the layout runs: `TB` (the default), `LR`, `BT` or `RL`. `TD` is `TB`. |
+| `direction LR` | The way the layout runs: `TB` (the default) or `LR`. `TD` is `TB`. |
 
 ## Entities
 

@@ -28,7 +28,7 @@ A class diagram shows classes with their attributes and operations and how they 
 | `---`<br>`title: Order system`<br>`---` | The title, in a frontmatter block before the first line. |
 | `%% level conceptual` | TAM's conceptual level, as a comment before or after the first line. `%% level design` allows everything, as no level does. |
 | `%% a remark` | A comment: a line of its own that starts with `%%`. |
-| `direction LR` | The way the layout runs: `TB` (the default), `LR`, `BT` or `RL`. `TD` is `TB`. |
+| `direction LR` | The way the layout runs: `TB` (the default) or `LR`. `TD` is `TB`. |
 
 ## Classes
 

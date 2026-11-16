@@ -159,7 +159,7 @@ const TAM: Guide = {
         row("title Order system", "The title above the diagram. Quotes around it are optional."),
         row(
           "direction LR",
-          "The way the automatic layout runs: `TB` (top to bottom, the default), `LR`, `BT` or `RL`. `TD` is `TB`.",
+          "The way the automatic layout runs: `TB` (top to bottom, the default) or `LR` (left to right). `TD` is `TB`.",
         ),
         row("%% a remark", "A comment, to the end of its line. It may follow a statement."),
       ],
@@ -443,7 +443,7 @@ const CLASS: Guide = {
         ),
         row(
           "direction LR",
-          "The way the layout runs: `TB` (the default), `LR`, `BT` or `RL`. `TD` is `TB`.",
+          "The way the layout runs: `TB` (the default) or `LR`. `TD` is `TB`.",
         ),
       ],
     },
@@ -655,7 +655,7 @@ const USECASE: Guide = {
         ...front("usecase-beta", "actor Customer"),
         row(
           "direction TB",
-          "The way the layout runs: `LR` (the default), `TB`, `BT` or `RL`, in capitals. `TD` is `TB`.",
+          "The way the layout runs: `LR` (the default) or `TB`, in capitals. `TD` is `TB`.",
         ),
       ],
     },
@@ -919,7 +919,7 @@ const FLOWCHART: Guide = {
       rows: [
         row(
           "flowchart TB",
-          "The first line, with the way the flow runs: `TB` (top to bottom, the default), `LR`, `BT` or `RL`. `TD` is `TB`; `>`, `<`, `^` and `v` point the way too.",
+          "The first line, with the way the flow runs: `TB` (top to bottom, the default) or `LR` (left to right). `TD` is `TB`; `>` and `v` point the way too.",
           { whole: true, after: "a --> b" },
         ),
         row("graph LR", "`graph` and `flowchart-elk` are read as `flowchart`.", {
@@ -1028,7 +1028,7 @@ const SWIMLANE: Guide = {
       rows: [
         row(
           "swimlane-beta TB",
-          "The first line, with the way the flow runs. `TB` (the default) and `BT`: lanes are columns. `LR` and `RL`: lanes are rows. `TD` is `TB`; `>`, `<`, `^` and `v` point the way too.",
+          "The first line, with the way the flow runs. `TB` (the default): lanes are columns. `LR`: lanes are rows. `TD` is `TB`; `>` and `v` point the way too.",
           { whole: true, after: "a --> b" },
         ),
         ...front(
@@ -1161,7 +1161,7 @@ const STATE: Guide = {
         ...front("stateDiagram-v2", "[*] --> Idle"),
         row(
           "direction LR",
-          "The way the layout runs: `TB` (the default), `LR`, `BT` or `RL`. `TD` is `TB`. Inside a composite state the line is ignored.",
+          "The way the layout runs: `TB` (the default) or `LR`. `TD` is `TB`. Inside a composite state the line is ignored.",
         ),
       ],
     },
@@ -1574,7 +1574,7 @@ const ER: Guide = {
         row("title Order model", "The title as a statement. A title in frontmatter comes first."),
         row(
           "direction LR",
-          "The way the layout runs: `TB` (the default), `LR`, `BT` or `RL`. `TD` is `TB`.",
+          "The way the layout runs: `TB` (the default) or `LR`. `TD` is `TB`.",
         ),
       ],
     },
