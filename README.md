@@ -149,6 +149,15 @@ of a UML diagram are moved the same way, with the same snapping, arrow keys and 
 move writes a place for every part (`%% @id x,y` at the end of the source), a part dropped onto a
 group moves into it, and the participants of a sequence diagram move along their row.
 
+The label of a connection is dragged where it should stand, in every type: a channel's or an
+access's label in a block diagram, a message of a sequence diagram, the guard of a flow, the event of a transition,
+the name of an association or a relationship. The source keeps its middle as an offset from the
+middle of the line (a channel's circle), so the label goes with its line when an end moves: behind
+the connection in a block diagram (`api -- calls --> db @+20,-14`), as `%% @label:<id> +20,-14`
+at the end of a Mermaid source. A click on a label selects its connection; Undo takes a drag back
+as one step; *Put the label back* in the connection's right-click menu, and *Auto layout*, let the
+layout place it again.
+
 ## Command line
 
 With the package installed in a project (`npm install --save-dev tam-diagrams`, or from git),
@@ -293,6 +302,10 @@ api -- reads/writes --> cart
 ```
 
 - Positions are absolute, in pixels, y down; nesting stays what the braces say.
+- Behind a connection a signed position places its label: `api -- calls --> db @+20,-14` stands the
+  label's middle 20 right of and 14 above the middle of the line (a channel's circle), wherever the
+  line runs. A statement of several connections (`a --- b --- c`, `a & b -- reads --> s`) takes
+  none.
 - A size is a least size: an element is never smaller than its name, a container never smaller than
   its parts. A container without a position fits its parts.
 - Wires are not stored. They are routed between the placed elements: straight, around one or two
@@ -321,6 +334,12 @@ classDiagram
 - `%% @<id> <x>,<y>`: the id is that of the part's shape in the scene (a class or state by its id,
   an empty namespace `ns:billing`, the start of a composite `Review#initial`, a participant
   `head:Alice`), x and y the top left corner of its box, in whole pixels.
+- `%% @label:<edge> <dx>,<dy>` places the label of a connection: its middle that far from the
+  middle of the line, signed. The edge is the connection's id in the scene: its kind's letter and
+  its place among the connections of the source (`r1` for the first relation of a class, use case
+  or entity relationship diagram, `e2` for the second flow of an activity, `t3` a transition, `m4`
+  a message). The editor keeps these keys in step when an edit adds or removes a connection before
+  it. Labels placed this way need no places of parts, and a sequence diagram takes them too.
 - A part keeps the size the automatic layout gives it. A group (namespace, composite state, subgraph,
   system boundary) fits what it holds and needs no place; an empty one has a place of its own.
 - A part without a place stands where the automatic layout puts it, or beside a placed part it

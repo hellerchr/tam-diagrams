@@ -27,7 +27,8 @@ import {
 } from "./uml-class.ts";
 import { layoutClassDiagram } from "./uml-class-layout.ts";
 import { parseUseCaseDiagram } from "./uml-usecase.ts";
-import { hasPlaces, readPlaces } from "./uml-places.ts";
+import { hasPlaces, readLabels, readPlaces } from "./uml-places.ts";
+import { placeLabels } from "./label-places.ts";
 import { placedLayout, placeScene } from "./uml-placed.ts";
 import { layoutUseCaseDiagram } from "./uml-usecase-layout.ts";
 import { parseErDiagram } from "./uml-er.ts";
@@ -93,17 +94,24 @@ const UML_NAMES: Record<UmlKind, string> = {
 /**
  * Parses a source of any supported type; throws UmlError on errors and on unsupported syntax. A
  * source that places its parts (`%% @id x,y`, uml-places.ts) is laid out automatically and then
- * by hand: every part at its place, at the size the automatic layout gave it.
+ * by hand: every part at its place, at the size the automatic layout gave it; a label it places
+ * (`%% @label:edge dx,dy`) stands there.
  */
 export function parseUml(source: string): ParsedUml {
-  const parsed = parseAutomatic(source);
+  const parsed = parseAutomatic(source),
+    labels = readLabels(source);
   // A sequence diagram takes its places in its own layout: time runs down whatever they say.
-  if (parsed.kind === "sequence" || !hasPlaces(source)) return parsed;
+  const layout =
+    parsed.kind === "sequence" || !hasPlaces(source)
+      ? parsed.layout
+      : placedLayout(source, parsed.layout, {
+          lines: parsed.kind === "usecase" ? "straight" : "orthogonal",
+        });
+  // Labels placed by hand stand where they say once everything else stands (`%% @label:`).
+  if (!labels.size) return layout === parsed.layout ? parsed : { ...parsed, layout };
   return {
     ...parsed,
-    layout: placedLayout(source, parsed.layout, {
-      lines: parsed.kind === "usecase" ? "straight" : "orthogonal",
-    }),
+    layout: async (measure, elk) => placeLabels(await layout(measure, elk), labels),
   };
 }
 
@@ -237,7 +245,10 @@ export async function renderClassView(
   const places = readPlaces(source);
   const laidOut = async (measure: Measure) => {
     const scene = await layoutClassDiagram(diagram, measure, { layout: options.layout });
-    return places.size ? placeScene(scene, places, measure, { lines: "orthogonal" }) : scene;
+    const placed = places.size
+      ? placeScene(scene, places, measure, { lines: "orthogonal" })
+      : scene;
+    return placeLabels(placed, readLabels(source));
   };
   const scene = await (options.measure
     ? laidOut(options.measure)

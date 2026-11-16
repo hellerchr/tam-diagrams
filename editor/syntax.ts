@@ -825,8 +825,9 @@ const tam: StreamParser<SyntaxState> = {
     }
     if (stream.match(/^\[[^\]]*\]/) || stream.match(/^"[^"]*"/)) return "string";
     if (stream.match(/^:::\w+/)) return "atom";
+    // A position, of an element or, signed, of a connection's label behind it.
     if (
-      stream.match(/^@\s*-?\d+(\.\d+)?\s*,\s*-?\d+(\.\d+)?/) ||
+      stream.match(/^@\s*[-+]?\d+(\.\d+)?\s*,\s*[-+]?\d+(\.\d+)?(?=\s|%%|$)/) ||
       stream.match(/^\d+(\.\d+)?x\d+(\.\d+)?/)
     )
       return "number";

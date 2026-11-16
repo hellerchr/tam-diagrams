@@ -698,6 +698,10 @@ export class Menus {
               if (middle) editor.rename(id, true, middle);
             },
           },
+          editor.labelPlaced(id) && {
+            name: "Put the label back",
+            run: () => editor.unplaceLabel(id),
+          },
           structure.links.length > 1 &&
             structure.links.some((link) => link.kind === editor.linkKind(id)) && {
               name: "Change kind",
@@ -787,6 +791,10 @@ export class Menus {
             name: connection.label ? "Edit label" : "Add a label",
             run: () => editor.rename(id, true, point),
           },
+        editor.labelPlaced(id) && {
+          name: "Put the label back",
+          run: () => editor.unplaceLabel(id),
+        },
         "line",
         remove,
       ];

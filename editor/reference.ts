@@ -91,9 +91,16 @@ const TEXT =
 
 /**
  * The section on the lines that place the parts of a Mermaid diagram by hand: `id` is a part of
- * the lines in `context`, `what` says which parts take a place and under which id.
+ * the lines in `context`, `what` says which parts take a place and under which id. `edge` is the
+ * id of the first connection, whose label is placed: a letter of the type and a count.
  */
-const place = (id: string, context: string, what: string): GuideSection => ({
+const place = (
+  id: string,
+  context: string,
+  what: string,
+  edge: string,
+  more: GuideRow[] = [],
+): GuideSection => ({
   id: "positions",
   title: "Positions",
   prose: `Without positions the diagram lays itself out. Moving a part in the editor writes a position for every part, as comment lines at the end of the source, so the source stays valid Mermaid. ${what}`,
@@ -103,6 +110,11 @@ const place = (id: string, context: string, what: string): GuideSection => ({
       `%% @${id} 120,40`,
       "The part with this id stands with its top left corner at x 120, y 40, in pixels, y down. A part without such a line stays where the layout puts it; without any such line the layout is automatic again.",
     ),
+    row(
+      `%% @label:${edge} +20,-14`,
+      `The label of the connection \`${edge}\`, the first in the source (\`${edge.replace(/\d+$/, "")}2\` the second, and so on), stands with its middle 20 right of and 14 above the middle of its line, which it keeps to when the line moves. Dragging a label in the editor writes it.`,
+    ),
+    ...more,
   ],
 });
 
@@ -220,6 +232,11 @@ const TAM: Guide = {
         row(
           "agent worker[Worker] ... @450,90 @450,160",
           "With `...` a second position places the copy. It takes no size.",
+        ),
+        row(
+          "a -- calls: place order --> b @+20,-14",
+          "Behind a connection, signed: its label stands with its middle 20 right of and 14 above the middle of the line, a channel's circle, and keeps to it when the line moves. A statement of several connections takes none. Dragging a label in the editor writes it.",
+          { context: "agent a[A]\nagent b[B]" },
         ),
       ],
     },
@@ -557,7 +574,7 @@ const CLASS: Guide = {
         row("accTitle: Orders", "Texts for screen readers: `accTitle`, `accDescr`."),
       ],
     },
-    place("Order", "class Order", "A class is placed by its name."),
+    place("Order", "class Order", "A class is placed by its name.", "r1"),
     {
       id: "example",
       title: "Example",
@@ -732,7 +749,7 @@ const USECASE: Guide = {
         row("accTitle: Shop", "Texts for screen readers: `accTitle`, `accDescr`."),
       ],
     },
-    place("order", "order(Place order)", "An actor or a use case is placed by its id."),
+    place("order", "order(Place order)", "An actor or a use case is placed by its id.", "r1"),
     {
       id: "example",
       title: "Example",
@@ -941,7 +958,7 @@ const FLOWCHART: Guide = {
       ],
     },
     { id: "ignored", title: "Read and not drawn", context: "a --> b", rows: FLOW_IGNORED },
-    place("pack", "pack(Pack goods)", "A node is placed by its id."),
+    place("pack", "pack(Pack goods)", "A node is placed by its id.", "e1"),
     {
       id: "example",
       title: "Example",
@@ -1052,6 +1069,7 @@ const SWIMLANE: Guide = {
       "order",
       "subgraph Customer\n  order(Place order)\nend",
       "A node is placed by its id, and stays in its lane.",
+      "e1",
     ),
     {
       id: "example",
@@ -1240,6 +1258,7 @@ const STATE: Guide = {
       "Idle",
       "[*] --> Idle",
       "A state is placed by its id; initial and final states have ids the editor writes.",
+      "t1",
     ),
     {
       id: "example",
@@ -1463,6 +1482,7 @@ const SEQUENCE: Guide = {
       "head:A",
       SEQUENCE_CONTEXT,
       "Only participants are placed, by `head:` and their id, and only along their row: messages keep their order.",
+      "m1",
     ),
     {
       id: "example",
@@ -1649,7 +1669,7 @@ const ER: Guide = {
         row("accTitle: Orders", "Texts for screen readers: `accTitle`, `accDescr`."),
       ],
     },
-    place("CUSTOMER", "CUSTOMER", "An entity is placed by its name."),
+    place("CUSTOMER", "CUSTOMER", "An entity is placed by its name.", "r1"),
     {
       id: "example",
       title: "Example",

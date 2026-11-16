@@ -324,6 +324,7 @@ const TAM_SYNTAX: SheetGroup[] = [
       ["a --- b", "A channel without a direction"],
       ["a -- reads --> s", "A storage access: reads, writes or reads/writes"],
       ["s -. pointer .-> t", "A reference between storages; create and generate join agents"],
+      ["a --- b @+20,-14", "Where the label stands: from the middle of the line"],
     ],
   ],
 ];

@@ -80,6 +80,8 @@ export interface TamEdge {
   protocol?: string;
   /** A «pointer» between sibling storages: they share a row and the line is drawn between them after layout. */
   aside?: boolean;
+  /** Where the source places the label: its middle's offset from the middle of the line (`@+dx,-dy`). */
+  labelAt?: { x: number; y: number };
   line: number;
 }
 
@@ -440,7 +442,12 @@ export function parseTam(source: string): TamDiagram {
     const { line, label } = entry,
       a = lookup(entry.from, line);
     const edge = (fields: Omit<TamEdge, "id" | "line">) =>
-      diagram.edges.push({ id: `e${++count}`, line, ...fields });
+      diagram.edges.push({
+        id: `e${++count}`,
+        line,
+        ...fields,
+        ...("labelAt" in entry && entry.labelAt ? { labelAt: entry.labelAt } : {}),
+      });
     if ("offers" in entry) {
       const { offers } = entry;
       if (!isActive(a) || a.kind === "human")
@@ -619,13 +626,27 @@ export type Connection = {
   both: boolean;
   label?: string;
   protocol?: string;
+  /** Where its label stands: the offset of the label's middle from the middle of the line. */
+  labelAt?: { x: number; y: number };
 };
+
+/**
+ * The place of a connection's label, behind its statement: `a -- calls --> b @+20,-14` puts the
+ * label's middle 20 right of and 14 above the middle of the line. The signs say it is an offset,
+ * not a position as an element's `@x,y` is; a number without one counts as positive.
+ */
+export const LABEL_PLACE = new RegExp(`\\s+@\\s*([+-]?${NUMBER})\\s*,\\s*([+-]?${NUMBER})\\s*$`);
 
 /**
  * The connections of one statement: one or more edges between ids (`a & b` for several ends), each
  * with its word, label and protocol. Null when the statement is no connection.
  */
-export function readConnections(statement: string, line: number): Connection[] | null {
+export function readConnections(text: string, line: number): Connection[] | null {
+  const placed = text.match(LABEL_PLACE),
+    statement = placed ? text.slice(0, placed.index) : text,
+    labelAt = placed && { x: Number(placed[1]), y: Number(placed[2]) };
+  if (labelAt && (Math.abs(labelAt.x) > MAX_COORDINATE || Math.abs(labelAt.y) > MAX_COORDINATE))
+    throw new TamError(line, `\`${placed[0].trim()}\` is too far out for a label's place.`);
   const pieces: string[] = [],
     links: RegExpExecArray[] = [];
   let last = 0,
@@ -694,6 +715,15 @@ export function readConnections(statement: string, line: number): Connection[] |
     for (const from of ends[index])
       for (const to of ends[index + 1]) connections.push({ from, to, word, both, label, protocol });
   });
+  // A label's place names one label: the statement says one connection.
+  if (labelAt) {
+    if (connections.length > 1)
+      throw new TamError(
+        line,
+        "A label's place follows a connection of its own: write one connection a line to place their labels.",
+      );
+    connections[0].labelAt = labelAt;
+  }
   return connections;
 }
 

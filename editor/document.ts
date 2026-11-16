@@ -284,6 +284,17 @@ export class Doc {
     return true;
   }
 
+  /**
+   * Shows the picture on show with another scene, without committing anything: a drag that changes
+   * only where something is drawn, such as a label, shows at once without a layout.
+   */
+  previewScene(scene: Scene) {
+    if (!this.picture) return;
+    this.run++;
+    this.picture = { ...this.picture, scene };
+    this.onChange();
+  }
+
   /** Ends a preview without committing it. */
   cancel() {
     // The picture of the committed source is at hand unless the source changed since.

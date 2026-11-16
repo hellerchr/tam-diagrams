@@ -72,6 +72,7 @@ Color, `stack`, `...` and positions follow the name in any order; an opening `{`
 | `agent api[Order API] @250,90` | A position: the top left corner in pixels, y down. One position is enough to lay the diagram out by hand; elements without one stand in a row below the placed ones. |
 | `agent api[Order API] @250,90 140x40` | A position and a least size, width x height. An element is never smaller than its name, a container never smaller than its parts. |
 | `agent worker[Worker] ... @450,90 @450,160` | With `...` a second position places the copy. It takes no size. |
+| `a -- calls: place order --> b @+20,-14` | Behind a connection, signed: its label stands with its middle 20 right of and 14 above the middle of the line, a channel's circle, and keeps to it when the line moves. A statement of several connections takes none. Dragging a label in the editor writes it. |
 
 ## Channels: agent to agent
 
