@@ -70,7 +70,11 @@ export interface SwimlaneRoutes {
 }
 
 /** Sizes the lanes, rows and items and places them, then picks the sides and stubs where wires leave. */
-export function placeSwimlanes(original: Flowchart, measure: Measure): SwimlanePlacement {
+export function placeSwimlanes(
+  original: Flowchart,
+  measure: Measure,
+  widths: ReadonlyMap<string, number> = new Map(),
+): SwimlanePlacement {
   const chart = splitDecisions(splitFinals(original));
   const vertical = chart.direction === "TB" || chart.direction === "BT";
   const degree = degrees(chart.edges);
@@ -240,18 +244,18 @@ export function placeSwimlanes(original: Flowchart, measure: Measure): SwimlaneP
   function place() {
     // Bars widened by an earlier placement start over.
     for (const item of items.values()) item.w = vertical ? item.size.width : item.size.height;
-    // Lane widths: the widest cell, room for labels beside wires, and the lane's name.
-    laneWidths = lanes.map((_, index) =>
-      Math.ceil(
-        Math.max(
+    // Lane widths: the widest cell, room for labels beside wires, and the lane's name. A width the
+    // source gives a lane counts down to what these need, not to the least width of a lane.
+    laneWidths = lanes.map((lane, index) => {
+      const needs = Math.max(
           vertical ? titleWidth(index) + 24 : titles[index].length * LINE + 24,
-          120,
           ...[...cells]
             .filter(([key]) => Number(key.split(":")[1]) === index)
             .map(([, list]) => cellWidth(list) + 2 * LANE_PAD + labelRoom[index]),
         ),
-      ),
-    );
+        given = lane.id ? widths.get(lane.id) : undefined;
+      return Math.ceil(given === undefined ? Math.max(needs, 120) : Math.max(needs, given));
+    });
     laneX = [];
     laneWidths.reduce((x, width, index) => {
       laneX[index] = x;

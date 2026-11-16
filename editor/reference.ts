@@ -1070,6 +1070,12 @@ const SWIMLANE: Guide = {
       "subgraph Customer\n  order(Place order)\nend",
       "A node is placed by its id, and stays in its lane.",
       "e1",
+      [
+        row(
+          "%% @lane:Customer 260",
+          "The lane of the subgraph `Customer` is 260 wide across the lanes (high, in `LR`), never less than its nodes, its name and its labels need. Dragging the border after a lane in the editor writes it; the outer edge is the last lane's.",
+        ),
+      ],
     ),
     {
       id: "example",

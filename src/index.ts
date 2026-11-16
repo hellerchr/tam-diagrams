@@ -27,7 +27,7 @@ import {
 } from "./uml-class.ts";
 import { layoutClassDiagram } from "./uml-class-layout.ts";
 import { parseUseCaseDiagram } from "./uml-usecase.ts";
-import { hasPlaces, readLabels, readPlaces } from "./uml-places.ts";
+import { hasPlaces, readLabels, readLanes, readPlaces } from "./uml-places.ts";
 import { placeLabels } from "./label-places.ts";
 import { placedLayout, placeScene } from "./uml-placed.ts";
 import { layoutUseCaseDiagram } from "./uml-usecase-layout.ts";
@@ -95,7 +95,8 @@ const UML_NAMES: Record<UmlKind, string> = {
  * Parses a source of any supported type; throws UmlError on errors and on unsupported syntax. A
  * source that places its parts (`%% @id x,y`, uml-places.ts) is laid out automatically and then
  * by hand: every part at its place, at the size the automatic layout gave it; a label it places
- * (`%% @label:edge dx,dy`) stands there.
+ * (`%% @label:edge dx,dy`) stands there. A lane of an activity it gives a width (`%% @lane:id
+ * width`) is that wide in the automatic layout already.
  */
 export function parseUml(source: string): ParsedUml {
   const parsed = parseAutomatic(source),
@@ -161,7 +162,12 @@ function parseAutomatic(source: string): ParsedUml {
     }
     case "swimlane": {
       const chart = parseFlowchart(source);
-      return { kind, title: chart.title, layout: (measure) => layoutSwimlanes(chart, measure) };
+      const lanes = readLanes(source);
+      return {
+        kind,
+        title: chart.title,
+        layout: (measure) => layoutSwimlanes(chart, measure, lanes),
+      };
     }
     case "flowchart": {
       const chart = parseFlowchart(source);

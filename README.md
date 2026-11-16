@@ -158,6 +158,12 @@ at the end of a Mermaid source. A click on a label selects its connection; Undo 
 as one step; *Put the label back* in the connection's right-click menu, and *Auto layout*, let the
 layout place it again.
 
+The lanes of an activity with lanes are resized by their borders: the dashed line after a lane,
+or the frame's edge after the last, is dragged across the lanes, and the lane before it takes that
+width, never less than its nodes, its name and its labels need. Nodes stay in the middle of their
+lane; placed nodes of the lanes after the border move with it. The source keeps the width as
+`%% @lane:<subgraph id> <width>`; Undo takes a drag back as one step.
+
 ## Command line
 
 With the package installed in a project (`npm install --save-dev tam-diagrams`, or from git),
@@ -340,6 +346,9 @@ classDiagram
   or entity relationship diagram, `e2` for the second flow of an activity, `t3` a transition, `m4`
   a message). The editor keeps these keys in step when an edit adds or removes a connection before
   it. Labels placed this way need no places of parts, and a sequence diagram takes them too.
+- `%% @lane:<id> <width>` gives the lane of the subgraph `id` of an activity with lanes its width
+  across the lanes (its height in `LR`), never less than its nodes, its name and its labels need.
+  The automatic layout takes it too: a lane wider than it needs has its nodes in its middle.
 - A part keeps the size the automatic layout gives it. A group (namespace, composite state, subgraph,
   system boundary) fits what it holds and needs no place; an empty one has a place of its own.
 - A part without a place stands where the automatic layout puts it, or beside a placed part it

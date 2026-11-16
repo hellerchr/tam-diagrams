@@ -10,8 +10,16 @@ import { attachEnds, spreadVertices, straightenScene } from "./wires.ts";
 import { placeSwimlanes } from "./swimlane-place.ts";
 import { routeSwimlanes } from "./swimlane-routes.ts";
 
-export async function layoutSwimlanes(original: Flowchart, measure: Measure): Promise<Scene> {
-  const placed = placeSwimlanes(original, measure);
+/**
+ * Lays out an activity with lanes. `widths` gives lanes a width across the lanes, by the id of
+ * their subgraph: a lane is never narrower than its nodes, its name and its labels need.
+ */
+export async function layoutSwimlanes(
+  original: Flowchart,
+  measure: Measure,
+  widths: ReadonlyMap<string, number> = new Map(),
+): Promise<Scene> {
+  const placed = placeSwimlanes(original, measure, widths);
   const {
     bottom,
     boxOf,
@@ -59,7 +67,7 @@ export async function layoutSwimlanes(original: Flowchart, measure: Measure): Pr
           line,
           laneX[index] + laneWidths[index] / 2,
           10 + LINE / 2 + row * LINE,
-          { size: FONT, weight: 600, role: "title", owner: `lane:${index}` },
+          { size: FONT, weight: 600, role: "title", owner: `lane:${lanes[index].id}` },
         ),
       );
     else
@@ -70,7 +78,13 @@ export async function layoutSwimlanes(original: Flowchart, measure: Measure): Pr
           line,
           14,
           laneX[index] + laneWidths[index] / 2 + (row - (lines.length - 1) / 2) * LINE,
-          { size: FONT, weight: 600, anchor: "start", role: "title", owner: `lane:${index}` },
+          {
+            size: FONT,
+            weight: 600,
+            anchor: "start",
+            role: "title",
+            owner: `lane:${lanes[index].id}`,
+          },
         ),
       );
   });

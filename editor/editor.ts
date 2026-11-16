@@ -69,13 +69,15 @@ import { classMembers, setClassMembers } from "../src/uml-class-edit.ts";
 import { moveMessage, moveParticipant } from "../src/uml-sequence-edit.ts";
 import { labelGroups, labelKey, labelOffset, lineMiddle } from "../src/label-places.ts";
 import { textGroupBox } from "../src/text.ts";
-import { placeable } from "../src/uml-placed.ts";
+import { laneFrame, placeable } from "../src/uml-placed.ts";
 import {
   followPlaces,
   hasMarks,
   hasPlaces,
   readLabels,
+  readPlaces,
   setLabel,
+  setLane,
   setPlaces,
   unmarked,
 } from "../src/uml-places.ts";
@@ -182,6 +184,21 @@ type Gesture =
   | { type: "place"; kind: ElementKind; free: boolean; keep: boolean }
   /** An end of a connection dragged to another element. */
   | { type: "attach"; id: string; end: "from" | "to"; current: Point; target?: string }
+  /** The far border of a lane of an activity with lanes dragged: the lane gets that width. */
+  | {
+      type: "lane";
+      /** The lane, by its id and its place among the lanes. */
+      id: string;
+      index: number;
+      across: "x" | "y";
+      start: Point;
+      /** The lane's width when the drag started. */
+      width: number;
+      /** The source the drag starts from, and the width and source it has come to. */
+      base: string;
+      now?: number;
+      result?: string;
+    }
   /** The label of a connection dragged to another place. */
   | {
       type: "label";
@@ -1818,6 +1835,12 @@ export class Editor {
       };
       return;
     }
+    // The border after a lane of an activity with lanes is dragged to give the lane a width.
+    const lane = this.laneEdgeAt(screen);
+    if (lane) {
+      this.gesture = { type: "lane", ...lane, start: point, base: this.doc.source };
+      return;
+    }
     // A connection's label is dragged where it should stand; a press without a drag selects the connection.
     const label = event.shiftKey ? undefined : this.labelAt(point);
     if (label && picture) {
@@ -1950,7 +1973,66 @@ export class Editor {
       case "label":
         this.dragLabel(gesture, screen, point);
         return;
+      case "lane":
+        this.dragLane(gesture, point);
+        return;
     }
+  }
+
+  /**
+   * The far border of a lane of an activity with lanes at a point of the canvas: the line between
+   * it and the next lane, or the frame's edge after the last. A lane without a name has no width
+   * of its own to set.
+   */
+  private laneEdgeAt(
+    screen: Point,
+  ): { id: string; index: number; across: "x" | "y"; width: number } | undefined {
+    const { picture } = this;
+    if (this.type !== "swimlane" || this.tool !== "select" || !picture || this.doc.problem)
+      return undefined;
+    const lanes = laneFrame(picture.scene);
+    if (!lanes) return undefined;
+    const { across, bounds, ids, frame } = lanes,
+      along = across === "x" ? "y" : "x",
+      length = across === "x" ? "height" : "width",
+      point = this.view.toScene(screen),
+      reach = HANDLE / 2 / this.view.zoom;
+    if (point[along] < frame[along] || point[along] > frame[along] + frame[length])
+      return undefined;
+    const index = bounds.findIndex(
+      (bound, at) =>
+        at > 0 && Math.abs(point[across] - bound) <= reach && ids[at - 1] !== undefined,
+    );
+    return index > 0
+      ? { id: ids[index - 1]!, index: index - 1, across, width: bounds[index] - bounds[index - 1] }
+      : undefined;
+  }
+
+  /**
+   * Gives the lane whose border is dragged the width the pointer says. Where the parts are placed,
+   * those of the lanes after it move with the border, so they keep their place in their lane.
+   */
+  private dragLane(gesture: Extract<Gesture, { type: "lane" }>, point: Point) {
+    const width = Math.max(
+      1,
+      Math.round(gesture.width + point[gesture.across] - gesture.start[gesture.across]),
+    );
+    if (width === gesture.now) return;
+    gesture.now = width;
+    let result = setLane(gesture.base, gesture.id, width);
+    const { picture } = this,
+      lanes = picture && laneFrame(picture.scene),
+      places = readPlaces(result);
+    if (lanes && places.size && picture.parts) {
+      const after = new Set(lanes.ids.slice(gesture.index + 1)),
+        step = width - gesture.width,
+        moved = new Map<string, Point>();
+      for (const [id, at] of places)
+        if (after.has(picture.parts.get(id)?.parent ?? undefined))
+          moved.set(id, { ...at, [gesture.across]: at[gesture.across] + step });
+      if (moved.size) result = setPlaces(result, moved);
+    }
+    if (this.doc.preview(result)) gesture.result = result;
   }
 
   /** Moves a connection's label with the pointer: shown at once, written to the source when let go. */
@@ -1987,6 +2069,21 @@ export class Editor {
       if (id) return { id, wire, box: textGroupBox(texts) };
     }
     return undefined;
+  }
+
+  /**
+   * Ends a drag of a lane's border: the width is written. A lane is never narrower than its nodes
+   * need, which the picture of the drag shows: that width is written rather than a smaller one.
+   */
+  private dropLane(gesture: Extract<Gesture, { type: "lane" }>) {
+    const { result, now } = gesture;
+    if (result === undefined || now === undefined) return this.doc.cancel();
+    const shown = this.doc.picture?.source === result ? this.doc.picture : undefined,
+      lanes = shown && laneFrame(shown.scene),
+      drawn = lanes && lanes.bounds[gesture.index + 1] - lanes.bounds[gesture.index],
+      next = drawn !== undefined && drawn > now + 0.5 ? setLane(result, gesture.id, drawn) : result;
+    if (next === this.doc.source) return this.doc.cancel();
+    void this.doc.apply(next);
   }
 
   /**
@@ -2368,6 +2465,9 @@ export class Editor {
         if (gesture.moved)
           this.placeLabel(gesture.id, gesture.wire, gesture.picture, gesture.moved);
         break;
+      case "lane":
+        this.dropLane(gesture);
+        break;
       case "pan":
         break;
     }
@@ -2566,6 +2666,7 @@ export class Editor {
     if (
       gesture?.type === "move" ||
       gesture?.type === "resize" ||
+      (gesture?.type === "lane" && gesture.result !== undefined) ||
       (gesture?.type === "label" && gesture.moved)
     )
       this.doc.cancel();
@@ -2782,9 +2883,13 @@ export class Editor {
     else if (this.space || this.tool === "pan") cursor = "grab";
     else if (this.tool !== "select") cursor = "crosshair";
     else if (screen) {
+      // In the order a press takes them: handles, ends and dots, lane borders, labels, parts.
       const handle = this.handleAt(screen);
+      let lane: ReturnType<Editor["laneEdgeAt"]>;
       if (handle) cursor = handle.handle.cursor;
       else if (this.endAt(screen) || this.linkAt(screen)) cursor = "crosshair";
+      else if ((lane = this.laneEdgeAt(screen)))
+        cursor = lane.across === "x" ? "col-resize" : "row-resize";
       else if (this.labelAt(this.view.toScene(screen))) cursor = "move";
       else if (this.hover?.type === "element") cursor = "move";
       else if (this.hover) cursor = "pointer";

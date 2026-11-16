@@ -159,6 +159,7 @@ const BLOCK_KEYS: SheetGroup[] = [
       [["Escape"], "End a gesture or a tool; then clear the selection"],
       [["Enter", "F2"], "Name an element; a double click does too"],
       ["Drag a connection's end", "Attach it to another element"],
+      ["Drag a label", "Stand it elsewhere; it keeps beside its line"],
       ["Right-click", "Menu: put in a box, change a kind, arrange, ..."],
       [["Ctrl", "G"], "Put the selection in an agent"],
       [["Ctrl", "Shift", "G"], "Put the selection in a group"],
@@ -214,6 +215,12 @@ const structureKeys = (info: TypeInfo): SheetGroup[] => {
         [["Escape"], "End a gesture or a tool; then clear the selection"],
         ["Double-click", "Name a part, or label a connection"],
         [["Enter", "F2"], "Name the selected part"],
+        ["Drag a label", "Stand it elsewhere; it keeps beside its line"],
+        ...(info.type === "swimlane"
+          ? ([
+              ["Drag a lane's border", "Make the lane before it wider or narrower"],
+            ] satisfies SheetRow[])
+          : []),
         ["Right-click", "Menu: add here, change a kind, delete"],
         ...(info.type === "sequence"
           ? ([

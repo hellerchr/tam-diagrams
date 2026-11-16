@@ -110,6 +110,7 @@ Without positions the diagram lays itself out. Moving a part in the editor write
 | --- | --- |
 | `%% @order 120,40` | The part with this id stands with its top left corner at x 120, y 40, in pixels, y down. A part without such a line stays where the layout puts it; without any such line the layout is automatic again. |
 | `%% @label:e1 +20,-14` | The label of the connection `e1`, the first in the source (`e2` the second, and so on), stands with its middle 20 right of and 14 above the middle of its line, which it keeps to when the line moves. Dragging a label in the editor writes it. |
+| `%% @lane:Customer 260` | The lane of the subgraph `Customer` is 260 wide across the lanes (high, in `LR`), never less than its nodes, its name and its labels need. Dragging the border after a lane in the editor writes it; the outer edge is the last lane's. |
 
 ## Example
 

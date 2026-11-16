@@ -14,6 +14,7 @@ import {
   type Point,
   type Scene,
   type SceneShape,
+  type SceneText,
 } from "./scene.ts";
 import { union } from "./tam-placed.ts";
 import { chainOf, sceneTree, type SceneTree, shiftTexts } from "./scene-tree.ts";
@@ -147,6 +148,43 @@ function lanesOf(scene: Scene): Lanes | undefined {
     frameLine,
     separators,
   };
+}
+
+/** The lanes of an activity with lanes as an editor resizes them. */
+export interface LaneFrame {
+  /** The axis the lanes lie side by side along: their widths are taken along it. */
+  across: "x" | "y";
+  /** The borders of the lanes along that axis, the frame's edges included. */
+  bounds: number[];
+  /** The id of each lane, by its place among the lanes; undefined for the lane without a name. */
+  ids: (string | undefined)[];
+  /** The box of the frame around all lanes. */
+  frame: Box;
+}
+
+/**
+ * The lanes of a scene of an activity with lanes, with the ids of their subgraphs, which their
+ * titles carry (`lane:<id>`); undefined for a scene without lanes.
+ */
+export function laneFrame(scene: Scene): LaneFrame | undefined {
+  const lanes = lanesOf(scene);
+  if (!lanes) return undefined;
+  const { across, bounds, frame } = lanes,
+    size = across === "x" ? "width" : "height";
+  const titles = new Map<string, SceneText[]>();
+  for (const text of scene.texts)
+    if (text.owner?.startsWith("lane:"))
+      titles.set(text.owner.slice(5), [...(titles.get(text.owner.slice(5)) ?? []), text]);
+  const ids = bounds.slice(1).map((): string | undefined => undefined);
+  for (const [id, texts] of titles) {
+    const box = textGroupBox(texts),
+      middle = box[across] + box[size] / 2,
+      lane = bounds.findIndex(
+        (_, index) => index < bounds.length - 1 && middle < bounds[index + 1],
+      );
+    if (lane >= 0) ids[lane] = id;
+  }
+  return { across, bounds, ids, frame };
 }
 
 /** A node's box kept inside the lane its middle lay in, and below the lane titles. */
