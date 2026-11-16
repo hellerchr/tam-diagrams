@@ -39,11 +39,11 @@ import {
   titleCell,
   TAMSHAPES,
   vertexGeometry,
-  within,
 } from "./drawio-shapes.ts";
-import type { Box, Point, Scene, SceneShape } from "./scene.ts";
+import { around, type Box, inside, type Point, type Scene, type SceneShape } from "./scene.ts";
 import { chainOf, sceneTree } from "./scene-tree.ts";
 import { parseStateDiagram, type StateDiagram } from "./uml-state.ts";
+import { escapeText } from "./uml-state-edit.ts";
 import { STYLING } from "./uml.ts";
 
 // ---------------------------------------------------------------------------------------------
@@ -83,18 +83,6 @@ const PAD = 12;
 
 /** Model text (`<br>` between lines) as a cell's HTML label. */
 const html = (text: string) => textToHtml(text.replace(/<br\s*\/?>/gi, "\n"));
-
-/** The box around a set of boxes. */
-function union(boxes: Box[]): Box {
-  const x = Math.min(...boxes.map((box) => box.x)),
-    y = Math.min(...boxes.map((box) => box.y));
-  return {
-    x,
-    y,
-    width: Math.max(...boxes.map((box) => box.x + box.width)) - x,
-    height: Math.max(...boxes.map((box) => box.y + box.height)) - y,
-  };
-}
 
 const centerOf = (box: Box): Point => ({ x: box.x + box.width / 2, y: box.y + box.height / 2 });
 
@@ -295,13 +283,13 @@ function exportCells(source: string, scene: Scene): Cell[] {
   scene.lines
     .filter((line) => line.dashed && line.points.length === 2)
     .forEach((line, index) => {
-      const middle = centerOf(union(line.points.map((p) => ({ ...p, width: 0, height: 0 }))));
+      const middle = centerOf(around(line.points.map((p) => ({ ...p, width: 0, height: 0 }))));
       const holder = scene.shapes
         .filter(
           (shape) =>
             shape.container &&
             shape.kind !== "region" &&
-            within({ ...middle, width: 0, height: 0 }, shape.box, 0.5),
+            inside({ ...middle, width: 0, height: 0 }, shape.box, 0.5),
         )
         .toSorted((a, b) => a.box.width * a.box.height - b.box.width * b.box.height)[0];
       const parent = holder?.box;
@@ -363,7 +351,7 @@ function exportCells(source: string, scene: Scene): Cell[] {
     const label = transition?.label;
     const geometry =
       label && labels.length
-        ? labelAt(route.geometry, wire.points, centerOf(union(labels.map((text) => text.box))))
+        ? labelAt(route.geometry, wire.points, centerOf(around(labels.map((text) => text.box))))
         : route.geometry;
     cells.push(
       cell(
@@ -714,7 +702,7 @@ class PageReader {
   private findFinals() {
     const rings = this.parts.filter((part) => part.kind === "ring");
     for (const dot of this.parts.filter((part) => part.kind === "dot")) {
-      const ring = rings.find((item) => within(dot.box, item.box));
+      const ring = rings.find((item) => inside(dot.box, item.box, 2));
       if (ring) {
         ring.kind = "final";
         dot.kind = "ignore";
@@ -741,7 +729,7 @@ class PageReader {
     for (const part of this.parts) {
       if (part.kind === "note" || part.kind === "text" || part.kind === "description") continue;
       const holder = holders.find(
-        (item) => item !== part && area(item.box) > area(part.box) && within(part.box, item.box),
+        (item) => item !== part && area(item.box) > area(part.box) && inside(part.box, item.box, 2),
       );
       if (!holder) continue;
       part.parent = holder;
@@ -767,14 +755,14 @@ class PageReader {
     if (!point) return {};
     // An end dropped on a note is the note's: its line joins the note to a state.
     const note = this.parts.find(
-      (part) => part.kind === "note" && within(pointBox(point), part.box, 6),
+      (part) => part.kind === "note" && inside(pointBox(point), part.box, 6),
     );
     if (note) return { part: note };
     const candidates = this.parts.filter(
       (part) => !["note", "text", "description", "region"].includes(part.kind),
     );
     const holder = candidates
-      .filter((part) => within(pointBox(point), part.box, 6))
+      .filter((part) => inside(pointBox(point), part.box, 6))
       .toSorted((a, b) => area(a.box) - area(b.box))[0];
     if (holder && (!holder.members.length || outlineGap(point, holder.box) <= 6))
       return { part: holder };
@@ -832,8 +820,8 @@ class PageReader {
         this.parts.some(
           (part) =>
             part.kind === "state" &&
-            within(pointBox(first), part.box, 6) &&
-            within(pointBox(last), part.box, 6),
+            inside(pointBox(first), part.box, 6) &&
+            inside(pointBox(last), part.box, 6),
         )
       ) {
         this.rules.push({
@@ -932,12 +920,12 @@ class PageReader {
       .filter((part) => part.kind === "state")
       .toSorted((a, b) => area(a.box) - area(b.box));
     const unlabeled = new Set(this.transitions.filter((item) => !item.label));
-    const inside = new Map<Part, { box: Box; lines: string[] }[]>();
+    const written = new Map<Part, { box: Box; lines: string[] }[]>();
     for (const text of this.parts.filter(
       (part) => part.kind === "text" || part.kind === "description",
     )) {
       const lines = text.label.split("\n").filter(Boolean);
-      const holder = states.find((state) => within(pointBox(centerOf(text.box)), state.box, 0));
+      const holder = states.find((state) => inside(pointBox(centerOf(text.box)), state.box, 0));
       const beside =
         text.kind === "text" && lines.length && !(holder && !holder.members.length)
           ? this.transitionBeside(text.box, unlabeled)
@@ -947,14 +935,14 @@ class PageReader {
         unlabeled.delete(beside);
       } else if (holder && !holder.members.length) {
         if (lines.length)
-          inside.set(holder, [...(inside.get(holder) ?? []), { box: text.box, lines }]);
+          written.set(holder, [...(written.get(holder) ?? []), { box: text.box, lines }]);
       } else if (lines.length)
         this.warnings.push(
           `The text ${this.named(text.cell)} belongs to no state and is not read.`,
         );
       text.kind = "ignore";
     }
-    for (const [state, texts] of inside) {
+    for (const [state, texts] of written) {
       texts.sort((a, b) => a.box.y - b.box.y || a.box.x - b.box.x);
       if (!state.label) {
         const { box, lines } = texts.shift()!;
@@ -1037,13 +1025,13 @@ class PageReader {
     const box = composite.box;
     const holder = (point: Point) =>
       this.parts
-        .filter((part) => part.kind === "state" && within(pointBox(point), part.box, 0.5))
+        .filter((part) => part.kind === "state" && inside(pointBox(point), part.box, 0.5))
         .toSorted((a, b) => area(a.box) - area(b.box))[0];
     const xs: number[] = [],
       ys: number[] = [];
     for (const { points } of this.separators) {
       const [a, b] = points;
-      if (holder(centerOf(union([pointBox(a), pointBox(b)]))) !== composite) continue;
+      if (holder(centerOf(around([pointBox(a), pointBox(b)]))) !== composite) continue;
       const vertical = Math.abs(a.x - b.x) < Math.abs(a.y - b.y) / 10,
         horizontal = Math.abs(a.y - b.y) < Math.abs(a.x - b.x) / 10;
       if (vertical && Math.abs(a.y - b.y) >= box.height / 3) xs.push((a.x + b.x) / 2);
@@ -1159,20 +1147,6 @@ const KEYWORDS = /^(state|note|end|direction|hide|scale|accTitle|accDescr)$/i;
 /** An id the parser takes for a state, and that this module writes. */
 const STATE_ID = /^[\p{L}_][\p{L}\p{N}_]*$/u;
 
-/**
- * Text as a name, a transition's label or a note holds it: line breaks as `<br>`, and as entities
- * what the parser would read as markup. A name stands in quotes, so its quotes are entities too.
- */
-function escapeText(label: string, quoted: boolean): string {
-  const text = label
-    .trim()
-    .replace(/[#&](?=\w+;)/g, (mark) => (mark === "#" ? "#35;" : "#amp;"))
-    .replace(/<(?=\/?[a-z])(?!br\s*\/?>)/gi, "#lt;")
-    .replace(/\\n/g, "#92;n")
-    .replace(/\s*\n\s*/g, "<br>");
-  return quoted || /^".*"$/.test(text) ? text.replace(/"/g, "#quot;") : text;
-}
-
 /** Ids for the named states of a page: the cell's id when it can be one, else one made from the label. */
 class StateIds {
   private readonly taken = new Set<string>();
@@ -1204,7 +1178,7 @@ function directionOf(reader: PageReader): "TB" | "BT" | "LR" | "RL" {
   const votes = { TB: 0, BT: 0, LR: 0, RL: 0 };
   for (const { source, target } of reader.transitions) {
     if (source === target) continue;
-    if (within(source.box, target.box) || within(target.box, source.box)) continue;
+    if (inside(source.box, target.box, 2) || inside(target.box, source.box, 2)) continue;
     const a = centerOf(source.box),
       b = centerOf(target.box),
       dx = b.x - a.x,

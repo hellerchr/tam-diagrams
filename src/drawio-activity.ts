@@ -32,10 +32,17 @@ import {
   roleOf,
   TAMSHAPES,
   vertexGeometry,
-  within,
 } from "./drawio-shapes.ts";
 import type { DrawioKind, DrawioType, Imported } from "./drawio.ts";
-import type { Box, Point, Scene, SceneShape, SceneText } from "./scene.ts";
+import {
+  type Box,
+  contains,
+  inside,
+  type Point,
+  type Scene,
+  type SceneShape,
+  type SceneText,
+} from "./scene.ts";
 import { FONT, type Measure, textMeasure } from "./text.ts";
 import type { Direction } from "./elk.ts";
 import {
@@ -45,6 +52,7 @@ import {
   type Marker,
   parseFlowchart,
 } from "./uml-activity.ts";
+import { escapeLabel } from "./uml.ts";
 import { degrees, guardText, nodeBox, splitDecisions, splitFinals } from "./uml-activity-layout.ts";
 import { placeSwimlanes } from "./swimlane-place.ts";
 
@@ -685,7 +693,7 @@ function readParts(drawing: Drawing): Reading {
       return (
         drawing.parentOf(other) === item ||
         (inner.width * inner.height < box.width * box.height &&
-          within(inner, box) &&
+          inside(inner, box, 2) &&
           shapeOf(drawing.style(other)) !== "text")
       );
     });
@@ -733,7 +741,7 @@ function stackedEnds(drawing: Drawing, reading: Reading) {
         part.kind === "initial" &&
         !part.tagged &&
         part.box.width < ring.box.width &&
-        within(part.box, ring.box),
+        inside(part.box, ring.box, 2),
     );
     if (dot) {
       ring.kind = "final";
@@ -746,7 +754,7 @@ function stackedEnds(drawing: Drawing, reading: Reading) {
       const path = drawing.path(item);
       return (
         path.length >= 2 &&
-        path.every((point) => within({ ...point, width: 0, height: 0 }, ring.box, 1))
+        path.every((point) => inside({ ...point, width: 0, height: 0 }, ring.box, 1))
       );
     });
     if (cross.length >= 2) {
@@ -778,11 +786,6 @@ interface Flow {
 }
 
 const center = (box: Box): Point => ({ x: box.x + box.width / 2, y: box.y + box.height / 2 });
-const contains = (box: Box, point: Point, slack = 0) =>
-  point.x >= box.x - slack &&
-  point.x <= box.x + box.width + slack &&
-  point.y >= box.y - slack &&
-  point.y <= box.y + box.height + slack;
 const area = (box: Box) => box.width * box.height;
 
 /** The Mermaid marker of an end of a draw.io edge. */
@@ -864,16 +867,6 @@ function directionOf(
   return columns ? (dy < 0 ? "BT" : "TB") : dx < 0 ? "RL" : "LR";
 }
 
-/** Text as a label holds it: line breaks as `<br>`, and as codes what Mermaid would read as syntax. */
-const escaped = (label: string) =>
-  label
-    .trim()
-    .replace(/[#&](?=\w+;)/g, (mark) => (mark === "#" ? "#35;" : "#amp;"))
-    .replace(/<(?=\/?[a-z])(?!br\s*\/?>)/gi, "#lt;")
-    .replace(/"/g, "#quot;")
-    .replace(/^`(?=[\s\S]*`$)/, "#96;")
-    .replace(/\s*\n\s*/g, "<br>");
-
 /** In quotes, unless a text is plain words. */
 const quoted = (text: string) =>
   /^[\p{L}\p{N} .,:!?'_-]*$/u.test(text.replace(/<br>/g, "")) ? text : `"${text}"`;
@@ -905,7 +898,7 @@ const NAMED: Partial<Record<Shape, string>> = {
 
 /** A node's declaration: its id with its shape and text. */
 function declaration(id: string, shape: Shape, label: string): string {
-  const text = escaped(label);
+  const text = escapeLabel(label);
   const brackets = BRACKETS[shape];
   if (brackets) return `${id}${brackets[0]}${quoted(text)}${brackets[1]}`;
   const named = `shape: ${NAMED[shape]}`;
@@ -936,7 +929,7 @@ function flowLine(flow: Flow): string {
         : flow.stroke === "dotted"
           ? `${start}-.-${end}`
           : `${start}--${end || "-"}`;
-  const label = flow.label ? `|${quoted(escaped(flow.label).replace(/\|/g, "#124;"))}|` : "";
+  const label = flow.label ? `|${quoted(escapeLabel(flow.label).replace(/\|/g, "#124;"))}|` : "";
   return `${flow.source} ${operator}${label} ${flow.target}`;
 }
 
@@ -1079,7 +1072,7 @@ function readActivity(drawing: Drawing): Imported {
       group,
       holderOf(
         group,
-        groups.filter((other) => within(group.box, other.box)),
+        groups.filter((other) => inside(group.box, other.box, 2)),
       ),
     );
 
@@ -1175,10 +1168,10 @@ function readActivity(drawing: Drawing): Imported {
     if (id === "subgraph#" || id.startsWith("subgraph#")) {
       const named = `subgraph#${++anonymous}`;
       realId.set(part, named);
-      return part.label ? `subgraph "${escaped(part.label)}"` : "subgraph";
+      return part.label ? `subgraph "${escapeLabel(part.label)}"` : "subgraph";
     }
     realId.set(part, id);
-    return `subgraph ${id} [${quoted(escaped(part.label))}]`;
+    return `subgraph ${id} [${quoted(escapeLabel(part.label))}]`;
   };
   if (kind === "swimlane") {
     for (const lane of laneOrder) {

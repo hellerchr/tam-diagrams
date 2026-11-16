@@ -13,6 +13,7 @@ import { markerBounds, type MarkerKind } from "./markers.ts";
 import { clipToOutline, entryPoint, outlineOf } from "./outline.ts";
 import { outline } from "./route.ts";
 import {
+  around,
   type Box,
   centerOf,
   distance,
@@ -29,7 +30,7 @@ import {
   unit,
 } from "./scene.ts";
 import { chainOf, type SceneTree, shiftTexts } from "./scene-tree.ts";
-import { lies, type Side, sidePoint, union } from "./tam-placed.ts";
+import { lies, type Side, sidePoint } from "./tam-placed.ts";
 import { detour, type Line } from "./tam-placed-detour.ts";
 import {
   ALONG,
@@ -521,8 +522,8 @@ export function rewire(
 
   /** The cheapest line for a wire in the field as it is. */
   const cheapest = (route: Route): Line => {
-    const around = union([route.a.box, route.b.box]),
-      scope = scopeOf(field, route.traveller, grow(around, REACH + 8));
+    const both = around([route.a.box, route.b.box]),
+      scope = scopeOf(field, route.traveller, grow(both, REACH + 8));
     let best: { line: Line; cost: number; met: number } | undefined;
     const consider = (line: Line, within = scope) => {
       const met = price(within, line.points, line.from, line.to),
@@ -536,7 +537,7 @@ export function rewire(
       if (fits(route, line)) consider(line);
     if (!route.nested && (!best || best.met >= TROUBLE)) {
       const { home } = route.traveller;
-      for (const window of [home ? grow(home, 16) : grow(around, 180), undefined]) {
+      for (const window of [home ? grow(home, 16) : grow(both, 180), undefined]) {
         const wide = scopeOf(field, route.traveller, window),
           { blocked: walls, terrain } = terrainOf(wide),
           way = detour(route.a.box, route.b.box, walls, terrain);

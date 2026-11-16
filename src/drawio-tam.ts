@@ -37,11 +37,12 @@ import {
   TAMSHAPES,
   titleCell,
   vertexGeometry,
-  within,
 } from "./drawio-shapes.ts";
 import {
+  around,
   type Box,
   centerOf,
+  inside,
   type Point,
   type Scene,
   type SceneShape,
@@ -68,18 +69,6 @@ const html = (label: string) =>
     .split(/<br\s*\/?>/i)
     .map(textToHtml)
     .join("<br>");
-
-/** The box around boxes. */
-function around(boxes: Box[]): Box {
-  const x = Math.min(...boxes.map((box) => box.x)),
-    y = Math.min(...boxes.map((box) => box.y));
-  return {
-    x,
-    y,
-    width: Math.max(...boxes.map((box) => box.x + box.width)) - x,
-    height: Math.max(...boxes.map((box) => box.y + box.height)) - y,
-  };
-}
 
 /** The cell id of an element: its id; anonymous groups and copies keep theirs, `#` and all. */
 const cellId = (id: string) => id;
@@ -1492,7 +1481,7 @@ function readTam(drawing: Drawing): Imported {
     list
       .filter(
         (element) =>
-          element.kind !== "note" && within(box, element.box) && area(element.box) > area(box),
+          element.kind !== "note" && inside(box, element.box, 2) && area(element.box) > area(box),
       )
       .toSorted((a, b) => area(a.box) - area(b.box))[0];
   const dots = drawing.parts
@@ -1613,7 +1602,7 @@ function readElements(
       ["umlActor", "actor"].includes(shapeOf(drawing.style(element.cell)))
     ) {
       const around = [...elements.values()].find(
-        (other) => other !== element && other.kind === "agent" && within(element.box, other.box),
+        (other) => other !== element && other.kind === "agent" && inside(element.box, other.box, 2),
       );
       if (around) {
         around.kind = "human";
@@ -1630,7 +1619,7 @@ function readElements(
     const box = drawing.box(item);
     const around = [...elements.values()]
       .filter(
-        (other) => (other.kind === "agent" || other.kind === "human") && within(box, other.box),
+        (other) => (other.kind === "agent" || other.kind === "human") && inside(box, other.box, 2),
       )
       .toSorted((a, b) => a.box.width * a.box.height - b.box.width * b.box.height)[0];
     if (around) {
@@ -1693,7 +1682,7 @@ function readElements(
             other !== element &&
             other.kind !== "note" &&
             area(other.box) > area(element.box) &&
-            within(element.box, other.box),
+            inside(element.box, other.box, 2),
         )
         .toSorted((a, b) => area(a.box) - area(b.box))[0];
   }

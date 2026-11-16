@@ -174,6 +174,19 @@ export function labelText(raw: string): string {
   return decodeEntities(text).replace(/\\n/g, "<br>").trim();
 }
 
+/**
+ * Text as a Mermaid label holds it: line breaks as `<br>`, and as entity codes what the parser would
+ * read as an entity, a tag, a quote or markdown.
+ */
+export const escapeLabel = (label: string) =>
+  label
+    .trim()
+    .replace(/[#&](?=\w+;)/g, (mark) => (mark === "#" ? "#35;" : "#amp;"))
+    .replace(/<(?=\/?[a-z])(?!br\s*\/?>)/gi, "#lt;")
+    .replace(/"/g, "#quot;")
+    .replace(/^`(?=[\s\S]*`$)/, "#96;")
+    .replace(/\s*\n\s*/g, "<br>");
+
 /** Statements that only style the picture (colors, classes, links, tooltips); the renderer ignores them. */
 export const STYLING =
   /^(classDef|class|style|linkStyle|cssClass|click|callback|link|links|properties|details)\b/;

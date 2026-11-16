@@ -4,7 +4,7 @@
  * like a layout by ELK.
  */
 
-import { type Box, centerOf, grow, inside, overlaps, type Point } from "./scene.ts";
+import { around, type Box, centerOf, grow, inside, overlaps, type Point } from "./scene.ts";
 import type { TamEdge, TamNode } from "./tam.ts";
 import { type Measure, SMALL } from "./text.ts";
 import {
@@ -32,18 +32,6 @@ export const sidePoint = (box: Box, side: Side, along: number): Point =>
       : side === "left"
         ? { x: box.x, y: along }
         : { x: box.x + box.width, y: along };
-
-/** The box around boxes. */
-export function union(boxes: Box[]): Box {
-  const x = Math.min(...boxes.map((box) => box.x)),
-    y = Math.min(...boxes.map((box) => box.y));
-  return {
-    x,
-    y,
-    width: Math.max(...boxes.map((box) => box.x + box.width)) - x,
-    height: Math.max(...boxes.map((box) => box.y + box.height)) - y,
-  };
-}
 
 /** Elements the source does not place stand in rows this wide at most, below the placed ones. */
 const ROW = 720;
@@ -131,7 +119,7 @@ export function placeElements(prepared: TamGraph, measure: Measure): PlacedEleme
         measure,
       );
       const inner = placeAll(id, { x: at.x + side, y: at.y + top });
-      const around = {
+      const frame = {
         x: inner.x - side,
         y: inner.y - top,
         width: Math.max(inner.width + 2 * side + shadow(id), minimum),
@@ -139,8 +127,8 @@ export function placeElements(prepared: TamGraph, measure: Measure): PlacedEleme
       };
       const given = shape.node.at;
       box = given
-        ? union([
-            around,
+        ? around([
+            frame,
             {
               x: given.x,
               y: given.y,
@@ -148,7 +136,7 @@ export function placeElements(prepared: TamGraph, measure: Measure): PlacedEleme
               height: (given.height ?? 0) + shadow(id),
             },
           ])
-        : around;
+        : frame;
     }
     boxes.set(id, box);
     // A copy stands beside its original, the dots between them.
@@ -162,7 +150,7 @@ export function placeElements(prepared: TamGraph, measure: Measure): PlacedEleme
         ? { ...box, x: box.x + box.width + NODE_SPACING }
         : { ...box, y: box.y + box.height + NODE_SPACING };
     boxes.set(copy, second);
-    return union([box, second]);
+    return around([box, second]);
   };
 
   /** Dots in the gap between two boxes, along the line that joins them. */
@@ -188,7 +176,7 @@ export function placeElements(prepared: TamGraph, measure: Measure): PlacedEleme
     const children = parent ? node(parent).children : diagram.roots,
       ids = elements(children);
     const taken = ids.filter(isAnchored).map((id) => place(id, free));
-    const placed = taken.length ? union(taken) : undefined;
+    const placed = taken.length ? around(taken) : undefined;
     const left = placed ? placed.x : free.x;
     let x = left,
       y = placed ? placed.y + placed.height + NODE_SPACING : free.y,
@@ -206,7 +194,7 @@ export function placeElements(prepared: TamGraph, measure: Measure): PlacedEleme
       tallest = Math.max(tallest, box.height);
     }
     taken.push(...marks(children, parent));
-    return taken.length ? union(taken) : { ...free, width: 0, height: 0 };
+    return taken.length ? around(taken) : { ...free, width: 0, height: 0 };
   };
 
   /** The dots and interfaces among `ids` (and in their rows), parts of `parent`, placed by the elements they belong to. */
@@ -217,7 +205,7 @@ export function placeElements(prepared: TamGraph, measure: Measure): PlacedEleme
     for (const id of ids.filter(isRow)) {
       taken.push(...marks(node(id).children, parent));
       const inside = node(id).children.flatMap((child) => boxes.get(child) ?? []);
-      if (inside.length) boxes.set(id, union(inside));
+      if (inside.length) boxes.set(id, around(inside));
     }
     for (const id of ids) {
       const item = node(id);

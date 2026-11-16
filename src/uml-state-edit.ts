@@ -16,15 +16,7 @@ import { accessibilityLines, scan, STYLING } from "./uml.ts";
 
 /** What a canvas adds to a state diagram. */
 export type StatePiece =
-  | "state"
-  | "composite"
-  | "start"
-  | "end"
-  | "choice"
-  | "fork"
-  | "join"
-  | "note"
-  | "region";
+  "state" | "composite" | "start" | "end" | "choice" | "fork" | "join" | "note" | "region";
 
 const linesOf = (source: string) => source.replace(/\r\n?/g, "\n").split("\n");
 
@@ -76,14 +68,7 @@ interface Statement {
   last: number;
   text: string;
   kind:
-    | "transition"
-    | "special"
-    | "alias"
-    | "declare"
-    | "note"
-    | "bare"
-    | "description"
-    | "styling";
+    "transition" | "special" | "alias" | "declare" | "note" | "bare" | "description" | "styling";
   /** The states it names; `[*]` is not among them. */
   ids: string[];
   /**
@@ -314,7 +299,7 @@ function scopeAt({ diagram, outline }: Model, parent: string | null | undefined)
  * Text as a name, a transition's label or a note holds it: line breaks as `<br>`, and as entities
  * what the parser would read as markup. A name stands in quotes, so its quotes are entities too.
  */
-function escapeText(label: string, quoted: boolean): string {
+export function escapeText(label: string, quoted: boolean): string {
   const text = label
     .trim()
     .replace(/[#&](?=\w+;)/g, (mark) => (mark === "#" ? "#35;" : "#amp;"))

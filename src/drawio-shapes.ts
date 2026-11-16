@@ -471,13 +471,6 @@ export function readingOrder<T>(items: T[], boxOf: (item: T) => Box): T[] {
   });
 }
 
-/** Whether box `inner` lies inside box `outer`, with `slack` pixels to spare. */
-export const within = (inner: Box, outer: Box, slack = 2) =>
-  inner.x >= outer.x - slack &&
-  inner.y >= outer.y - slack &&
-  inner.x + inner.width <= outer.x + outer.width + slack &&
-  inner.y + inner.height <= outer.y + outer.height + slack;
-
 /** A cell to write: its style from keys and values, the role tag added. */
 export function cell(
   fields: Omit<Cell, "style"> & { style: Record<string, string | number | boolean | undefined> },

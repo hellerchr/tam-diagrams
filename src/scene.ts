@@ -193,6 +193,18 @@ export const grow = (box: Box, by: number): Box => ({
   height: box.height + 2 * by,
 });
 
+/** The box around boxes. */
+export function around(boxes: Box[]): Box {
+  const x = Math.min(...boxes.map((box) => box.x)),
+    y = Math.min(...boxes.map((box) => box.y));
+  return {
+    x,
+    y,
+    width: Math.max(...boxes.map((box) => box.x + box.width)) - x,
+    height: Math.max(...boxes.map((box) => box.y + box.height)) - y,
+  };
+}
+
 /** The unit vector from `from` toward `to`. */
 export const unit = (from: Point, to: Point): Point => {
   const length = Math.hypot(to.x - from.x, to.y - from.y) || 1;
@@ -242,6 +254,13 @@ export const inside = (a: Box, b: Box, slack = 0) =>
   a.x + a.width <= b.x + b.width + slack &&
   a.y + a.height <= b.y + b.height + slack;
 
+/** Whether a point lies in a box, give or take `slack`. */
+export const contains = (box: Box, point: Point, slack = 0) =>
+  point.x >= box.x - slack &&
+  point.x <= box.x + box.width + slack &&
+  point.y >= box.y - slack &&
+  point.y <= box.y + box.height + slack;
+
 /** Whether a box lies across the edge of `container`: partly inside it, partly out. */
 export const straddles = (box: Box, container: Box) =>
   overlaps(box, container) && !inside(box, container);
@@ -255,12 +274,10 @@ export function simplifyPath(points: Point[]): Point[] {
     path.push({ ...point });
     while (path.length >= 3) {
       const [p, q, r] = path.slice(-3);
-      if (
-        !(
-          (Math.abs(p.x - q.x) < 0.5 && Math.abs(q.x - r.x) < 0.5) ||
-          (Math.abs(p.y - q.y) < 0.5 && Math.abs(q.y - r.y) < 0.5)
-        )
-      )
+      if (!(
+        (Math.abs(p.x - q.x) < 0.5 && Math.abs(q.x - r.x) < 0.5) ||
+        (Math.abs(p.y - q.y) < 0.5 && Math.abs(q.y - r.y) < 0.5)
+      ))
         break;
       path.splice(path.length - 2, 1);
     }

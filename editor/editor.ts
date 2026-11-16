@@ -4,7 +4,7 @@
  */
 
 import type { DiagramColors } from "../src/draw.ts";
-import type { Box, Point } from "../src/scene.ts";
+import { around, type Box, contains, type Point } from "../src/scene.ts";
 import {
   type Connection,
   ELEMENT_KINDS,
@@ -44,7 +44,6 @@ import type { Doc, Picture } from "./document.ts";
 import {
   boxesOf,
   boxOf,
-  contains,
   dropTarget,
   elementOf,
   elementShapes,
@@ -55,15 +54,7 @@ import {
   wireOf,
   wireParts,
 } from "./hit.ts";
-import {
-  type Arrangement,
-  around,
-  arrange,
-  type Guide,
-  guidesAt,
-  snapEdge,
-  snapMove,
-} from "./guides.ts";
+import { type Arrangement, arrange, type Guide, guidesAt, snapEdge, snapMove } from "./guides.ts";
 import { parseUml } from "../src/index.ts";
 import type { Structure, StructureEdge } from "../src/structure.ts";
 import { classMembers, setClassMembers } from "../src/uml-class-edit.ts";

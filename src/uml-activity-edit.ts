@@ -9,7 +9,7 @@
 
 import type { Structure, StructureNode } from "./structure.ts";
 import { type FlowEdge, type Flowchart, parseFlowchart } from "./uml-activity.ts";
-import { accessibilityLines, labelText as shownText, scan, STYLING } from "./uml.ts";
+import { accessibilityLines, escapeLabel, labelText as shownText, scan, STYLING } from "./uml.ts";
 import { removePlaces } from "./uml-places.ts";
 
 /** What a canvas adds to an activity diagram. */
@@ -339,19 +339,6 @@ function readModel(source: string): Model | null {
   return { chart, lines, statements, byLine, header };
 }
 
-/**
- * Text as a label holds it: line breaks as `<br>`, and as entity codes what the parser would read
- * as an entity, a tag, a quote or markdown.
- */
-const escaped = (label: string) =>
-  label
-    .trim()
-    .replace(/[#&](?=\w+;)/g, (mark) => (mark === "#" ? "#35;" : "#amp;"))
-    .replace(/<(?=\/?[a-z])(?!br\s*\/?>)/gi, "#lt;")
-    .replace(/"/g, "#quot;")
-    .replace(/^`(?=[\s\S]*`$)/, "#96;")
-    .replace(/\s*\n\s*/g, "<br>");
-
 /** In quotes, unless a text is plain words: quotes keep every mark of the syntax a text. */
 const quoted = (text: string) =>
   /^[\p{L}\p{N} .,:!?'\-_/]*$/u.test(text.replace(/<br>/g, "")) && !text.startsWith("/")
@@ -359,10 +346,10 @@ const quoted = (text: string) =>
     : `"${text}"`;
 
 /** A label as a node or a subgraph holds it between its delimiters. */
-const labelText = (label: string) => quoted(escaped(label));
+const labelText = (label: string) => quoted(escapeLabel(label));
 
 /** A label as an arrow holds it between pipes, with the pipes. */
-const pipeText = (label: string) => `|${quoted(escaped(label).replace(/\|/g, "#124;"))}|`;
+const pipeText = (label: string) => `|${quoted(escapeLabel(label).replace(/\|/g, "#124;"))}|`;
 
 /** An arrow of a stroke between two end marks (`<`, `>`, `o`, `x` or none); without a head it runs one stroke longer. */
 const operator = (start: string, stroke: FlowEdge["stroke"], end: string) =>
@@ -391,7 +378,7 @@ function arrowWith(token: string, change: { label?: string; stroke?: FlowEdge["s
       end = /[>ox]/.test(last) ? last : "";
     if (change.label !== undefined && !change.label.trim())
       return named + operator(start, stroke, end);
-    const words = change.label === undefined ? text : escaped(change.label),
+    const words = change.label === undefined ? text : escapeLabel(change.label),
       [head, tail] =
         stroke === was
           ? [open, close]
@@ -689,7 +676,7 @@ function nodeText(
   if (kind === "decision") return `${id}{${label || " "}}`;
   if (kind === "start" || kind === "end") {
     if (alone) {
-      const text = name?.trim() ? `, label: "${escaped(name).replace(/\}/g, "#125;")}"` : "";
+      const text = name?.trim() ? `, label: "${escapeLabel(name).replace(/\}/g, "#125;")}"` : "";
       return `${id}@{ shape: ${kind === "start" ? "start" : "stop"}${text} }`;
     }
     return kind === "start" ? `${id}((${label || "Start"}))` : `${id}(((${label || "End"})))`;
@@ -783,7 +770,7 @@ export function connectFlow(
         edge.source === from &&
         edge.target === to &&
         edge.stroke === stroke &&
-        (!text || edge.label === shownText(escaped(text))),
+        (!text || edge.label === shownText(escapeLabel(text))),
     )
   )
     return source;
@@ -830,7 +817,7 @@ export function renameFlow(source: string, id: string, label: string): string {
     const whole =
       group.form === "bracket" || (group.form === "plain" && /^\S+$/.test(id))
         ? `subgraph ${id} [${text}]`
-        : `subgraph "${escaped(label)}"`;
+        : `subgraph "${escapeLabel(label)}"`;
     return rebuild(model, new Map([[group, [whole]]]));
   }
   if (!chart.nodes.has(id)) return source;
@@ -851,7 +838,7 @@ export function renameFlow(source: string, id: string, label: string): string {
   if (braced) {
     const { statement, ref } = braced,
       braces = ref.braces!,
-      inner = `"${escaped(label).replace(/\}/g, "#125;")}"`;
+      inner = `"${escapeLabel(label).replace(/\}/g, "#125;")}"`;
     if (braces.label)
       return rebuild(
         model,

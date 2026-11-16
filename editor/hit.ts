@@ -1,6 +1,6 @@
 /** What of a picture lies at a point: elements and connections, by the ids the source edits use. */
 
-import type { Box, Point, Scene } from "../src/scene.ts";
+import { type Box, contains, type Point, type Scene } from "../src/scene.ts";
 import { ELEMENT_KINDS, type TamDiagram } from "../src/tam.ts";
 import type { Picture } from "./document.ts";
 
@@ -9,12 +9,6 @@ export type Part = { type: "element"; id: string } | { type: "wire"; id: string 
 
 export const samePart = (a: Part | undefined, b: Part | undefined) =>
   !!a && !!b && a.type === b.type && a.id === b.id;
-
-export const contains = (box: Box, point: Point, slack = 0) =>
-  point.x >= box.x - slack &&
-  point.x <= box.x + box.width + slack &&
-  point.y >= box.y - slack &&
-  point.y <= box.y + box.height + slack;
 
 /** The element a shape of the scene draws: a copy made for `...` is its original. Undefined for marks. */
 export function elementOf(diagram: TamDiagram, shape: string): string | undefined {

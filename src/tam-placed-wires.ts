@@ -7,12 +7,12 @@
  * on its wire gets another line.
  */
 
-import { type Box, centerOf, grow, type Point } from "./scene.ts";
+import { around, type Box, centerOf, grow, type Point } from "./scene.ts";
 import type { TamEdge } from "./tam.ts";
 import type { Measure } from "./text.ts";
 import { outline } from "./route.ts";
 import { CHANNEL, LOOP_END, SHADOW, type TamGeometry, type TamGraph } from "./tam-graph.ts";
-import { lies, type PlacedElements, type Side, union } from "./tam-placed.ts";
+import { lies, type PlacedElements, type Side } from "./tam-placed.ts";
 import { detour, GAP, type Line, meets } from "./tam-placed-detour.ts";
 import {
   ALONG,
@@ -307,7 +307,7 @@ export function placedGeometry(
     return total;
   };
 
-  const windowOf = (item: Bundle, by: number) => grow(union([item.a.box, item.b.box]), by);
+  const windowOf = (item: Bundle, by: number) => grow(around([item.a.box, item.b.box]), by);
 
   /**
    * The spots on a side one end of a bundle may take: the middle and the quarters where no other
@@ -460,7 +460,7 @@ export function placedGeometry(
   };
 
   // What the circles and labels on the wires keep off, as wires and marks take their places.
-  const around: Surroundings = {
+  const surroundings: Surroundings = {
     solids: field.solids.map((wall) => wall.box),
     containers: field.containers.map((wall) => wall.box),
     titles: field.titles.map((wall) => wall.box),
@@ -509,10 +509,10 @@ export function placedGeometry(
             count > 1 && Math.abs(item.offsets[index]) > 0.5 ? Math.sign(item.offsets[index]) : 0,
         },
         {
-          ...around,
+          ...surroundings,
           foreign,
           wires: [...others, ...own.flat()],
-          placed: [...around.placed, ...mine],
+          placed: [...surroundings.placed, ...mine],
         },
         prepared,
         measure,
@@ -530,17 +530,17 @@ export function placedGeometry(
   const unmark = (item: Bundle) => {
     if (!field.marks.has(item.key)) return;
     const owners = new Set(item.members.map((edge) => edge.id));
-    around.placed = around.placed.filter((entry) => !owners.has(entry.owner));
-    around.boundaries = around.boundaries.filter((entry) => !owners.has(entry.owner));
+    surroundings.placed = surroundings.placed.filter((entry) => !owners.has(entry.owner));
+    surroundings.boundaries = surroundings.boundaries.filter((entry) => !owners.has(entry.owner));
     field.marks.delete(item.key);
   };
   /** Stands the marks of a bundle where the wires and marks that come later keep off them. */
   const commit = (item: Bundle, mine: Surroundings["placed"]) => {
-    around.placed.push(...mine);
+    surroundings.placed.push(...mine);
     item.members.forEach((edge, index) => {
       const found = item.marks[index];
       if (found && edge.protocol && circled(edge))
-        around.boundaries.push({
+        surroundings.boundaries.push({
           owner: edge.id,
           protocol: edge.protocol,
           up: found.up,

@@ -131,10 +131,10 @@ const canBeId = (id: string) =>
   /^[\p{L}_][\p{L}\p{N}_]*$/u.test(id) && !RESERVED.has(id.toLowerCase());
 
 /**
- * A text as a message, an alias or a box holds it: line breaks as `<br>`, and as entity codes what
- * the parser would read as an entity, a tag, the end of a statement or surrounding quotes.
+ * A text as a message, an alias, a box or a note holds it: line breaks as `<br>`, and as entity
+ * codes what the parser would read as an entity, a tag, the end of a statement or surrounding quotes.
  */
-const textOf = (label: string) =>
+export const textOf = (label: string) =>
   label
     .trim()
     .replace(/[#;]/g, (character) => (character === "#" ? "#35;" : "#59;"))

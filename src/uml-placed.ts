@@ -7,6 +7,7 @@
  */
 
 import {
+  around,
   type Box,
   grow,
   inside,
@@ -16,7 +17,6 @@ import {
   type SceneShape,
   type SceneText,
 } from "./scene.ts";
-import { union } from "./tam-placed.ts";
 import { chainOf, sceneTree, type SceneTree, shiftTexts } from "./scene-tree.ts";
 import { finishBounds, type Measure, textGroupBox } from "./text.ts";
 import { type LineStyle, rewire } from "./uml-placed-wires.ts";
@@ -122,7 +122,7 @@ function lanesOf(scene: Scene): Lanes | undefined {
   );
   if (frameLine < 0) return undefined;
   const corners = scene.lines[frameLine].points,
-    frame = union(corners.map((point) => ({ ...point, width: 0, height: 0 })));
+    frame = around(corners.map((point) => ({ ...point, width: 0, height: 0 })));
   const separators = scene.lines.flatMap((line, index) =>
     index !== frameLine && line.points.length === 2 ? [index] : [],
   );
@@ -340,8 +340,8 @@ export function placeScene(
   for (const shape of holders) {
     const held = tree.children.get(shape.id)!,
       was = before.get(shape.id)!,
-      inner = union(held.map((id) => before.get(id)!)),
-      now = union(held.map((id) => shapes.get(id)!.box));
+      inner = around(held.map((id) => before.get(id)!)),
+      now = around(held.map((id) => shapes.get(id)!.box));
     const titles = scene.texts.filter((text) => text.owner === shape.id),
       least = titles.length ? textGroupBox(titles).width + 2 * TITLE_PAD : 0;
     let x = now.x - (inner.x - was.x),
@@ -406,7 +406,7 @@ function tileRegions(scene: Scene, auto: Scene, tree: SceneTree) {
       size = axis === "x" ? "width" : "height",
       acrossSize = axis === "x" ? "height" : "width";
     const order = regions.toSorted((a, b) => before.get(a)![axis] - before.get(b)![axis]),
-      all = union(order.map((id) => shapes.get(id)!.box));
+      all = around(order.map((id) => shapes.get(id)!.box));
     // The lines between the regions, in the order of the regions they part.
     const separators = auto.lines
       .map((line, index) => ({ line, index }))

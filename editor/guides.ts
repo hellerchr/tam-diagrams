@@ -3,7 +3,7 @@
  * of others and with the gaps between them, and a selection is aligned, spread evenly or made one size.
  */
 
-import type { Box, Point } from "../src/scene.ts";
+import { around, type Box, type Point } from "../src/scene.ts";
 
 type Axis = "x" | "y";
 
@@ -204,28 +204,9 @@ export function snapEdge(
   };
 }
 
-/** The box around boxes. */
-export function around(boxes: Box[]): Box {
-  const x = Math.min(...boxes.map((box) => box.x)),
-    y = Math.min(...boxes.map((box) => box.y));
-  return {
-    x,
-    y,
-    width: Math.max(...boxes.map((box) => box.x + box.width)) - x,
-    height: Math.max(...boxes.map((box) => box.y + box.height)) - y,
-  };
-}
-
 /** How a selection is arranged: aligned on a side or middle of the box around it, or spread with even gaps. */
 export type Arrangement =
-  | "left"
-  | "center"
-  | "right"
-  | "top"
-  | "middle"
-  | "bottom"
-  | "spread-x"
-  | "spread-y";
+  "left" | "center" | "right" | "top" | "middle" | "bottom" | "spread-x" | "spread-y";
 
 /** The step each box takes for an arrangement; boxes that stay are left out. */
 export function arrange(boxes: Map<string, Box>, how: Arrangement): Map<string, Point> {

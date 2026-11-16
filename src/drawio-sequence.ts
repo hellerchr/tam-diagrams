@@ -41,8 +41,17 @@ import {
   vertexGeometry,
 } from "./drawio-shapes.ts";
 import type { MarkerKind } from "./markers.ts";
-import type { Box, Point, Scene, SceneShape, SceneText } from "./scene.ts";
+import {
+  type Box,
+  contains,
+  inside,
+  type Point,
+  type Scene,
+  type SceneShape,
+  type SceneText,
+} from "./scene.ts";
 import { type MessageEvent, parseSequenceDiagram, type SequenceDiagram } from "./uml-sequence.ts";
+import { textOf } from "./uml-sequence-edit.ts";
 
 /** The size of message labels, notes and conditions, as the scene draws them. */
 const SMALL_SIZE = 12;
@@ -84,13 +93,6 @@ function union(boxes: Box[]): Box | undefined {
 }
 
 const centerOf = (box: Box): Point => ({ x: box.x + box.width / 2, y: box.y + box.height / 2 });
-
-/** Whether a point lies in a box, with `slack` pixels to spare. */
-const holds = (box: Box, point: Point, slack = 1.5) =>
-  point.x >= box.x - slack &&
-  point.x <= box.x + box.width + slack &&
-  point.y >= box.y - slack &&
-  point.y <= box.y + box.height + slack;
 
 /** Edge style keys for an arrow head of the model at one end. */
 function headStyle(kind: MarkerKind | null, end: "start" | "end") {
@@ -488,11 +490,13 @@ function messageCells(
     const lifeline = lifelines.get(who);
     if (!lifeline) return undefined;
     const bar = lifeline.bars
-      .filter((item) => holds(item.box, point))
+      .filter((item) => contains(item.box, point, 1.5))
       .sort((a, b) => b.depth - a.depth)[0];
     if (bar) return { cell: bar.cell, box: bar.box };
-    if (holds(lifeline.head.box, point)) return lifeline.head;
-    return holds(lifeline.box, point, 0.5) ? { cell: lifeline.cell, box: lifeline.box } : undefined;
+    if (contains(lifeline.head.box, point, 1.5)) return lifeline.head;
+    return contains(lifeline.box, point, 0.5)
+      ? { cell: lifeline.cell, box: lifeline.box }
+      : undefined;
   };
   const from = at(event.from, points[0]),
     to = at(event.to, points.at(-1)!);
@@ -1193,27 +1197,21 @@ function readFrames(reader: Reader) {
     if (reader.isText(item) || !reader.label(item) || shapeOf(reader.style(item)) !== "rect")
       continue;
     const box = reader.box(item);
-    if (!reader.lifelines.some((lifeline) => inside(lifeline.head, box))) continue;
+    if (!reader.lifelines.some((lifeline) => inside(lifeline.head, box, 4))) continue;
     reader.use(item);
     reader.groups.push({ label: reader.label(item), box });
   }
   reader.groups.sort((a, b) => a.box.x - b.box.x);
   reader.lifelines.forEach((lifeline) => {
-    const group = reader.groups.findIndex((item) => inside(lifeline.head, item.box));
+    const group = reader.groups.findIndex((item) => inside(lifeline.head, item.box, 4));
     if (group >= 0) lifeline.group = group;
   });
 }
 
-const inside = (inner: Box, outer: Box, slack = 4) =>
-  inner.x >= outer.x - slack &&
-  inner.y >= outer.y - slack &&
-  inner.x + inner.width <= outer.x + outer.width + slack &&
-  inner.y + inner.height <= outer.y + outer.height + slack;
-
 /** The innermost frame around a point. */
 function frameAt(reader: Reader, point: Point): Frame | undefined {
   return reader.frames
-    .filter((frame) => holds(frame.box, point, 2))
+    .filter((frame) => contains(frame.box, point, 2))
     .sort((a, b) => a.box.width * a.box.height - b.box.width * b.box.height)[0];
 }
 
@@ -1660,19 +1658,6 @@ const COLOR =
   /^(rgba?\([^)]*\)|#[0-9a-f]{3,8}|transparent|aqua|black|blue|fuchsia|gray|grey|green|lime|maroon|navy|olive|purple|red|silver|teal|white|yellow|orange|pink|lightblue|lightgreen|lightgrey|lightgray|lightyellow|beige|ivory|lavender|wheat|tan|khaki|coral|salmon|gold|cyan|magenta)\b/i;
 
 const PARTICIPANT_ID = /^[\p{L}_][\p{L}\p{N}_]*$/u;
-
-/**
- * A text as a message, an alias or a note holds it: line breaks as `<br>`, and as entity codes what
- * the parser would read as an entity, a tag, the end of a statement or surrounding quotes.
- */
-const textOf = (label: string) =>
-  label
-    .trim()
-    .replace(/[#;]/g, (character) => (character === "#" ? "#35;" : "#59;"))
-    .replace(/&(?=\w+#59;)/g, "#amp;")
-    .replace(/\s*\n\s*/g, "<br>")
-    .replace(/<(?=\/?[a-z])(?!br\s*\/?>)/gi, "#lt;")
-    .replace(/^"([\s\S]*)"$/, "#quot;$1#quot;");
 
 /** The arrow of a message, and a warning when the page draws one the syntax has not. */
 function arrowOf(message: Message): { arrow: string; odd: boolean } {
