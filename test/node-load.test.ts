@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { execFile } from "node:child_process";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -42,11 +42,31 @@ describe("Node loads the TypeScript sources", () => {
     await writeFile(script, smokeScript);
     const { stdout, stderr } = await run(process.execPath, [script], { timeout: 55_000 });
     expect(stderr.split("\n").filter((line) => !isNodeNotice(line))).toEqual([]);
-    const pictures = stdout.trim().split("\n").map((line) => JSON.parse(line));
+    const pictures = stdout
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
     expect(pictures.map((picture) => picture.kind)).toEqual(["tam", "uml"]);
     for (const picture of pictures) {
       expect(picture.length).toBeGreaterThan(500);
       expect(picture.head).toContain("<svg");
     }
+  }, 60_000);
+
+  // Every entry the package exports, as `import "tam-diagrams/drawio"` loads it.
+  it("loads every entry of the package with plain node", async () => {
+    const entries = Object.values(
+      JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8")).exports,
+    ) as string[];
+    const script = join(directory, "entries.mjs");
+    await writeFile(
+      script,
+      entries
+        .map((entry) => `await import(${JSON.stringify(sourceUrl(entry.replace("./src/", "")))});`)
+        .join("\n") + '\nconsole.log("loaded");',
+    );
+    const { stdout, stderr } = await run(process.execPath, [script], { timeout: 55_000 });
+    expect(stderr.split("\n").filter((line) => !isNodeNotice(line))).toEqual([]);
+    expect(stdout.trim()).toBe("loaded");
   }, 60_000);
 });

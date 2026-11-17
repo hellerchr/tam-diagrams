@@ -1439,7 +1439,7 @@ class SourceWriter {
   private scope(scope: Scope, order: Part[], depth: number) {
     const pad = "  ".repeat(depth);
     const members = this.members(scope, order);
-    for (const part of members) this.declare(part, pad);
+    for (const part of members) this.writePart(part, pad);
     for (const composite of compositesInOrder(members))
       this.writeComposite(composite, order, depth);
     // The `[*]` transitions of the scope: from its initial state, then to its final states.
@@ -1452,7 +1452,7 @@ class SourceWriter {
   }
 
   /** A pseudostate, or a simple state with its name and descriptions. */
-  private declare(part: Part, pad: string) {
+  private writePart(part: Part, pad: string) {
     if (part.kind === "choice" || part.kind === "fork" || part.kind === "join") {
       this.lines.push(`${pad}state ${part.id} <<${part.kind}>>`);
       return;
