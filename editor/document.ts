@@ -314,17 +314,18 @@ export class Doc {
   }
 
   undo() {
-    const source = this.undone.pop();
-    if (source === undefined) return;
-    this.redone.push(this.source);
-    this.source = source;
-    void this.show(source);
+    this.travel(this.undone, this.redone);
   }
 
   redo() {
-    const source = this.redone.pop();
+    this.travel(this.redone, this.undone);
+  }
+
+  /** Steps through the history: the source comes from one stack, and the one it replaces goes on the other. */
+  private travel(from: string[], to: string[]) {
+    const source = from.pop();
     if (source === undefined) return;
-    this.undone.push(this.source);
+    to.push(this.source);
     this.source = source;
     void this.show(source);
   }

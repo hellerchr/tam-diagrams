@@ -65,33 +65,45 @@ export function elementShapes(picture: Picture) {
  * innermost element. Leaves win over the lines that end on them.
  */
 export function partAt(picture: Picture, point: Point, reach = 5): Part | undefined {
-  const { diagram, scene } = picture;
   const shapes = elementShapes(picture);
   const leaf = shapes.find(({ shape }) => !shape.container && contains(shape.box, point));
   if (leaf) return { type: "element", id: leaf.id };
-  for (const shape of scene.shapes) {
-    if (shape.kind !== "circle" || !contains(shape.box, point, 3)) continue;
-    const id = wireOf(diagram, shape.id);
-    if (id) return { type: "wire", id };
+  const wire = markAt(picture, point) ?? nearestWire(picture, point, reach);
+  if (wire) return { type: "wire", id: wire };
+  const container = shapes.find(({ shape }) => contains(shape.box, point));
+  return container && { type: "element", id: container.id };
+}
+
+/** The connection whose interface circle, label or marker lies at a point. */
+function markAt(picture: Picture, point: Point): string | undefined {
+  const { diagram, scene } = picture;
+  const owners = [
+    ...scene.shapes
+      .filter((shape) => shape.kind === "circle" && contains(shape.box, point, 3))
+      .map((shape) => shape.id),
+    ...scene.texts
+      .filter((text) => ["label", "marker"].includes(text.role) && contains(text.box, point, 2))
+      .flatMap((text) => (text.owner ? [text.owner] : [])),
+  ];
+  for (const owner of owners) {
+    const id = wireOf(diagram, owner);
+    if (id) return id;
   }
-  for (const text of scene.texts) {
-    if (!text.owner || !["label", "marker"].includes(text.role) || !contains(text.box, point, 2))
-      continue;
-    const id = wireOf(diagram, text.owner);
-    if (id) return { type: "wire", id };
-  }
+  return undefined;
+}
+
+/** The connection whose line passes nearest to a point, within `reach`. */
+function nearestWire(picture: Picture, point: Point, reach: number): string | undefined {
   let nearest: { id: string; distance: number } | undefined;
-  for (const wire of scene.wires) {
-    const id = wireOf(diagram, wire.edge);
+  for (const wire of picture.scene.wires) {
+    const id = wireOf(picture.diagram, wire.edge);
     if (!id) continue;
     for (let index = 1; index < wire.points.length; index++) {
       const away = distance(point, wire.points[index - 1], wire.points[index]);
       if (away <= reach && (!nearest || away < nearest.distance)) nearest = { id, distance: away };
     }
   }
-  if (nearest) return { type: "wire", id: nearest.id };
-  const container = shapes.find(({ shape }) => contains(shape.box, point));
-  return container && { type: "element", id: container.id };
+  return nearest?.id;
 }
 
 /** The boxes an element is drawn in: its own, and its copy's. */

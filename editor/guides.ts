@@ -47,6 +47,22 @@ function gapGuide(from: number, to: number, a: Box, b: Box, axis: Axis): Guide {
       ];
 }
 
+/** The line along `at` across an axis, reaching past a box and the one it lines up with. */
+function lineAt(at: number, axis: Axis, box: Box, item: Box): Guide {
+  const across = other(axis),
+    from = Math.min(box[across], item[across]) - 12,
+    to = Math.max(end(box, across), end(item, across)) + 12;
+  return axis === "x"
+    ? [
+        { x: at, y: from },
+        { x: at, y: to },
+      ]
+    : [
+        { x: from, y: at },
+        { x: to, y: at },
+      ];
+}
+
 /** How far a box moves along one axis to line up with others within `reach`, and the lines that show it. */
 function snapAxis(
   box: Box,
@@ -54,9 +70,19 @@ function snapAxis(
   axis: Axis,
   reach: number,
 ): { by: number; guides: Guide[] } {
-  const across = other(axis);
-  // An edge on the same edge of another, a middle on a middle, or an edge a gap away from the
-  // edge that faces it, so that two elements never come to rest touching: the nearest wins.
+  return edgeSnap(box, others, axis, reach) ?? gapSnap(box, others, axis, reach);
+}
+
+/**
+ * An edge on the same edge of another, a middle on a middle, or an edge a gap away from the edge
+ * that faces it, so that two elements never come to rest touching: the nearest within `reach`.
+ */
+function edgeSnap(
+  box: Box,
+  others: Box[],
+  axis: Axis,
+  reach: number,
+): { by: number; guides: Guide[] } | undefined {
   let best: { by: number; at: number; with: Box } | undefined;
   const take = (mine: number, theirs: number, item: Box, at = theirs) => {
     const by = theirs - mine;
@@ -75,25 +101,15 @@ function snapAxis(
       take(finish, theirStart - GAP, item, theirStart);
     }
   }
-  if (best) {
-    const from = Math.min(box[across], best.with[across]) - 12,
-      to = Math.max(end(box, across), end(best.with, across)) + 12;
-    return {
-      by: best.by,
-      guides: [
-        axis === "x"
-          ? [
-              { x: best.at, y: from },
-              { x: best.at, y: to },
-            ]
-          : [
-              { x: from, y: best.at },
-              { x: to, y: best.at },
-            ],
-      ],
-    };
-  }
-  // Else the gaps: halfway between its neighbours, or as far from one as that one is from the next.
+  const found = best as { by: number; at: number; with: Box } | undefined;
+  return found && { by: found.by, guides: [lineAt(found.at, axis, box, found.with)] };
+}
+
+/** A place a box could stand at along an axis, with the lines across the gaps it keeps there. */
+type GapSpot = { at: number; guides: () => Guide[] };
+
+/** Where the gaps place a box: halfway between its neighbours, or as far from one as that one is from the next. */
+function gapSnap(box: Box, others: Box[], axis: Axis, reach: number) {
   const row = others.filter((item) => inLine(item, box, axis)),
     before = row
       .filter((item) => end(item, axis) <= box[axis] + reach)
@@ -101,45 +117,56 @@ function snapAxis(
     after = row
       .filter((item) => item[axis] >= end(box, axis) - reach)
       .toSorted((a, b) => a[axis] - b[axis]);
-  const size = box[extent(axis)];
-  const spots: { at: number; guides: () => Guide[] }[] = [];
   const [left, further] = before,
     [right, beyond] = after;
-  if (left && right)
-    spots.push({
-      at: (end(left, axis) + right[axis] - size) / 2,
-      guides: () => {
-        const at = (end(left, axis) + right[axis] - size) / 2;
-        return [
-          gapGuide(end(left, axis), at, left, box, axis),
-          gapGuide(at + size, right[axis], right, box, axis),
-        ];
-      },
-    });
-  if (left && further && inLine(left, further, axis) && end(further, axis) <= left[axis]) {
-    const gap = left[axis] - end(further, axis);
-    spots.push({
-      at: end(left, axis) + gap,
-      guides: () => [
-        gapGuide(end(further, axis), left[axis], further, left, axis),
-        gapGuide(end(left, axis), end(left, axis) + gap, left, box, axis),
-      ],
-    });
-  }
-  if (right && beyond && inLine(right, beyond, axis) && end(right, axis) <= beyond[axis]) {
-    const gap = beyond[axis] - end(right, axis);
-    spots.push({
-      at: right[axis] - gap - size,
-      guides: () => [
-        gapGuide(end(right, axis), beyond[axis], right, beyond, axis),
-        gapGuide(right[axis] - gap, right[axis], right, box, axis),
-      ],
-    });
-  }
+  const spots = [
+    left && right ? halfway(box, left, right, axis) : undefined,
+    left && further ? rhythmAfter(box, left, further, axis) : undefined,
+    right && beyond ? rhythmBefore(box, right, beyond, axis) : undefined,
+  ].filter((spot): spot is GapSpot => !!spot);
   const spot = spots
     .filter((item) => Math.abs(item.at - box[axis]) <= reach)
     .toSorted((a, b) => Math.abs(a.at - box[axis]) - Math.abs(b.at - box[axis]))[0];
   return spot ? { by: spot.at - box[axis], guides: spot.guides() } : { by: 0, guides: [] };
+}
+
+/** Halfway between the neighbours before and after a box. */
+function halfway(box: Box, left: Box, right: Box, axis: Axis): GapSpot {
+  const size = box[extent(axis)],
+    at = (end(left, axis) + right[axis] - size) / 2;
+  return {
+    at,
+    guides: () => [
+      gapGuide(end(left, axis), at, left, box, axis),
+      gapGuide(at + size, right[axis], right, box, axis),
+    ],
+  };
+}
+
+/** After the neighbour before a box, as far from it as it is from the one before it. */
+function rhythmAfter(box: Box, left: Box, further: Box, axis: Axis): GapSpot | undefined {
+  if (!inLine(left, further, axis) || end(further, axis) > left[axis]) return undefined;
+  const gap = left[axis] - end(further, axis);
+  return {
+    at: end(left, axis) + gap,
+    guides: () => [
+      gapGuide(end(further, axis), left[axis], further, left, axis),
+      gapGuide(end(left, axis), end(left, axis) + gap, left, box, axis),
+    ],
+  };
+}
+
+/** Before the neighbour after a box, as far from it as it is from the one after it. */
+function rhythmBefore(box: Box, right: Box, beyond: Box, axis: Axis): GapSpot | undefined {
+  if (!inLine(right, beyond, axis) || end(right, axis) > beyond[axis]) return undefined;
+  const gap = beyond[axis] - end(right, axis);
+  return {
+    at: right[axis] - gap - box[extent(axis)],
+    guides: () => [
+      gapGuide(end(right, axis), beyond[axis], right, beyond, axis),
+      gapGuide(right[axis] - gap, right[axis], right, box, axis),
+    ],
+  };
 }
 
 /**
@@ -185,28 +212,25 @@ export function snapEdge(
         (!best || Math.abs(at - value) < Math.abs(best.at - value))
       )
         best = { at, with: item };
-  if (!best) return { value };
-  const across = other(axis),
-    from = Math.min(box[across], best.with[across]) - 12,
-    to = Math.max(end(box, across), end(best.with, across)) + 12;
-  return {
-    value: best.at,
-    guide:
-      axis === "x"
-        ? [
-            { x: best.at, y: from },
-            { x: best.at, y: to },
-          ]
-        : [
-            { x: from, y: best.at },
-            { x: to, y: best.at },
-          ],
-  };
+  return best ? { value: best.at, guide: lineAt(best.at, axis, box, best.with) } : { value };
 }
 
 /** How a selection is arranged: aligned on a side or middle of the box around it, or spread with even gaps. */
 export type Arrangement =
   "left" | "center" | "right" | "top" | "middle" | "bottom" | "spread-x" | "spread-y";
+
+/** Where an alignment stands a box along its axis, in the box around all. */
+const ALIGNMENTS: Record<
+  Exclude<Arrangement, `spread-${string}`>,
+  [Axis, (all: Box, box: Box) => number]
+> = {
+  left: ["x", (all) => all.x],
+  center: ["x", (all, box) => all.x + all.width / 2 - box.width / 2],
+  right: ["x", (all, box) => all.x + all.width - box.width],
+  top: ["y", (all) => all.y],
+  middle: ["y", (all, box) => all.y + all.height / 2 - box.height / 2],
+  bottom: ["y", (all, box) => all.y + all.height - box.height],
+};
 
 /** The step each box takes for an arrangement; boxes that stay are left out. */
 export function arrange(boxes: Map<string, Box>, how: Arrangement): Map<string, Point> {
@@ -217,26 +241,28 @@ export function arrange(boxes: Map<string, Box>, how: Arrangement): Map<string, 
     if (by) steps.set(id, axis === "x" ? { x: by, y: 0 } : { x: 0, y: by });
   };
   if (how === "spread-x" || how === "spread-y") {
-    const axis: Axis = how === "spread-x" ? "x" : "y",
-      order = [...boxes].toSorted(([, a], [, b]) => a[axis] - b[axis]);
-    if (order.length < 3) return steps;
-    // The outermost stay; the gaps between all become one size.
-    const filled = order.reduce((sum, [, box]) => sum + box[extent(axis)], 0),
-      gap = (all[extent(axis)] - filled) / (order.length - 1);
-    let at = all[axis];
-    for (const [id, box] of order) {
-      step(id, axis, at);
-      at += box[extent(axis)] + gap;
-    }
+    spread(boxes, how === "spread-x" ? "x" : "y", all, step);
     return steps;
   }
-  for (const [id, box] of boxes) {
-    if (how === "left") step(id, "x", all.x);
-    else if (how === "center") step(id, "x", all.x + all.width / 2 - box.width / 2);
-    else if (how === "right") step(id, "x", all.x + all.width - box.width);
-    else if (how === "top") step(id, "y", all.y);
-    else if (how === "middle") step(id, "y", all.y + all.height / 2 - box.height / 2);
-    else step(id, "y", all.y + all.height - box.height);
-  }
+  const [axis, to] = ALIGNMENTS[how];
+  for (const [id, box] of boxes) step(id, axis, to(all, box));
   return steps;
+}
+
+/** Spreads three or more boxes along an axis: the outermost stay, and the gaps between all become one size. */
+function spread(
+  boxes: Map<string, Box>,
+  axis: Axis,
+  all: Box,
+  step: (id: string, axis: Axis, to: number) => void,
+) {
+  const order = [...boxes].toSorted(([, a], [, b]) => a[axis] - b[axis]);
+  if (order.length < 3) return;
+  const filled = order.reduce((sum, [, box]) => sum + box[extent(axis)], 0),
+    gap = (all[extent(axis)] - filled) / (order.length - 1);
+  let at = all[axis];
+  for (const [id, box] of order) {
+    step(id, axis, at);
+    at += box[extent(axis)] + gap;
+  }
 }

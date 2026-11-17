@@ -35,22 +35,17 @@ export function zoomLevel(zoom: number, direction: 1 | -1): number {
  * the frame along an axis on which the box is the longer one. Undefined when it lies inside already.
  */
 export function panTo(box: Box, frame: Box): Point | undefined {
-  const along = (at: number, length: number, from: number, room: number) =>
-    at < from || length > room
-      ? from - at
-      : at + length > from + room
-        ? from + room - at - length
-        : 0;
-  // A box longer than the frame that covers it already stays where it is.
-  const covers = (at: number, length: number, from: number, room: number) =>
-    length > room && at <= from && at + length >= from + room;
-  const x = covers(box.x, box.width, frame.x, frame.width)
-      ? 0
-      : along(box.x, box.width, frame.x, frame.width),
-    y = covers(box.y, box.height, frame.y, frame.height)
-      ? 0
-      : along(box.y, box.height, frame.y, frame.height);
+  const x = panAlong(box.x, box.width, frame.x, frame.width),
+    y = panAlong(box.y, box.height, frame.y, frame.height);
   return x || y ? { x, y } : undefined;
+}
+
+/** How far a stretch from `at` of `length` moves along one axis to lie in the frame's stretch from `from` of `room`. */
+function panAlong(at: number, length: number, from: number, room: number): number {
+  // A stretch longer than the frame that covers it already stays where it is.
+  if (length > room && at <= from && at + length >= from + room) return 0;
+  if (at < from || length > room) return from - at;
+  return at + length > from + room ? from + room - at - length : 0;
 }
 
 /** The zoom range, and the grid dots' distance in diagram coordinates. */
@@ -59,7 +54,7 @@ const MIN_ZOOM = 0.1,
   DOTS = 20;
 
 /** The colors of the canvas around and over the picture. */
-export interface CanvasColors {
+interface CanvasColors {
   page: string;
   dots: string;
 }
@@ -325,14 +320,14 @@ export class View {
       for (let y = Math.floor(start.y / step) * step; ; y += step) {
         const sy = Math.round(y * this.zoom + this.origin.y);
         if (sy > height) break;
-        const strong = x % (step * 5) === 0 && y % (step * 5) === 0;
-        context.fillRect(
-          sx - (strong ? 1 : 0.5),
-          sy - (strong ? 1 : 0.5),
-          strong ? 2 : 1,
-          strong ? 2 : 1,
-        );
+        gridDot(context, sx, sy, x % (step * 5) === 0 && y % (step * 5) === 0);
       }
     }
   }
+}
+
+/** One dot of the grid, at a point of the canvas: a strong one is twice as large. */
+function gridDot(context: CanvasRenderingContext2D, x: number, y: number, strong: boolean) {
+  const size = strong ? 2 : 1;
+  context.fillRect(x - size / 2, y - size / 2, size, size);
 }
