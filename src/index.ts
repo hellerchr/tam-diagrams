@@ -34,6 +34,7 @@ import { layoutUseCaseDiagram } from "./uml-usecase-layout.ts";
 import { parseErDiagram } from "./uml-er.ts";
 import { layoutErDiagram } from "./uml-er-layout.ts";
 
+export { SourceError } from "./source-error.ts";
 export { parseTam, TamError, type TamDiagram } from "./tam.ts";
 export { renderTam, type TamPicture } from "./tam-layout.ts";
 export { detectUml, UmlError, type UmlKind } from "./uml.ts";

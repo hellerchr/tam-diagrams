@@ -37,7 +37,7 @@ if (detectUml(source)) ({ svg } = await renderUml(source, colors));
 img.src = svgUrl(svg);
 ```
 
-- **Errors.** Invalid sources throw `TamError` or `UmlError` with the line. A `UmlError` marked
+- **Errors.** Invalid sources throw `TamError` or `UmlError`, both a `SourceError` with the line. A `UmlError` marked
   `unsupported` means valid Mermaid this package does not draw (pie, gantt, ...): hand those to Mermaid.js.
   `renderUml` and `renderTam` (and the parsers) both raise it for a source that starts with such a type.
 - **Class diagrams to explore.** `renderClassView(source, colors, view)` draws a class diagram with
@@ -473,6 +473,7 @@ classDiagram
 | `src/uml.ts`                 | What the UML parsers share: type detection, errors, source preparation, vertex ports |
 | `src/uml-header-edit.ts`     | A whole diagram's settings as text: title, direction, level, message numbers         |
 | `src/source-text.ts`         | What the modules that write sources share: lines, indents, coded texts, fresh ids    |
+| `src/source-error.ts`        | The error of a diagram source: what is wrong, and the line it is on                  |
 | `src/uml-class.ts`           | Class diagrams: the parser, and the views and hit tests of the class explorer        |
 | `src/uml-class-layout.ts`    | Class diagram layout: compartments, notes, lollipops and self relations              |
 | `src/uml-class-packages.ts`  | Class diagram packages side by side, end labels and merged inheritance trees         |

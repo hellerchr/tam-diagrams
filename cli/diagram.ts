@@ -4,8 +4,8 @@ import {
   parseTam,
   renderTam,
   renderUml,
+  SourceError,
   TamError,
-  UmlError,
   type DiagramColors,
 } from "../src/index.ts";
 import { isPlaced, layoutPlaced, overlapping } from "../src/edit.ts";
@@ -97,5 +97,5 @@ export async function convertSource(
 }
 
 /** Whether an error is a problem in the diagram source rather than a fault of the program. */
-export const isDiagramError = (error: unknown): error is TamError | UmlError | DrawioError =>
-  error instanceof TamError || error instanceof UmlError || error instanceof DrawioError;
+export const isDiagramError = (error: unknown): error is SourceError | DrawioError =>
+  error instanceof SourceError || error instanceof DrawioError;

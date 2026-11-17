@@ -1,11 +1,11 @@
-import type { TamError, UmlError } from "../src/index.ts";
+import type { SourceError } from "../src/index.ts";
 import type { DrawioError } from "../src/drawio.ts";
 
 /** How an input is named in messages: its path as given, or `<stdin>` for `-`. */
 export const inputName = (input: string) => (input === "-" ? "<stdin>" : input);
 
-/** The message without the `Line <n>: ` prefix both error classes put in front of it. */
-function bareMessage(error: TamError | UmlError | DrawioError): string {
+/** The message without the `Line <n>: ` prefix a source error puts in front of it. */
+function bareMessage(error: SourceError | DrawioError): string {
   if (!("line" in error)) return error.message;
   const prefix = `Line ${error.line}: `;
   return error.line && error.message.startsWith(prefix)
@@ -17,7 +17,7 @@ function bareMessage(error: TamError | UmlError | DrawioError): string {
  * Stderr lines for a diagram error: `<name>:<line>: <message>`, or `<name>: <message>` when the
  * error has no line.
  */
-export function diagramMessage(name: string, error: TamError | UmlError | DrawioError): string[] {
+export function diagramMessage(name: string, error: SourceError | DrawioError): string[] {
   const where = "line" in error && error.line ? `${name}:${error.line}` : name;
   return [`${where}: ${bareMessage(error)}`];
 }

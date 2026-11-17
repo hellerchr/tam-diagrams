@@ -6,12 +6,12 @@
 import { drawScene, type DiagramColors } from "../src/draw.ts";
 import type { ElkLayout } from "../src/elk.ts";
 import { overlaps, type Scene } from "../src/scene.ts";
-import { isPlaced, parseTam, TamError, type TamDiagram } from "../src/tam.ts";
+import { isPlaced, parseTam, type TamDiagram } from "../src/tam.ts";
 import { bestLayout, layoutPlaced } from "../src/tam-layout.ts";
 import { layoutWithin, overlapping, pin } from "../src/tam-pin.ts";
 import type { Measure } from "../src/text.ts";
 import { parseUml, umlRole } from "../src/index.ts";
-import { UmlError } from "../src/uml.ts";
+import { SourceError } from "../src/source-error.ts";
 import { keepAutomatic, placesOf } from "../src/uml-placed.ts";
 import { hasPlaces, prunePlaces, setPlaces } from "../src/uml-places.ts";
 import type { StructureEdge, StructureNode } from "../src/structure.ts";
@@ -46,7 +46,7 @@ export interface Problem {
 }
 
 const problemOf = (reason: unknown): Problem =>
-  reason instanceof TamError || reason instanceof UmlError
+  reason instanceof SourceError
     ? { line: reason.line, message: reason.message }
     : { line: 0, message: reason instanceof Error ? reason.message : String(reason) };
 

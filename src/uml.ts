@@ -1,4 +1,5 @@
 import type { Direction, GraphEdge, GraphNode, GraphPort } from "./elk.ts";
+import { SourceError } from "./source-error.ts";
 
 /**
  * Shared parsing for the Mermaid diagram types the built-in UML renderer draws: header detection,
@@ -13,15 +14,13 @@ export type UmlKind = "class" | "state" | "flowchart" | "swimlane" | "usecase" |
 export type Level = "conceptual" | "design";
 
 /**
- * A line-numbered error. `unsupported` marks valid Mermaid the built-in renderer does not draw;
- * such diagrams are rendered by Mermaid instead.
+ * An error in a Mermaid source, with its line. `unsupported` marks valid Mermaid the built-in
+ * renderer does not draw; such diagrams are rendered by Mermaid instead.
  */
-export class UmlError extends Error {
-  line: number;
+export class UmlError extends SourceError {
   unsupported: boolean;
   constructor(line: number, message: string, unsupported = false) {
-    super(line ? `Line ${line}: ${message}` : message);
-    this.line = line;
+    super(line, message);
     this.unsupported = unsupported;
   }
 }

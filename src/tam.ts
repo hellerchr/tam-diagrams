@@ -1,6 +1,7 @@
 /** SAP TAM block diagrams: the text syntax. tam-layout.ts lays a parsed diagram out and draws it. */
 
 import type { Direction } from "./elk.ts";
+import { SourceError } from "./source-error.ts";
 import { expandMultiples, rowDots, rowPointers } from "./tam-rows.ts";
 import { rejectUnsupported } from "./uml-header.ts";
 
@@ -99,13 +100,7 @@ export interface TamDiagram {
 }
 
 /** A syntax or rule error in a TAM source, with its line (0 for the whole source). */
-export class TamError extends Error {
-  line: number;
-  constructor(line: number, message: string) {
-    super(line ? `Line ${line}: ${message}` : message);
-    this.line = line;
-  }
-}
+export class TamError extends SourceError {}
 
 /** The kinds a declaration starts with. */
 export const ELEMENT_KINDS = [
