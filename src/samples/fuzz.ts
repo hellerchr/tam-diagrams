@@ -59,6 +59,8 @@ const UNICODE = ["Übersicht", "Größe", "Straße", "注文", "Résumé", "Zür
 const PROTOCOLS = ["HTTP", "HTTPS", "RFC", "gRPC", "SQL", "AMQP", "SOAP Messages (XML)"];
 const COLORS = ["blue", "orange", "green", "yellow", "pink", "purple", "red", "gray"];
 
+type Random = ReturnType<typeof random>;
+
 export interface FuzzOptions {
   elements?: number;
   design?: boolean;
@@ -80,58 +82,99 @@ export function generateTam(seed: number, options: FuzzOptions = {}): string {
   const design = options.design ?? r.chance(0.25);
   const direction =
     options.direction ?? r.pick(["TB", "TB", "TB", "LR", "LR", "BT", "RL"] as const);
-  const label = () => {
-    if (r.chance(0.06)) return "";
-    const words = Array.from({ length: r.pick([1, 1, 2, 2, 2, 3, 4, 7]) }, () =>
-      r.chance(0.08) ? r.pick(LONG) : r.chance(0.05) ? r.pick(UNICODE) : r.pick(WORDS),
-    );
-    if (words.length > 2 && r.chance(0.2)) words.splice(1, 0, "<br>");
-    return words.join(" ").replace(/ <br> /g, "<br>");
-  };
+  const tam: Tam = { r, design, elements: [], roots: [], next: 0, lines: [] };
+  growTree(tam, count);
+  fillGroups(tam);
+  // A group of storages is a storage group, as the parser decides; innermost first.
+  for (const element of tam.elements.toReversed())
+    if (element.kind === "group")
+      element.passive = element.children.every((child) => child.passive);
+  writeHeader(tam, direction);
+  tam.roots.forEach((element) => writeElement(tam, element, ""));
+  connect(tam);
+  if (design) provideInterfaces(tam);
+  return tam.lines.join("\n");
+}
 
-  // Elements: a random tree. Storages hold only storages, humans hold nothing, components hold components, classes and storages.
-  const elements: Element[] = [];
-  const roots: Element[] = [];
-  let next = 0;
+/** The title, now and then, and the direction where it is not the default, or now and then. */
+function writeHeader(tam: Tam, direction: string) {
+  const { r } = tam;
+  if (r.chance(0.7)) tam.lines.push(`title ${tamLabel(r) || "Untitled"}`.replace(/<br>/g, " "));
+  if (direction !== "TB" || r.chance(0.3)) tam.lines.push(`direction ${direction}`);
+}
+
+/** A TAM source as it is generated: its random numbers, its level, its elements and the lines written. */
+interface Tam {
+  r: Random;
+  design: boolean;
+  elements: Element[];
+  roots: Element[];
+  /** The number of the next element's id. */
+  next: number;
+  lines: string[];
+}
+
+/** One word of a label: now and then a long or a unicode one. */
+const labelWord = (r: Random) =>
+  r.chance(0.08) ? r.pick(LONG) : r.chance(0.05) ? r.pick(UNICODE) : r.pick(WORDS);
+
+/** An element's or connection's label: sometimes empty, sometimes with a line break. */
+function tamLabel(r: Random) {
+  if (r.chance(0.06)) return "";
+  const words = Array.from({ length: r.pick([1, 1, 2, 2, 2, 3, 4, 7]) }, () => labelWord(r));
+  if (words.length > 2 && r.chance(0.2)) words.splice(1, 0, "<br>");
+  return words.join(" ").replace(/ <br> /g, "<br>");
+}
+
+/** The kinds of elements that hold others. */
+const HOLDERS = new Set(["agent", "group", "storage", "component", "subsystem"]);
+
+/** How deep an element is nested. */
+function depth(element: Element) {
+  let value = 0;
+  for (let p = element.parent; p; p = p.parent) value++;
+  return value;
+}
+
+/**
+ * The kinds an element may have inside `parent`, or at the top: storages hold only storages,
+ * humans hold nothing, components hold components, classes and storages.
+ */
+function allowedKinds(parent: Element | null, design: boolean): string[] {
+  if (!parent)
+    return design
+      ? [
+          "agent",
+          "agent",
+          "storage",
+          "storage",
+          "human",
+          "group",
+          "component",
+          "component",
+          "subsystem",
+          "class",
+        ]
+      : ["agent", "agent", "agent", "storage", "storage", "human", "group"];
+  if (parent.kind === "storage" || (parent.kind === "group" && parent.passive)) return ["storage"];
+  if (parent.kind === "component") return ["component", "class", "storage"];
+  if (parent.kind === "subsystem") return ["component", "class", "storage", "subsystem"];
+  return design
+    ? ["agent", "storage", "component", "class", "storage"]
+    : ["agent", "agent", "storage", "storage", "human"];
+}
+
+/** Elements: a random tree. */
+function growTree(tam: Tam, count: number) {
+  const { r, elements } = tam;
   for (let i = 0; i < count; i++) {
     const containers = elements.filter(
-      (element) =>
-        (element.kind === "agent" ||
-          element.kind === "group" ||
-          element.kind === "storage" ||
-          element.kind === "component" ||
-          element.kind === "subsystem") &&
-        !element.multiple &&
-        depth(element) < 4,
+      (element) => HOLDERS.has(element.kind) && !element.multiple && depth(element) < 4,
     );
     const parent = containers.length && r.chance(0.55) ? r.pick(containers) : null;
-    const allowed = !parent
-      ? design
-        ? [
-            "agent",
-            "agent",
-            "storage",
-            "storage",
-            "human",
-            "group",
-            "component",
-            "component",
-            "subsystem",
-            "class",
-          ]
-        : ["agent", "agent", "agent", "storage", "storage", "human", "group"]
-      : parent.kind === "storage" || (parent.kind === "group" && parent.passive)
-        ? ["storage"]
-        : parent.kind === "component"
-          ? ["component", "class", "storage"]
-          : parent.kind === "subsystem"
-            ? ["component", "class", "storage", "subsystem"]
-            : design
-              ? ["agent", "storage", "component", "class", "storage"]
-              : ["agent", "agent", "storage", "storage", "human"];
-    const kind = r.pick(allowed);
+    const kind = r.pick(allowedKinds(parent, tam.design));
     const element: Element = {
-      id: `n${next++}`,
+      id: `n${tam.next++}`,
       kind,
       parent,
       children: [],
@@ -139,14 +182,17 @@ export function generateTam(seed: number, options: FuzzOptions = {}): string {
       multiple: false,
     };
     if (kind === "group") element.passive = r.chance(0.4);
-    (parent ? parent.children : roots).push(element);
+    (parent ? parent.children : tam.roots).push(element);
     elements.push(element);
   }
-  // A group needs members: give empty ones a member of the right kind.
-  for (const element of elements.slice()) {
+}
+
+/** A group needs members: give empty ones a member of the right kind. */
+function fillGroups(tam: Tam) {
+  for (const element of tam.elements.slice()) {
     if (element.kind !== "group" || element.children.length) continue;
     const child: Element = {
-      id: `n${next++}`,
+      id: `n${tam.next++}`,
       kind: element.passive ? "storage" : "agent",
       parent: element,
       children: [],
@@ -154,67 +200,80 @@ export function generateTam(seed: number, options: FuzzOptions = {}): string {
       multiple: false,
     };
     element.children.push(child);
-    elements.push(child);
+    tam.elements.push(child);
   }
+}
 
-  // A group of storages is a storage group, as the parser decides; innermost first.
-  for (const element of elements.toReversed())
-    if (element.kind === "group")
-      element.passive = element.children.every((child) => child.passive);
-  const lines: string[] = [];
-  if (r.chance(0.7)) lines.push(`title ${label() || "Untitled"}`.replace(/<br>/g, " "));
-  if (direction !== "TB" || r.chance(0.3)) lines.push(`direction ${direction}`);
-  const write = (element: Element, indent: string) => {
-    const leaf = !element.children.length;
-    const modifiers: string[] = [];
-    if (r.chance(0.1)) modifiers.push(`:::${r.pick(COLORS)}`);
-    if (["agent", "human", "storage"].includes(element.kind)) {
-      if (leaf && r.chance(0.08)) {
-        modifiers.push("...");
-        element.multiple = true;
-      } else if (r.chance(0.08)) modifiers.push("stack");
-    }
-    const text =
-      element.kind === "group" ? (r.chance(0.3) ? `[${label() || "Group"}]` : "") : `[${label()}]`;
-    const id = element.kind === "group" && !text && r.chance(0.5) ? "" : ` ${element.id}`;
-    if (!id) element.id = "";
-    lines.push(
-      `${indent}${element.kind}${id}${text}${modifiers.map((modifier) => (modifier.startsWith(":::") ? modifier : ` ${modifier}`)).join("")}${leaf ? "" : " {"}`,
-    );
-    element.children.forEach((child, index) => {
-      write(child, `${indent}  `);
-      // Standalone dots between two leaf siblings of one kind.
-      const following = element.children[index + 1];
-      if (
-        following &&
-        !child.children.length &&
-        !following.children.length &&
-        child.kind === following.kind &&
-        r.chance(0.15)
-      )
-        lines.push(`${indent}  ...`);
-    });
-    if (!leaf) lines.push(`${indent}}`);
-  };
-  roots.forEach((element) => write(element, ""));
+/** An element's modifiers: a color now and then, and multiple or stacked agents and storages. */
+function modifiersOf(r: Random, element: Element, leaf: boolean): string[] {
+  const modifiers: string[] = [];
+  if (r.chance(0.1)) modifiers.push(`:::${r.pick(COLORS)}`);
+  if (!["agent", "human", "storage"].includes(element.kind)) return modifiers;
+  if (leaf && r.chance(0.08)) {
+    modifiers.push("...");
+    element.multiple = true;
+  } else if (r.chance(0.08)) modifiers.push("stack");
+  return modifiers;
+}
 
-  // Connections between named elements, chosen to be valid TAM.
-  const named = elements.filter((element) => element.id);
-  const active = (element: Element) =>
-    !["storage", "group"].includes(element.kind) || (element.kind === "group" && !element.passive);
-  /** Whether an element can be the end of a channel: an agent, or a group of agents and storages. */
-  const talks = (element: Element): boolean =>
-    element.kind === "agent" ||
-    element.kind === "human" ||
-    (element.kind === "group" &&
-      !element.passive &&
-      elements
-        .filter((item) => item.parent === element)
-        .every((item) => item.kind === "storage" || talks(item)));
-  const ancestor = (a: Element, b: Element) => {
-    for (let p = b.parent; p; p = p.parent) if (p === a) return true;
-    return false;
-  };
+/** An element's text: a group's is optional. */
+const elementText = (r: Random, element: Element) =>
+  element.kind === "group"
+    ? r.chance(0.3)
+      ? `[${tamLabel(r) || "Group"}]`
+      : ""
+    : `[${tamLabel(r)}]`;
+
+/** Writes an element and what it holds; a group without text may go without an id. */
+function writeElement(tam: Tam, element: Element, indent: string) {
+  const { r, lines } = tam;
+  const leaf = !element.children.length;
+  const modifiers = modifiersOf(r, element, leaf);
+  const text = elementText(r, element);
+  const id = element.kind === "group" && !text && r.chance(0.5) ? "" : ` ${element.id}`;
+  if (!id) element.id = "";
+  lines.push(
+    `${indent}${element.kind}${id}${text}${modifiers.map((modifier) => (modifier.startsWith(":::") ? modifier : ` ${modifier}`)).join("")}${leaf ? "" : " {"}`,
+  );
+  element.children.forEach((child, index) => {
+    writeElement(tam, child, `${indent}  `);
+    if (dotsBetween(r, child, element.children[index + 1])) lines.push(`${indent}  ...`);
+  });
+  if (!leaf) lines.push(`${indent}}`);
+}
+
+/** Whether standalone dots stand between two leaf siblings of one kind. */
+const dotsBetween = (r: Random, child: Element, following: Element | undefined) =>
+  !!following &&
+  !child.children.length &&
+  !following.children.length &&
+  child.kind === following.kind &&
+  r.chance(0.15);
+
+/** Whether an element is active: not a storage, nor a group of storages. */
+const active = (element: Element) =>
+  !["storage", "group"].includes(element.kind) || (element.kind === "group" && !element.passive);
+
+/** Whether an element can be the end of a channel: an agent, or a group of agents and storages. */
+const talks = (elements: Element[], element: Element): boolean =>
+  element.kind === "agent" ||
+  element.kind === "human" ||
+  (element.kind === "group" &&
+    !element.passive &&
+    elements
+      .filter((item) => item.parent === element)
+      .every((item) => item.kind === "storage" || talks(elements, item)));
+
+/** Whether `a` holds `b`, at any depth. */
+function ancestor(a: Element, b: Element) {
+  for (let p = b.parent; p; p = p.parent) if (p === a) return true;
+  return false;
+}
+
+/** Connections between named elements, chosen to be valid TAM. */
+function connect(tam: Tam) {
+  const { r } = tam;
+  const named = tam.elements.filter((element) => element.id);
   const used = new Set<string>();
   const connections = r.int(
     Math.floor(named.length / 2),
@@ -224,76 +283,106 @@ export function generateTam(seed: number, options: FuzzOptions = {}): string {
     const a = r.pick(named),
       b = r.pick(named);
     if (a === b || used.has(`${a.id}|${b.id}`)) continue;
-    const nested = ancestor(a, b) || ancestor(b, a);
-    const text = r.chance(0.35) ? `: ${label() || "call"}` : "";
-    const protocol = r.chance(0.15) ? ` @${r.pick(PROTOCOLS)}` : "";
-    // The edge text: the word, then the label and protocol inside the edge.
-    const edge = (word: string, withProtocol = true) =>
-      `${word}${text}${withProtocol ? protocol : ""}`;
-    let line: string | null = null;
-    if (nested) {
-      // Only a delegation connects a container to its part.
-      if (design && active(a) && active(b) && ancestor(a, b) && a.kind !== "human")
-        line = `${a.id} -- delegates --> ${b.id}`;
-    } else if (active(a) && active(b)) {
-      const kind = r.pick([
-        "channel",
-        "data",
-        "data back",
-        "data both",
-        "calls",
-        "calls",
-        "calls",
-        "calls back",
-        "calls both",
-      ]);
-      const plain = `${text.slice(2)}${protocol}`.trim();
-      line =
-        kind === "channel"
-          ? plain
-            ? `${a.id} -- ${plain} --- ${b.id}`
-            : `${a.id} --- ${b.id}`
-          : kind.endsWith("both")
-            ? // Data flows one way on a channel; requests go both ways.
-              `${a.id} <-- ${edge("calls")} --> ${b.id}`
-            : kind.endsWith("back")
-              ? `${b.id} -- ${edge(kind.startsWith("data") ? "sends data" : "calls")} --> ${a.id}`
-              : `${a.id} -- ${edge(kind === "data" ? "sends data" : "calls")} --> ${b.id}`;
-      // Channels join agents only; components, subsystems and classes connect through interfaces.
-      const channel = talks(a) && talks(b),
-        people = a.kind === "human" || b.kind === "human";
-      if (design && r.chance(0.25) && !people)
-        line = `${a.id} -- requires${r.chance(0.1) ? "" : ` I${r.pick(WORDS)}`}${protocol} --> ${b.id}`;
-      else if (r.chance(0.05)) line = `${a.id} -. create .-> ${b.id}`;
-      else if (!channel)
-        line = people
-          ? `${a.id} -. create .-> ${b.id}`
-          : `${a.id} -- requires I${WORDS[i % WORDS.length]}${protocol} --> ${b.id}`;
-    } else if (active(a) !== active(b)) {
-      const [agent, storage] = active(a) ? [a, b] : [b, a];
-      line = `${agent.id} -- ${edge(r.pick(["reads", "writes", "reads/writes", "reads/writes"]), false)} --> ${storage.id}`;
-    } else if (r.chance(0.3)) {
-      line = `${a.id} -. pointer .-> ${b.id}`;
-    }
+    const line = connection(tam, a, b, i);
     if (!line) continue;
     used.add(`${a.id}|${b.id}`);
     used.add(`${b.id}|${a.id}`);
-    lines.push(line);
+    tam.lines.push(line);
   }
-  if (design)
-    for (const element of named
-      .filter((item) => ["component", "subsystem"].includes(item.kind))
-      .slice(0, 3)) {
-      if (r.chance(0.3))
-        lines.push(`${element.id} ${r.pick(["provides", "requires"])} I${r.pick(WORDS)}`);
-    }
-  return lines.join("\n");
+}
 
-  function depth(element: Element) {
-    let value = 0;
-    for (let p = element.parent; p; p = p.parent) value++;
-    return value;
+/** The words of a connection: its label and protocol. */
+interface Words {
+  text: string;
+  protocol: string;
+  /** The edge text: the word, then the label and protocol inside the edge. */
+  edge: (word: string, withProtocol?: boolean) => string;
+}
+
+/** A connection's label, now and then, and its protocol, more rarely. */
+function wordsOf(r: Random): Words {
+  const text = r.chance(0.35) ? `: ${tamLabel(r) || "call"}` : "";
+  const protocol = r.chance(0.15) ? ` @${r.pick(PROTOCOLS)}` : "";
+  return {
+    text,
+    protocol,
+    edge: (word, withProtocol = true) => `${word}${text}${withProtocol ? protocol : ""}`,
+  };
+}
+
+/** Only a delegation connects a container to its part, in a design diagram. */
+const delegation = (tam: Tam, a: Element, b: Element) =>
+  tam.design && active(a) && active(b) && ancestor(a, b) && a.kind !== "human"
+    ? `${a.id} -- delegates --> ${b.id}`
+    : null;
+
+/** A connection between two elements, the `i`th tried, or null where none fits them. */
+function connection(tam: Tam, a: Element, b: Element, i: number): string | null {
+  const { r } = tam;
+  const nested = ancestor(a, b) || ancestor(b, a);
+  const words = wordsOf(r);
+  if (nested) return delegation(tam, a, b);
+  if (active(a) && active(b)) return activeConnection(tam, a, b, i, words);
+  if (active(a) !== active(b)) {
+    const [agent, storage] = active(a) ? [a, b] : [b, a];
+    return `${agent.id} -- ${words.edge(r.pick(["reads", "writes", "reads/writes", "reads/writes"]), false)} --> ${storage.id}`;
   }
+  return r.chance(0.3) ? `${a.id} -. pointer .-> ${b.id}` : null;
+}
+
+/** The kinds of connection between two active elements, the likelier ones more often. */
+const CALLS = [
+  "channel",
+  "data",
+  "data back",
+  "data both",
+  "calls",
+  "calls",
+  "calls",
+  "calls back",
+  "calls both",
+];
+
+/** A channel, data flow or call of a kind from `CALLS` between two active elements. */
+function callLine(kind: string, a: Element, b: Element, words: Words) {
+  const plain = `${words.text.slice(2)}${words.protocol}`.trim();
+  if (kind === "channel") return plain ? `${a.id} -- ${plain} --- ${b.id}` : `${a.id} --- ${b.id}`;
+  // Data flows one way on a channel; requests go both ways.
+  if (kind.endsWith("both")) return `${a.id} <-- ${words.edge("calls")} --> ${b.id}`;
+  if (kind.endsWith("back"))
+    return `${b.id} -- ${words.edge(kind.startsWith("data") ? "sends data" : "calls")} --> ${a.id}`;
+  return `${a.id} -- ${words.edge(kind === "data" ? "sends data" : "calls")} --> ${b.id}`;
+}
+
+/**
+ * A connection between two active elements. Channels join agents only; components, subsystems
+ * and classes connect through interfaces.
+ */
+function activeConnection(tam: Tam, a: Element, b: Element, i: number, words: Words) {
+  const { r } = tam;
+  const line = callLine(r.pick(CALLS), a, b, words);
+  const channel = talks(tam.elements, a) && talks(tam.elements, b),
+    people = a.kind === "human" || b.kind === "human";
+  if (tam.design && r.chance(0.25) && !people) return requiresAny(r, a, b, words.protocol);
+  if (r.chance(0.05)) return `${a.id} -. create .-> ${b.id}`;
+  if (channel) return line;
+  return people
+    ? `${a.id} -. create .-> ${b.id}`
+    : `${a.id} -- requires I${WORDS[i % WORDS.length]}${words.protocol} --> ${b.id}`;
+}
+
+/** A connection through an interface, mostly a named one. */
+const requiresAny = (r: Random, a: Element, b: Element, protocol: string) =>
+  `${a.id} -- requires${r.chance(0.1) ? "" : ` I${r.pick(WORDS)}`}${protocol} --> ${b.id}`;
+
+/** Components and subsystems of a design diagram provide and require interfaces of their own now and then. */
+function provideInterfaces(tam: Tam) {
+  const { r } = tam;
+  for (const element of tam.elements
+    .filter((item) => item.id && ["component", "subsystem"].includes(item.kind))
+    .slice(0, 3))
+    if (r.chance(0.3))
+      tam.lines.push(`${element.id} ${r.pick(["provides", "requires"])} I${r.pick(WORDS)}`);
 }
 
 /** One TAM rule violation to inject into a valid diagram, with the error it must produce. */
@@ -397,8 +486,6 @@ export const VIOLATIONS: Violation[] = [
 ];
 
 // Mermaid UML sources.
-
-type Random = ReturnType<typeof random>;
 
 export function words(r: Random, count = r.pick([1, 1, 2, 2, 3, 5])) {
   return Array.from({ length: count }, () =>

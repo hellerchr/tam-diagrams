@@ -112,72 +112,105 @@ export interface RelationshipParts {
 
 const NAME_AT = new RegExp(`^${ER_NAME}`, "u");
 
+/** A statement read from left to right: the text and how far it is read. */
+class Cursor {
+  at = 0;
+  readonly text: string;
+
+  constructor(text: string) {
+    this.text = text;
+  }
+
+  /** Skips spaces; returns whether there were any. */
+  space() {
+    const from = this.at;
+    while (/\s/.test(this.text[this.at] ?? "")) this.at++;
+    return this.at > from;
+  }
+
+  name(): Span | null {
+    const match = this.text.slice(this.at).match(NAME_AT);
+    if (!match) return null;
+    const span = { text: match[0], start: this.at };
+    this.at += match[0].length;
+    return span;
+  }
+
+  /** Whether the character at `index` belongs to a word. */
+  joined(index: number) {
+    return /[\p{L}\p{N}_]/u.test(this.text[index] ?? "");
+  }
+
+  /** Whether `spelling` stands at the cursor; one in words stands clear of the words around it. */
+  standsHere(spelling: string) {
+    if (!this.text.startsWith(spelling, this.at)) return false;
+    const wordy = /^[\p{L}\p{N}]/u.test(spelling);
+    return !wordy || !(this.joined(this.at - 1) || this.joined(this.at + spelling.length));
+  }
+
+  /** One of the spellings at the cursor. */
+  word<T>(spellings: readonly (readonly [string, T])[]) {
+    const found = spellings.find(([spelling]) => this.standsHere(spelling));
+    if (!found) return null;
+    const span = { text: found[0], start: this.at, value: found[1] };
+    this.at += found[0].length;
+    return span;
+  }
+
+  /** A cardinality as a symbol or in words. */
+  cardinality() {
+    const symbol = this.text.slice(this.at, this.at + 2),
+      kind = SYMBOLS.get(symbol);
+    if (kind) {
+      const span = { text: symbol, start: this.at, kind };
+      this.at += 2;
+      return span;
+    }
+    const found = this.word(WORDS);
+    return found && { text: found.text, start: found.start, kind: found.value };
+  }
+}
+
 /**
  * Reads a relationship statement (`A ||--o{ B : places`, `A one or more to zero or one B`) piece
  * by piece; null for a statement that is none. Symbols stand with or without spaces around them,
  * words need them.
  */
 export function relationshipParts(text: string): RelationshipParts | null {
-  let at = 0;
-  const space = () => {
-    const from = at;
-    while (/\s/.test(text[at] ?? "")) at++;
-    return at > from;
-  };
-  const name = (): Span | null => {
-    const match = text.slice(at).match(NAME_AT);
-    if (!match) return null;
-    const span = { text: match[0], start: at };
-    at += match[0].length;
-    return span;
-  };
-  /** One of the spellings at the cursor; one in words stands clear of the words around it. */
-  const word = <T>(spellings: readonly (readonly [string, T])[]) => {
-    const joined = (index: number) => /[\p{L}\p{N}_]/u.test(text[index] ?? "");
-    for (const [spelling, value] of spellings) {
-      if (!text.startsWith(spelling, at)) continue;
-      const wordy = /^[\p{L}\p{N}]/u.test(spelling);
-      if (wordy && (joined(at - 1) || joined(at + spelling.length))) continue;
-      const span = { text: spelling, start: at, value };
-      at += spelling.length;
-      return span;
-    }
-    return null;
-  };
-  const cardinality = () => {
-    const symbol = text.slice(at, at + 2),
-      kind = SYMBOLS.get(symbol);
-    if (kind) {
-      const span = { text: symbol, start: at, kind };
-      at += 2;
-      return span;
-    }
-    const found = word(WORDS);
-    return found && { text: found.text, start: found.start, kind: found.value };
-  };
-  const left = name();
+  const cursor = new Cursor(text);
+  const left = cursor.name();
   if (!left) return null;
-  space();
-  const leftCardinality = cardinality();
+  cursor.space();
+  const leftCardinality = cursor.cardinality();
   if (!leftCardinality) return null;
-  space();
-  const found = word(LINES);
+  cursor.space();
+  const found = cursor.word(LINES);
   if (!found) return null;
   const line = { text: found.text, start: found.start, identifying: found.value };
-  space();
-  const rightCardinality = cardinality();
+  cursor.space();
+  const rest = rightParts(cursor);
+  return rest && labelled(cursor, { left, leftCardinality, line, ...rest });
+}
+
+/** The right half of a relationship: its cardinality, and the name a space after one in words. */
+function rightParts(cursor: Cursor) {
+  const rightCardinality = cursor.cardinality();
   if (!rightCardinality) return null;
-  // A cardinality in words stands a space away from the name after it.
-  if (!space() && !SYMBOLS.has(rightCardinality.text)) return null;
-  const right = name();
+  if (!cursor.space() && !SYMBOLS.has(rightCardinality.text)) return null;
+  const right = cursor.name();
   if (!right) return null;
-  space();
-  const parts: RelationshipParts = { left, leftCardinality, line, rightCardinality, right };
-  if (at === text.length) return parts;
-  if (text[at] !== ":") return null;
-  at++;
-  space();
-  return { ...parts, label: { text: text.slice(at), start: at } };
+  cursor.space();
+  return { rightCardinality, right };
+}
+
+/** The parts of a relationship with the label after its colon, if it has one; null for anything else after it. */
+function labelled(cursor: Cursor, parts: RelationshipParts): RelationshipParts | null {
+  const { text } = cursor;
+  if (cursor.at === text.length) return parts;
+  if (text[cursor.at] !== ":") return null;
+  cursor.at++;
+  cursor.space();
+  return { ...parts, label: { text: text.slice(cursor.at), start: cursor.at } };
 }
 
 /** An entity statement: its name, its alias in brackets, the classes that style it and its block. */
@@ -212,30 +245,18 @@ const KEY = /^(?:PK|FK|UK)$/;
 export function parseAttributes(text: string, line: number): ErAttribute[] {
   const tokens = text.match(/"[^"]*"|,|[^\s,"]+/g) ?? [];
   const attributes: ErAttribute[] = [];
-  let at = 0;
-  const wordAt = (index: number) => {
-    const token = tokens[index];
-    return token !== undefined && token !== "," && !token.startsWith('"') ? token : undefined;
-  };
-  while (at < tokens.length) {
-    const type = wordAt(at),
-      name = wordAt(at + 1);
+  const read = { tokens, at: 0, line };
+  while (read.at < tokens.length) {
+    const type = wordAt(tokens, read.at),
+      name = wordAt(tokens, read.at + 1);
     if (!type || !name)
       throw new UmlError(
         line,
         `An attribute is a type and a name, then its keys and a comment in quotes: \`${text}\`.`,
       );
-    at += 2;
-    const keys: ErKey[] = [];
-    while (KEY.test(tokens[at] ?? "")) {
-      keys.push(tokens[at] as ErKey);
-      at++;
-      if (tokens[at] !== ",") break;
-      if (!KEY.test(tokens[at + 1] ?? ""))
-        throw new UmlError(line, "A comma between keys is followed by `PK`, `FK` or `UK`.");
-      at++;
-    }
-    const comment = tokens[at]?.startsWith('"') ? tokens[at++].slice(1, -1) : undefined;
+    read.at += 2;
+    const keys = readKeys(read);
+    const comment = tokens[read.at]?.startsWith('"') ? tokens[read.at++].slice(1, -1) : undefined;
     attributes.push({
       type: generic(type),
       name,
@@ -245,6 +266,27 @@ export function parseAttributes(text: string, line: number): ErAttribute[] {
     });
   }
   return attributes;
+}
+
+/** The token at `index` when it is a word: no comma, no comment. */
+function wordAt(tokens: string[], index: number) {
+  const token = tokens[index];
+  return token !== undefined && token !== "," && !token.startsWith('"') ? token : undefined;
+}
+
+/** The keys of an attribute, several with commas between; throws for a comma without a key after it. */
+function readKeys(read: { tokens: string[]; at: number; line: number }): ErKey[] {
+  const { tokens } = read;
+  const keys: ErKey[] = [];
+  while (KEY.test(tokens[read.at] ?? "")) {
+    keys.push(tokens[read.at] as ErKey);
+    read.at++;
+    if (tokens[read.at] !== ",") break;
+    if (!KEY.test(tokens[read.at + 1] ?? ""))
+      throw new UmlError(read.line, "A comma between keys is followed by `PK`, `FK` or `UK`.");
+    read.at++;
+  }
+  return keys;
 }
 
 /**
@@ -258,108 +300,131 @@ export function parseErDiagram(source: string): ErDiagram {
   const prepared = prepare(source);
   if (prepared.kind !== "er")
     throw new UmlError(prepared.headerLine, "Not an entity relationship diagram.");
-  const diagram: ErDiagram = {
+  const reader = new ErReader({
     direction: "TB",
     title: prepared.title,
     entities: new Map(),
     relationships: [],
-  };
+  });
   if (prepared.rest)
     throw new UmlError(
       prepared.headerLine,
       `Cannot read \`${prepared.rest}\` after \`erDiagram\`.`,
     );
-  let body: ErEntity | null = null;
-
-  const ensure = (raw: string, line: number): ErEntity => {
-    const id = erId(raw);
-    let entity = diagram.entities.get(id);
-    if (!entity) {
-      if (diagram.entities.size >= 200)
-        throw new UmlError(line, "Entity relationship diagrams are limited to 200 entities.");
-      entity = { id, label: id, attributes: [], line };
-      diagram.entities.set(id, entity);
-    }
-    return entity;
-  };
-  const addAttributes = (entity: ErEntity, text: string, line: number) => {
-    entity.attributes.push(...parseAttributes(text, line));
-    if (entity.attributes.length > 60)
-      throw new UmlError(line, `Entity \`${entity.id}\` has more than 60 attributes.`);
-  };
-
   const accessibility = accessibilityLines();
   for (const { text, line } of prepared.lines) {
-    if (body) {
-      const close = blockEnd(text);
-      if (close < 0) {
-        addAttributes(body, text, line);
-        continue;
-      }
-      if (text.slice(close + 1).trim()) throw new UmlError(line, "A closing `}` ends its line.");
-      addAttributes(body, text.slice(0, close), line);
-      body = null;
-      continue;
-    }
-    if (accessibility(text)) continue;
-    let match: RegExpMatchArray | null;
-    if ((match = text.match(/^direction\s+(TB|TD|BT|LR|RL)$/i))) {
-      diagram.direction = match[1].toUpperCase().replace("TD", "TB") as Direction;
-      continue;
-    }
-    if (ER_STYLING.test(text)) continue;
-    // A title in the front matter comes first.
-    if ((match = text.match(/^title\s+(.+)$/))) {
-      diagram.title ??= labelText(match[1]);
-      continue;
-    }
-    if ((match = text.match(ER_ENTITY))) {
-      const entity = ensure(match[1], line),
-        alias = match[3] ?? match[4];
-      if (alias?.trim()) entity.label = labelText(alias);
-      const opens = match[6];
-      if (opens !== undefined) {
-        const inner = opens.slice(1),
-          close = blockEnd(inner);
-        if (close < 0) {
-          addAttributes(entity, inner, line);
-          body = entity;
-        } else {
-          if (inner.slice(close + 1).trim())
-            throw new UmlError(line, "A closing `}` ends its line.");
-          addAttributes(entity, inner.slice(0, close), line);
-        }
-      }
-      continue;
-    }
-    const parts = relationshipParts(text);
-    if (parts) {
-      // Mermaid asks for a label: an empty one in quotes says there is none.
-      const label = parts.label ? labelText(parts.label.text) : "";
-      if (parts.label && !parts.label.text.trim())
-        throw new UmlError(line, "A relationship's label follows its colon.");
-      diagram.relationships.push({
-        id: `r${diagram.relationships.length + 1}`,
-        source: ensure(parts.left.text, line).id,
-        target: ensure(parts.right.text, line).id,
-        sourceCardinality: parts.leftCardinality.kind,
-        targetCardinality: parts.rightCardinality.kind,
-        identifying: parts.line.identifying,
-        ...(label ? { label } : {}),
-        line,
-      });
-      continue;
-    }
-    if (text === "}") throw new UmlError(line, "Unmatched `}`.");
-    if (new RegExp(`^${ER_NAME}\\s+u\\s*(--|\\.\\.)`, "u").test(text))
-      unsupported(line, "A relationship to a parent (`u`)");
-    if (new RegExp(`^${ER_NAME}\\s*\\S`, "u").test(text))
-      throw new UmlError(
-        line,
-        `Cannot read \`${text}\`: a relationship is written \`A ||--o{ B : label\`, with a cardinality at each end of \`--\` or \`..\`.`,
-      );
-    throw new UmlError(line, `Cannot read \`${text}\`.`);
+    if (reader.body) reader.inBlock(text, line);
+    else if (!accessibility(text)) reader.statement(text, line);
   }
+  const { body } = reader;
   if (body) throw new UmlError(body.line, `Entity \`${body.id}\` is missing its closing \`}\`.`);
-  return diagram;
+  return reader.diagram;
+}
+
+/** Reading an entity relationship diagram statement by statement: the diagram so far, and the entity whose block is open. */
+class ErReader {
+  readonly diagram: ErDiagram;
+  body: ErEntity | null = null;
+
+  constructor(diagram: ErDiagram) {
+    this.diagram = diagram;
+  }
+
+  /** The entity of a name, declared by its first mention. */
+  ensure(raw: string, line: number): ErEntity {
+    const { entities } = this.diagram;
+    const id = erId(raw);
+    let entity = entities.get(id);
+    if (!entity) {
+      if (entities.size >= 200)
+        throw new UmlError(line, "Entity relationship diagrams are limited to 200 entities.");
+      entity = { id, label: id, attributes: [], line };
+      entities.set(id, entity);
+    }
+    return entity;
+  }
+
+  /** A line in an open block: attributes, up to the `}` that closes it. */
+  inBlock(text: string, line: number) {
+    const close = blockEnd(text);
+    if (close < 0) return addAttributes(this.body!, text, line);
+    if (text.slice(close + 1).trim()) throw new UmlError(line, "A closing `}` ends its line.");
+    addAttributes(this.body!, text.slice(0, close), line);
+    this.body = null;
+  }
+
+  statement(text: string, line: number) {
+    if (this.setting(text) || ER_STYLING.test(text)) return;
+    const entity = text.match(ER_ENTITY);
+    if (entity) return this.entity(entity, line);
+    const parts = relationshipParts(text);
+    if (parts) return this.relationship(parts, line);
+    unreadable(text, line);
+  }
+
+  /** Whether a statement sets the direction or the title; a title in the front matter comes first. */
+  setting(text: string) {
+    const direction = text.match(/^direction\s+(TB|TD|BT|LR|RL)$/i);
+    if (direction)
+      this.diagram.direction = direction[1].toUpperCase().replace("TD", "TB") as Direction;
+    const title = text.match(/^title\s+(.+)$/);
+    if (title && !direction) this.diagram.title ??= labelText(title[1]);
+    return !!(direction || title);
+  }
+
+  /** An entity statement: its alias, and its block on this line or opened on it. */
+  entity(match: RegExpMatchArray, line: number) {
+    const entity = this.ensure(match[1], line),
+      alias = match[3] ?? match[4];
+    if (alias?.trim()) entity.label = labelText(alias);
+    const opens = match[6];
+    if (opens === undefined) return;
+    const inner = opens.slice(1),
+      close = blockEnd(inner);
+    if (close < 0) {
+      addAttributes(entity, inner, line);
+      this.body = entity;
+      return;
+    }
+    if (inner.slice(close + 1).trim()) throw new UmlError(line, "A closing `}` ends its line.");
+    addAttributes(entity, inner.slice(0, close), line);
+  }
+
+  relationship(parts: RelationshipParts, line: number) {
+    // Mermaid asks for a label: an empty one in quotes says there is none.
+    const label = parts.label ? labelText(parts.label.text) : "";
+    if (parts.label && !parts.label.text.trim())
+      throw new UmlError(line, "A relationship's label follows its colon.");
+    const { relationships } = this.diagram;
+    relationships.push({
+      id: `r${relationships.length + 1}`,
+      source: this.ensure(parts.left.text, line).id,
+      target: this.ensure(parts.right.text, line).id,
+      sourceCardinality: parts.leftCardinality.kind,
+      targetCardinality: parts.rightCardinality.kind,
+      identifying: parts.line.identifying,
+      ...(label ? { label } : {}),
+      line,
+    });
+  }
+}
+
+/** Adds the attributes of a line of an entity's block, at most 60 to an entity. */
+function addAttributes(entity: ErEntity, text: string, line: number) {
+  entity.attributes.push(...parseAttributes(text, line));
+  if (entity.attributes.length > 60)
+    throw new UmlError(line, `Entity \`${entity.id}\` has more than 60 attributes.`);
+}
+
+/** Throws for a statement that is none, saying what it looks like it meant. */
+function unreadable(text: string, line: number): never {
+  if (text === "}") throw new UmlError(line, "Unmatched `}`.");
+  if (new RegExp(`^${ER_NAME}\\s+u\\s*(--|\\.\\.)`, "u").test(text))
+    unsupported(line, "A relationship to a parent (`u`)");
+  if (new RegExp(`^${ER_NAME}\\s*\\S`, "u").test(text))
+    throw new UmlError(
+      line,
+      `Cannot read \`${text}\`: a relationship is written \`A ||--o{ B : label\`, with a cardinality at each end of \`--\` or \`..\`.`,
+    );
+  throw new UmlError(line, `Cannot read \`${text}\`.`);
 }

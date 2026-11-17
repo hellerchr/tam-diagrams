@@ -95,70 +95,71 @@ const path = (points: Point[], close: boolean) =>
     .map((point, index) => `${index ? "L" : "M"}${round1(point.x)} ${round1(point.y)}`)
     .join("") + (close ? "Z" : "");
 
+/** The box around a crow's foot symbol: from the entity back to its last stroke, as wide as its bars. */
+function crowBox(kind: MarkerKind, tip: Point, d: Point): Point[] {
+  const length = crowLength(kind);
+  return [
+    at(tip, d, 0, CROW.half),
+    at(tip, d, length, CROW.half),
+    at(tip, d, length, -CROW.half),
+    at(tip, d, 0, -CROW.half),
+  ];
+}
+
+/** A diamond from the tip back along the wire, hollow or filled. */
+const diamondPoints = (tip: Point, d: Point) => {
+  const point = at(tip, d, 0.65);
+  return [point, at(point, d, 8.5, 5), at(point, d, 17), at(point, d, 8.5, -5)];
+};
+
+/** The outline points of each kind of marker. */
+const OUTLINES: Record<MarkerKind, (tip: Point, d: Point, small: boolean) => Point[]> = {
+  arrow: (tip, d, small) => {
+    const size = small ? 7.5 : 9.5,
+      half = small ? 3.3 : 4,
+      point = at(tip, d, 0.3);
+    return [point, at(point, d, size, half), at(point, d, size * 0.72), at(point, d, size, -half)];
+  },
+  open: (tip, d) => {
+    const point = at(tip, d, 0.65);
+    return [at(point, d, 8.5, 4.3), point, at(point, d, 8.5, -4.3)];
+  },
+  triangle: (tip, d) => {
+    const point = at(tip, d, 0.65);
+    return [point, at(point, d, 13, 7), at(point, d, 13, -7)];
+  },
+  diamond: diamondPoints,
+  "filled-diamond": diamondPoints,
+  // A cross of two 8px strokes centered on the wire's end.
+  cross: (tip, d) => [
+    at(tip, d, -2.8, 2.8),
+    at(tip, d, 2.8, -2.8),
+    at(tip, d, 2.8, 2.8),
+    at(tip, d, -2.8, -2.8),
+  ],
+  circle: (tip) =>
+    Array.from({ length: 12 }, (_, k) => {
+      const angle = (k * Math.PI) / 6;
+      return { x: tip.x + 4.5 * Math.cos(angle), y: tip.y + 4.5 * Math.sin(angle) };
+    }),
+  // The half circle on the wire's side of the center, open toward where the wire points.
+  socket: (tip, d) =>
+    Array.from({ length: 9 }, (_, k) => {
+      const angle = Math.atan2(-d.y, -d.x) - Math.PI / 2 + (k * Math.PI) / 8;
+      return { x: tip.x + SOCKET * Math.cos(angle), y: tip.y + SOCKET * Math.sin(angle) };
+    }),
+  "only-one": (tip, d) => crowBox("only-one", tip, d),
+  "zero-or-one": (tip, d) => crowBox("zero-or-one", tip, d),
+  "one-or-more": (tip, d) => crowBox("one-or-more", tip, d),
+  "zero-or-more": (tip, d) => crowBox("zero-or-more", tip, d),
+};
+
 /**
  * The outline points of a marker whose tip is `tip`, pointing along `d`; audits use them. Stroked
  * outlines are pulled back by half their stroke, so the drawn tip touches `tip` exactly.
  */
-export function markerPoints(kind: MarkerKind, tip: Point, d: Point, small = false): Point[] {
-  switch (kind) {
-    case "arrow": {
-      const size = small ? 7.5 : 9.5,
-        half = small ? 3.3 : 4,
-        point = at(tip, d, 0.3);
-      return [
-        point,
-        at(point, d, size, half),
-        at(point, d, size * 0.72),
-        at(point, d, size, -half),
-      ];
-    }
-    case "open": {
-      const point = at(tip, d, 0.65);
-      return [at(point, d, 8.5, 4.3), point, at(point, d, 8.5, -4.3)];
-    }
-    case "triangle": {
-      const point = at(tip, d, 0.65);
-      return [point, at(point, d, 13, 7), at(point, d, 13, -7)];
-    }
-    case "diamond":
-    case "filled-diamond": {
-      const point = at(tip, d, 0.65);
-      return [point, at(point, d, 8.5, 5), at(point, d, 17), at(point, d, 8.5, -5)];
-    }
-    // A cross of two 8px strokes centered on the wire's end.
-    case "cross":
-      return [
-        at(tip, d, -2.8, 2.8),
-        at(tip, d, 2.8, -2.8),
-        at(tip, d, 2.8, 2.8),
-        at(tip, d, -2.8, -2.8),
-      ];
-    case "circle":
-      return Array.from({ length: 12 }, (_, k) => {
-        const angle = (k * Math.PI) / 6;
-        return { x: tip.x + 4.5 * Math.cos(angle), y: tip.y + 4.5 * Math.sin(angle) };
-      });
-    // The half circle on the wire's side of the center, open toward where the wire points.
-    case "socket":
-      return Array.from({ length: 9 }, (_, k) => {
-        const angle = Math.atan2(-d.y, -d.x) - Math.PI / 2 + (k * Math.PI) / 8;
-        return { x: tip.x + SOCKET * Math.cos(angle), y: tip.y + SOCKET * Math.sin(angle) };
-      });
-    // The box around the symbol: from the entity back to its last stroke, as wide as its bars.
-    case "only-one":
-    case "zero-or-one":
-    case "one-or-more":
-    case "zero-or-more": {
-      const length = crowLength(kind);
-      return [
-        at(tip, d, 0, CROW.half),
-        at(tip, d, length, CROW.half),
-        at(tip, d, length, -CROW.half),
-        at(tip, d, 0, -CROW.half),
-      ];
-    }
-  }
-}
+export const markerPoints = (kind: MarkerKind, tip: Point, d: Point, small = false): Point[] =>
+  OUTLINES[kind](tip, d, small);
 
 /** The box a marker covers, with its stroke. */
 export function markerBounds(kind: MarkerKind, tip: Point, d: Point, small = false): Box {
@@ -169,6 +170,59 @@ export function markerBounds(kind: MarkerKind, tip: Point, d: Point, small = fal
     y = Math.min(...ys) - 0.7;
   return { x, y, width: Math.max(...xs) + 0.7 - x, height: Math.max(...ys) + 0.7 - y };
 }
+
+/** A marker as it is drawn: its kind, tip, direction and outline, in the ink and on the color behind it. */
+interface Drawn {
+  kind: MarkerKind;
+  tip: Point;
+  d: Point;
+  points: Point[];
+  ink: string;
+  behind: string;
+}
+
+/** A diamond, hollow in the color behind it or filled with ink. */
+const diamondSvg = ({ kind, points, ink, behind }: Drawn) =>
+  `<path d="${path(points, true)}" fill="${kind === "diamond" ? behind : ink}" stroke="${ink}" stroke-width="1.3" stroke-linejoin="round"/>`;
+
+/** A crow's foot symbol: its bars, its foot and its ring. */
+function crowSvg({ kind, tip, d, ink, behind }: Drawn) {
+  const { foot, bars, ring } = CROW_PARTS[kind];
+  // The foot spreads from a point on the wire to the entity's outline, on both sides of the wire.
+  const strokes = [
+    ...bars.map((back) => [at(tip, d, back, CROW.half), at(tip, d, back, -CROW.half)]),
+    ...(foot ? [[at(tip, d, 0, CROW.half), at(tip, d, CROW.foot), at(tip, d, 0, -CROW.half)]] : []),
+  ];
+  const center = ring ? at(tip, d, ring) : undefined;
+  return (
+    `<path d="${strokes.map((stroke) => path(stroke, false)).join("")}" fill="none" stroke="${ink}" stroke-width="1.3" stroke-linejoin="round" stroke-linecap="round"/>` +
+    (center
+      ? `<circle cx="${round1(center.x)}" cy="${round1(center.y)}" r="${CROW.ring}" fill="${behind}" stroke="${ink}" stroke-width="1.3"/>`
+      : "")
+  );
+}
+
+/** How each kind of marker is drawn. */
+const DRAWINGS: Record<MarkerKind, (drawn: Drawn) => string> = {
+  arrow: ({ points, ink }) =>
+    `<path d="${path(points, true)}" fill="${ink}" stroke="${ink}" stroke-width="0.6" stroke-linejoin="round"/>`,
+  open: ({ points, ink }) =>
+    `<path d="${path(points, false)}" fill="none" stroke="${ink}" stroke-width="1.3" stroke-linejoin="round" stroke-linecap="round"/>`,
+  triangle: ({ points, ink, behind }) =>
+    `<path d="${path(points, true)}" fill="${behind}" stroke="${ink}" stroke-width="1.3" stroke-linejoin="round"/>`,
+  diamond: diamondSvg,
+  "filled-diamond": diamondSvg,
+  cross: ({ points, ink }) =>
+    `<path d="${path(points.slice(0, 2), false)}${path(points.slice(2), false)}" stroke="${ink}" stroke-width="1.3" stroke-linecap="round"/>`,
+  circle: ({ tip, ink, behind }) =>
+    `<circle cx="${round1(tip.x)}" cy="${round1(tip.y)}" r="4.5" fill="${behind}" stroke="${ink}" stroke-width="1.3"/>`,
+  socket: ({ points, ink }) =>
+    `<path d="M${round1(points[0].x)} ${round1(points[0].y)}A${SOCKET} ${SOCKET} 0 0 1 ${round1(points.at(-1)!.x)} ${round1(points.at(-1)!.y)}" fill="none" stroke="${ink}" stroke-width="1.4"/>`,
+  "only-one": crowSvg,
+  "zero-or-one": crowSvg,
+  "one-or-more": crowSvg,
+  "zero-or-more": crowSvg,
+};
 
 /**
  * SVG for a marker whose tip touches `tip`, pointing along `d` (a unit vector). Filled heads have a
@@ -183,42 +237,5 @@ export function markerSvg(
   behind: string,
   small = false,
 ): string {
-  const points = markerPoints(kind, tip, d, small);
-  switch (kind) {
-    case "arrow":
-      return `<path d="${path(points, true)}" fill="${ink}" stroke="${ink}" stroke-width="0.6" stroke-linejoin="round"/>`;
-    case "open":
-      return `<path d="${path(points, false)}" fill="none" stroke="${ink}" stroke-width="1.3" stroke-linejoin="round" stroke-linecap="round"/>`;
-    case "triangle":
-      return `<path d="${path(points, true)}" fill="${behind}" stroke="${ink}" stroke-width="1.3" stroke-linejoin="round"/>`;
-    case "diamond":
-    case "filled-diamond":
-      return `<path d="${path(points, true)}" fill="${kind === "diamond" ? behind : ink}" stroke="${ink}" stroke-width="1.3" stroke-linejoin="round"/>`;
-    case "cross":
-      return `<path d="${path(points.slice(0, 2), false)}${path(points.slice(2), false)}" stroke="${ink}" stroke-width="1.3" stroke-linecap="round"/>`;
-    case "circle":
-      return `<circle cx="${round1(tip.x)}" cy="${round1(tip.y)}" r="4.5" fill="${behind}" stroke="${ink}" stroke-width="1.3"/>`;
-    case "socket":
-      return `<path d="M${round1(points[0].x)} ${round1(points[0].y)}A${SOCKET} ${SOCKET} 0 0 1 ${round1(points.at(-1)!.x)} ${round1(points.at(-1)!.y)}" fill="none" stroke="${ink}" stroke-width="1.4"/>`;
-    case "only-one":
-    case "zero-or-one":
-    case "one-or-more":
-    case "zero-or-more": {
-      const { foot, bars, ring } = CROW_PARTS[kind];
-      // The foot spreads from a point on the wire to the entity's outline, on both sides of the wire.
-      const strokes = [
-        ...bars.map((back) => [at(tip, d, back, CROW.half), at(tip, d, back, -CROW.half)]),
-        ...(foot
-          ? [[at(tip, d, 0, CROW.half), at(tip, d, CROW.foot), at(tip, d, 0, -CROW.half)]]
-          : []),
-      ];
-      const center = ring ? at(tip, d, ring) : undefined;
-      return (
-        `<path d="${strokes.map((stroke) => path(stroke, false)).join("")}" fill="none" stroke="${ink}" stroke-width="1.3" stroke-linejoin="round" stroke-linecap="round"/>` +
-        (center
-          ? `<circle cx="${round1(center.x)}" cy="${round1(center.y)}" r="${CROW.ring}" fill="${behind}" stroke="${ink}" stroke-width="1.3"/>`
-          : "")
-      );
-    }
-  }
+  return DRAWINGS[kind]({ kind, tip, d, points: markerPoints(kind, tip, d, small), ink, behind });
 }

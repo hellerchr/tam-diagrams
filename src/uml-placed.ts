@@ -54,16 +54,6 @@ export function placeable(scene: Scene, tree: SceneTree = sceneTree(scene)): str
     .map((shape) => shape.id);
 }
 
-/** The shapes that take a place inside a container, at any depth; the shape itself when it takes one. */
-export function placeableIn(
-  scene: Scene,
-  id: string,
-  tree: SceneTree = sceneTree(scene),
-): string[] {
-  const all = new Set(placeable(scene, tree));
-  return [...all].filter((item) => chainOf(tree, item).includes(id));
-}
-
 /** Where each shape that takes a place stands in a scene, in whole numbers: what pinning writes. */
 export function placesOf(scene: Scene): Map<string, Point> {
   const boxes = new Map(scene.shapes.map((shape) => [shape.id, shape.box]));
@@ -113,13 +103,32 @@ interface Lanes {
 /** Nodes keep this far from the border of their lane, and from the lane's title. */
 const LANE_PAD = 16;
 
-function lanesOf(scene: Scene): Lanes | undefined {
-  const titles = scene.texts.filter((text) => text.owner?.startsWith("lane:"));
-  if (!titles.length || scene.shapes.some((shape) => shape.container)) return undefined;
-  const frameLine = scene.lines.findIndex(
+/** The texts of a scene that are the titles of lanes. */
+const laneTitles = (scene: Scene) => scene.texts.filter((text) => text.owner?.startsWith("lane:"));
+
+/** The index of the line that frames the lanes: the one closed line of four sides. */
+const frameLineOf = (scene: Scene) =>
+  scene.lines.findIndex(
     ({ points }) =>
       points.length === 5 && points[0].x === points[4].x && points[0].y === points[4].y,
   );
+
+/**
+ * The axis the lanes lie side by side along: across the line between the first two, or, for a
+ * single lane, the axis its title lies nearer the middle of the frame on.
+ */
+function acrossOf(first: Point[] | undefined, title: Box, frame: Box): "x" | "y" {
+  if (first) return Math.abs(first[0].x - first[1].x) < 0.5 ? "x" : "y";
+  return Math.abs(title.x + title.width / 2 - frame.x - frame.width / 2) <
+    Math.abs(title.y + title.height / 2 - frame.y - frame.height / 2)
+    ? "x"
+    : "y";
+}
+
+function lanesOf(scene: Scene): Lanes | undefined {
+  const titles = laneTitles(scene);
+  if (!titles.length || scene.shapes.some((shape) => shape.container)) return undefined;
+  const frameLine = frameLineOf(scene);
   if (frameLine < 0) return undefined;
   const corners = scene.lines[frameLine].points,
     frame = around(corners.map((point) => ({ ...point, width: 0, height: 0 })));
@@ -128,14 +137,7 @@ function lanesOf(scene: Scene): Lanes | undefined {
   );
   const first = separators.length ? scene.lines[separators[0]].points : undefined;
   const title = textGroupBox(titles.filter((text) => text.owner === titles[0].owner));
-  const across: "x" | "y" = first
-    ? Math.abs(first[0].x - first[1].x) < 0.5
-      ? "x"
-      : "y"
-    : Math.abs(title.x + title.width / 2 - frame.x - frame.width / 2) <
-        Math.abs(title.y + title.height / 2 - frame.y - frame.height / 2)
-      ? "x"
-      : "y";
+  const across = acrossOf(first, title, frame);
   const size = across === "x" ? "width" : "height";
   return {
     across,
@@ -172,9 +174,10 @@ export function laneFrame(scene: Scene): LaneFrame | undefined {
   const { across, bounds, frame } = lanes,
     size = across === "x" ? "width" : "height";
   const titles = new Map<string, SceneText[]>();
-  for (const text of scene.texts)
-    if (text.owner?.startsWith("lane:"))
-      titles.set(text.owner.slice(5), [...(titles.get(text.owner.slice(5)) ?? []), text]);
+  for (const text of laneTitles(scene)) {
+    const id = text.owner!.slice(5);
+    titles.set(id, [...(titles.get(id) ?? []), text]);
+  }
   const ids = bounds.slice(1).map((): string | undefined => undefined);
   for (const [id, texts] of titles) {
     const box = textGroupBox(texts),
@@ -200,7 +203,7 @@ function inLane(lanes: Lanes, scene: Scene, was: Box, box: Box): Box {
     );
   const low = bounds[lane] + LANE_PAD,
     high = bounds[lane + 1] - LANE_PAD - box[size];
-  const titles = scene.texts.filter((text) => text.owner?.startsWith("lane:")),
+  const titles = laneTitles(scene),
     head = Math.max(...titles.map((text) => text.box[along] + text.box[alongSize]), frame[along]);
   return {
     ...box,
@@ -295,27 +298,59 @@ export function placeScene(
   const shapes = new Map(scene.shapes.map((shape) => [shape.id, shape])),
     before = new Map(auto.shapes.map((shape) => [shape.id, shape.box]));
   const lanes = lanesOf(auto);
+  const target = targetsOf(auto, units, places, before, lanes);
+  if (!moveParts(scene, shapes, before, target)) return auto;
+  fitHolders(scene, tree, shapes, before);
+  tileRegions(scene, auto, tree);
 
-  // Parts with a place first; then the others, off the placed ones.
+  const style = options.lines ?? styleOf(auto);
+  rewire(scene, auto, tree, measure, style);
+  if (lanes) fitLanes(scene, auto, lanes);
+
+  const heading = scene.texts.find((text) => text.role === "heading");
+  scene.texts = scene.texts.filter((text) => text.role !== "heading");
+  finishBounds(scene, measure, heading?.text);
+  return scene;
+}
+
+/** Where each part goes: parts with a place first; then the others, off the placed ones. */
+function targetsOf(
+  auto: Scene,
+  units: string[],
+  places: ReadonlyMap<string, Point>,
+  before: Map<string, Box>,
+  lanes: Lanes | undefined,
+): Map<string, Box> {
+  const kept = (was: Box, box: Box) => (lanes ? inLane(lanes, auto, was, box) : box);
   const target = new Map<string, Box>();
   for (const id of units) {
     const at = places.get(id),
       box = before.get(id)!;
-    if (!at) continue;
-    const next = {
-      ...box,
-      x: Math.round(box.x) === at.x ? box.x : at.x,
-      y: Math.round(box.y) === at.y ? box.y : at.y,
-    };
-    target.set(id, lanes ? inLane(lanes, auto, box, next) : next);
+    if (at) target.set(id, kept(box, placedBox(box, at)));
   }
   const taken = [...target.values()];
   for (const id of units) {
     if (target.has(id)) continue;
-    const spot = freeSpot(before.get(id)!, taken);
-    target.set(id, lanes ? inLane(lanes, auto, before.get(id)!, spot) : spot);
+    target.set(id, kept(before.get(id)!, freeSpot(before.get(id)!, taken)));
     taken.push(target.get(id)!);
   }
+  return target;
+}
+
+/** A box at its place; a place that is the rounded position means that position. */
+const placedBox = (box: Box, at: Point): Box => ({
+  ...box,
+  x: Math.round(box.x) === at.x ? box.x : at.x,
+  y: Math.round(box.y) === at.y ? box.y : at.y,
+});
+
+/** Moves every part to its target with its texts; returns whether any moved. */
+function moveParts(
+  scene: Scene,
+  shapes: Map<string, SceneShape>,
+  before: Map<string, Box>,
+  target: Map<string, Box>,
+): boolean {
   let changed = false;
   for (const [id, box] of target) {
     const was = before.get(id)!,
@@ -330,44 +365,51 @@ export function placeScene(
       dy,
     );
   }
-  if (!changed) return auto;
+  return changed;
+}
 
-  // Containers, innermost first: around what they hold, with the room they had around it.
+/** Containers, innermost first: around what they hold, with the room they had around it. */
+function fitHolders(
+  scene: Scene,
+  tree: SceneTree,
+  shapes: Map<string, SceneShape>,
+  before: Map<string, Box>,
+) {
   const depthOf = (id: string) => chainOf(tree, id).length;
   const holders = scene.shapes
     .filter((shape) => tree.children.get(shape.id)?.length)
     .toSorted((a, b) => depthOf(b.id) - depthOf(a.id));
   for (const shape of holders) {
     const held = tree.children.get(shape.id)!,
-      was = before.get(shape.id)!,
-      inner = around(held.map((id) => before.get(id)!)),
-      now = around(held.map((id) => shapes.get(id)!.box));
-    const titles = scene.texts.filter((text) => text.owner === shape.id),
-      least = titles.length ? textGroupBox(titles).width + 2 * TITLE_PAD : 0;
-    let x = now.x - (inner.x - was.x),
-      width = now.width + (was.width - inner.width);
-    if (width < least) {
-      x -= (least - width) / 2;
-      width = least;
-    }
-    const box = {
-      x,
-      y: now.y - (inner.y - was.y),
-      width,
-      height: now.height + (was.height - inner.height),
-    };
+      was = before.get(shape.id)!;
+    const box = holderBox(
+      was,
+      around(held.map((id) => before.get(id)!)),
+      around(held.map((id) => shapes.get(id)!.box)),
+      scene.texts.filter((text) => text.owner === shape.id),
+    );
     fitContainer(scene, shape, was, box);
   }
-  tileRegions(scene, auto, tree);
+}
 
-  const style = options.lines ?? styleOf(auto);
-  rewire(scene, auto, tree, measure, style);
-  if (lanes) fitLanes(scene, auto, lanes);
-
-  const heading = scene.texts.find((text) => text.role === "heading");
-  scene.texts = scene.texts.filter((text) => text.role !== "heading");
-  finishBounds(scene, measure, heading?.text);
-  return scene;
+/**
+ * A container's box around what it holds now, `now`, with the room it had around what it held,
+ * `inner`; never narrower than its title.
+ */
+function holderBox(was: Box, inner: Box, now: Box, titles: SceneText[]): Box {
+  const least = titles.length ? textGroupBox(titles).width + 2 * TITLE_PAD : 0;
+  let x = now.x - (inner.x - was.x),
+    width = now.width + (was.width - inner.width);
+  if (width < least) {
+    x -= (least - width) / 2;
+    width = least;
+  }
+  return {
+    x,
+    y: now.y - (inner.y - was.y),
+    width,
+    height: now.height + (was.height - inner.height),
+  };
 }
 
 /** Gives a container another box: its title keeps its place across it, its dividers their depth. */
@@ -398,58 +440,90 @@ function tileRegions(scene: Scene, auto: Scene, tree: SceneTree) {
     before = new Map(auto.shapes.map((shape) => [shape.id, shape.box]));
   for (const [holder, held] of tree.children) {
     const regions = held.filter((id) => shapes.get(id)!.kind === "region");
-    if (regions.length < 2) continue;
-    const first = before.get(regions[0])!,
-      second = before.get(regions[1])!,
-      axis: "x" | "y" = Math.abs(first.x - second.x) >= Math.abs(first.y - second.y) ? "x" : "y",
-      across = axis === "x" ? "y" : "x",
-      size = axis === "x" ? "width" : "height",
-      acrossSize = axis === "x" ? "height" : "width";
-    const order = regions.toSorted((a, b) => before.get(a)![axis] - before.get(b)![axis]),
-      all = around(order.map((id) => shapes.get(id)!.box));
-    // The lines between the regions, in the order of the regions they part.
-    const separators = auto.lines
-      .map((line, index) => ({ line, index }))
-      .filter(
-        ({ line }) =>
-          line.points.length === 2 &&
-          Math.abs(line.points[0][axis] - line.points[1][axis]) < 0.5 &&
-          inside({ ...line.points[0], width: 0, height: 0 }, before.get(holder)!, 1) &&
-          order.some((id, k) => {
-            const next = order[k + 1] && before.get(order[k + 1])!,
-              box = before.get(id)!;
-            return (
-              !!next &&
-              line.points[0][axis] >= box[axis] + box[size] - 1 &&
-              line.points[0][axis] <= next[axis] + 1
-            );
-          }),
-      )
-      .toSorted((a, b) => a.line.points[0][axis] - b.line.points[0][axis]);
-    order.forEach((id, k) => {
-      const shape = shapes.get(id)!,
-        next = order[k + 1] && shapes.get(order[k + 1])!;
-      const box = { ...shape.box, [across]: all[across], [acrossSize]: all[acrossSize] };
-      shape.box = box;
-      if (!next) return;
-      const gap = before.get(order[k + 1])![axis] - before.get(id)![axis] - before.get(id)![size],
-        border = (box[axis] + box[size] + next.box[axis]) / 2;
-      // Each region reaches to half the gap before the border, the next one from half after it.
-      const start = box[axis];
-      shape.box = { ...box, [size]: border - gap / 2 - start };
-      const end = next.box[axis] + next.box[size];
-      next.box = { ...next.box, [axis]: border + gap / 2, [size]: end - border - gap / 2 };
-      const separator = separators[k];
-      if (separator) {
-        const point = (at: number): Point =>
-          axis === "x" ? { x: border, y: at } : { x: at, y: border };
-        scene.lines[separator.index].points = [
-          point(all[across]),
-          point(all[across] + all[acrossSize]),
-        ];
-      }
-    });
+    if (regions.length >= 2) tileRegion(scene, auto, shapes, before, before.get(holder)!, regions);
   }
+}
+
+/** The regions of one composite state as they are tiled: in order along the axis they lie side by side on. */
+interface Tiling {
+  scene: Scene;
+  shapes: Map<string, SceneShape>;
+  before: Map<string, Box>;
+  axis: "x" | "y";
+  across: "x" | "y";
+  size: "width" | "height";
+  acrossSize: "width" | "height";
+  order: string[];
+  /** The box around all regions now. */
+  all: Box;
+}
+
+function tileRegion(
+  scene: Scene,
+  auto: Scene,
+  shapes: Map<string, SceneShape>,
+  before: Map<string, Box>,
+  holder: Box,
+  regions: string[],
+) {
+  const first = before.get(regions[0])!,
+    second = before.get(regions[1])!,
+    axis: "x" | "y" = Math.abs(first.x - second.x) >= Math.abs(first.y - second.y) ? "x" : "y";
+  const order = regions.toSorted((a, b) => before.get(a)![axis] - before.get(b)![axis]);
+  const tiling: Tiling = {
+    scene,
+    shapes,
+    before,
+    axis,
+    across: axis === "x" ? "y" : "x",
+    size: axis === "x" ? "width" : "height",
+    acrossSize: axis === "x" ? "height" : "width",
+    order,
+    all: around(order.map((id) => shapes.get(id)!.box)),
+  };
+  // The lines between the regions, in the order of the regions they part.
+  const separators = auto.lines
+    .map((line, index) => ({ line, index }))
+    .filter(({ line }) => separates(tiling, holder, line.points))
+    .toSorted((a, b) => a.line.points[0][axis] - b.line.points[0][axis]);
+  order.forEach((_, k) => fillRegion(tiling, k, separators[k]?.index));
+}
+
+/** Whether a line of the automatic scene parts two of the regions, in the composite state `holder`. */
+function separates({ axis, size, order, before }: Tiling, holder: Box, points: Point[]) {
+  if (points.length !== 2 || Math.abs(points[0][axis] - points[1][axis]) >= 0.5) return false;
+  if (!inside({ ...points[0], width: 0, height: 0 }, holder, 1)) return false;
+  return order.some((id, k) => {
+    const next = order[k + 1] && before.get(order[k + 1])!,
+      box = before.get(id)!;
+    return (
+      !!next && points[0][axis] >= box[axis] + box[size] - 1 && points[0][axis] <= next[axis] + 1
+    );
+  });
+}
+
+/**
+ * The `k`th region across the whole state, and up to the border with the next: each region
+ * reaches to half the gap before the border, the next one from half after it. The line between
+ * them, the scene's line `separator`, is drawn at the border.
+ */
+function fillRegion(tiling: Tiling, k: number, separator: number | undefined) {
+  const { shapes, before, order, axis, across, size, acrossSize, all } = tiling;
+  const id = order[k],
+    shape = shapes.get(id)!,
+    next = order[k + 1] && shapes.get(order[k + 1])!;
+  const box = { ...shape.box, [across]: all[across], [acrossSize]: all[acrossSize] };
+  shape.box = box;
+  if (!next) return;
+  const gap = before.get(order[k + 1])![axis] - before.get(id)![axis] - before.get(id)![size],
+    border = (box[axis] + box[size] + next.box[axis]) / 2;
+  const start = box[axis];
+  shape.box = { ...box, [size]: border - gap / 2 - start };
+  const end = next.box[axis] + next.box[size];
+  next.box = { ...next.box, [axis]: border + gap / 2, [size]: end - border - gap / 2 };
+  if (separator === undefined) return;
+  const point = (at: number): Point => (axis === "x" ? { x: border, y: at } : { x: at, y: border });
+  tiling.scene.lines[separator].points = [point(all[across]), point(all[across] + all[acrossSize])];
 }
 
 /** The style of a scene's wires: straight or curved lines where one runs at a slant or along a path. */

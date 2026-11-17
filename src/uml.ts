@@ -71,30 +71,32 @@ function directiveEnd(all: string[], index: number): number {
   return end < 0 ? index : index + end;
 }
 
+/**
+ * YAML frontmatter: only the title matters here; `config` styling is ignored. Returns the line
+ * after it, 0 without one.
+ */
+function frontMatter(all: string[]): { start: number; title?: string } {
+  const first = all.findIndex((text) => text.trim());
+  if (first < 0 || all[first].trim() !== "---") return { start: 0 };
+  const close = all.findIndex((text, index) => index > first && text.trim() === "---");
+  if (close <= first) return { start: 0 };
+  let title: string | undefined;
+  for (const text of all.slice(first + 1, close)) {
+    const match = text.match(/^title:\s*(.+)$/);
+    if (match) title = unquoted(match[1].trim());
+  }
+  return { start: close + 1, title };
+}
+
+/** A quoted title stands without its quotes; in single quotes a doubled quote is one. */
+const unquoted = (value: string) =>
+  /^'.*'$/.test(value) ? value.slice(1, -1).replace(/''/g, "'") : value.replace(/^"(.*)"$/, "$1");
+
 /** Statement lines of a source, without frontmatter, comments and `%%{ }%%` directives. */
 export function scan(source: string): { lines: SourceLine[]; title?: string; level?: Level } {
   const all = source.replace(/\r\n?/g, "\n").split("\n");
-  let start = 0,
-    title: string | undefined,
-    level: Level | undefined;
-  // YAML frontmatter: only the title matters here; `config` styling is ignored.
-  const first = all.findIndex((text) => text.trim());
-  if (first >= 0 && all[first].trim() === "---") {
-    const close = all.findIndex((text, index) => index > first && text.trim() === "---");
-    if (close > first) {
-      for (const text of all.slice(first + 1, close)) {
-        const match = text.match(/^title:\s*(.+)$/);
-        // A quoted title stands without its quotes; in single quotes a doubled quote is one.
-        if (match) {
-          const value = match[1].trim();
-          title = /^'.*'$/.test(value)
-            ? value.slice(1, -1).replace(/''/g, "'")
-            : value.replace(/^"(.*)"$/, "$1");
-        }
-      }
-      start = close + 1;
-    }
-  }
+  const { start, title } = frontMatter(all);
+  let level: Level | undefined;
   const lines: SourceLine[] = [];
   for (let index = start; index < all.length; index++) {
     const text = all[index].trim();

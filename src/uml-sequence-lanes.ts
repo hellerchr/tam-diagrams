@@ -44,183 +44,299 @@ export function sequenceLanes(
   const head = (id: string) => headerSize(headers.get(id)!, measure);
   /** The left edge the source places a participant's head at: its lane stands that far right. */
   const placedAt = (id: string) => places.get(`head:${id}`)?.x;
-  const ids = declared.some((id) => placedAt(id) !== undefined)
-      ? placedOrder(
-          declared,
-          (id) => diagram.participants.get(id)!.box ?? undefined,
-          (id) => {
-            const left = placedAt(id);
-            return left === undefined ? undefined : left + head(id).width / 2;
-          },
-        )
-      : declared,
-    index = new Map(ids.map((id, i) => [id, i]));
-  const labelOf = (text: string) => (text ? smallSize(text, measure) : { width: 0, height: 0 });
-
-  // Columns: wide enough for the heads, the labels of the messages between them and the notes beside them.
-  const extents = ids.map((id) => ({ left: head(id).width / 2, right: head(id).width / 2 }));
-  const demands: SpanDemand[] = [];
-  const beyond = (lane: number, side: "left" | "right", width: number) => {
-    const neighbour = side === "right" ? lane + 1 : lane - 1;
-    if (neighbour >= 0 && neighbour < ids.length)
-      demands.push({ from: lane, to: neighbour, width });
-    else extents[lane][side] = Math.max(extents[lane][side], width);
+  const ids = laneOrder(diagram, declared, head, placedAt);
+  const sizing: Sizing = {
+    diagram,
+    measure,
+    ids,
+    index: new Map(ids.map((id, i) => [id, i])),
+    head,
+    labelOf: (text: string) => (text ? smallSize(text, measure) : { width: 0, height: 0 }),
+    // Columns: wide enough for the heads, the labels of the messages between them and the notes beside them.
+    extents: ids.map((id) => ({ left: head(id).width / 2, right: head(id).width / 2 })),
+    demands: [],
   };
   for (const event of diagram.events) {
-    if (event.type === "message") {
-      const a = index.get(event.from)!,
-        b = index.get(event.to)!,
-        label = labelOf(event.text),
-        badge = event.number !== undefined ? BADGE_ROOM + 10 + (event.tail ? 10 : 0) : 0;
-      if (a !== b) demands.push({ from: a, to: b, width: label.width + 2 * BAR + 30 + badge });
-    }
-    if (event.type === "note") {
-      const width = labelOf(event.text).width + 22,
-        a = index.get(event.who[0])!;
-      if (event.placement !== "over") beyond(a, event.placement, width + 34);
-      else if (event.who.length === 2)
-        demands.push({ from: a, to: index.get(event.who[1])!, width: width - 30 });
-      else {
-        extents[a].left = Math.max(extents[a].left, width / 2 + MARGIN);
-        extents[a].right = Math.max(extents[a].right, width / 2 + MARGIN);
-      }
-    }
+    if (event.type === "message") messageDemand(sizing, event);
+    if (event.type === "note") noteDemand(sizing, event);
   }
   // A box around participants is as wide as its title.
   const titleRoom = (label: string) => (label ? measure(label, FONT, 600) + 24 : 0);
-  diagram.boxes.forEach((group, number) => {
-    const members = ids
-      .filter((id) => diagram.participants.get(id)!.box === number)
-      .map((id) => index.get(id)!);
-    const room = titleRoom(group.label);
-    if (!members.length || !room) return;
-    const first = Math.min(...members),
-      last = Math.max(...members);
-    if (first === last) {
-      extents[first].left = Math.max(extents[first].left, room / 2);
-      extents[first].right = Math.max(extents[first].right, room / 2);
-    } else
-      demands.push({
-        from: first,
-        to: last,
-        width: room - head(ids[first]).width / 2 - head(ids[last]).width / 2 - 20,
-      });
+  diagram.boxes.forEach((group, number) => groupDemand(sizing, titleRoom(group.label), number));
+  barDemands(sizing);
+  const guardRoom = fragmentDemands(sizing);
+  const xs = laneCenters(sizing, placedAt);
+  const x = (id: string) => xs[sizing.index.get(id)!];
+  const frameX = frameExtents(sizing, guardRoom, x, xs[0] ?? 0);
+  return { frameX, guardRoom, head, headers, ids, labelOf: sizing.labelOf, titleRoom, x, xs };
+}
+
+/** What sizing the lanes works with: the lanes in order, their headers and labels, and what their content asks of them. */
+interface Sizing {
+  diagram: SequenceDiagram;
+  measure: Measure;
+  ids: string[];
+  index: Map<string, number>;
+  head: (id: string) => { width: number; height: number };
+  labelOf: (text: string) => { width: number; height: number };
+  extents: LaneExtent[];
+  demands: SpanDemand[];
+}
+
+type SequenceEvent = SequenceDiagram["events"][number];
+type MessageEvent = SequenceEvent & { type: "message" };
+
+/** The lanes in the order of the source, or of the places it gives their heads (`placedOrder`). */
+function laneOrder(
+  diagram: SequenceDiagram,
+  declared: string[],
+  head: (id: string) => { width: number },
+  placedAt: (id: string) => number | undefined,
+) {
+  if (!declared.some((id) => placedAt(id) !== undefined)) return declared;
+  return placedOrder(
+    declared,
+    (id) => diagram.participants.get(id)!.box ?? undefined,
+    (id) => {
+      const left = placedAt(id);
+      return left === undefined ? undefined : left + head(id).width / 2;
+    },
+  );
+}
+
+/** Content `width` wide beside a lane: room up to the neighbour on that side, or on the lane itself at the edge. */
+function beyond(sizing: Sizing, lane: number, side: "left" | "right", width: number) {
+  const neighbour = side === "right" ? lane + 1 : lane - 1;
+  if (neighbour >= 0 && neighbour < sizing.ids.length)
+    sizing.demands.push({ from: lane, to: neighbour, width });
+  else sizing.extents[lane][side] = Math.max(sizing.extents[lane][side], width);
+}
+
+/** A lane's content reaches `half` to both sides of its center line. */
+function widen(extent: LaneExtent, half: number) {
+  extent.left = Math.max(extent.left, half);
+  extent.right = Math.max(extent.right, half);
+}
+
+/** A message between two lanes keeps them apart by its label, its bars and its badge. */
+function messageDemand(sizing: Sizing, event: MessageEvent) {
+  const a = sizing.index.get(event.from)!,
+    b = sizing.index.get(event.to)!,
+    label = sizing.labelOf(event.text),
+    badge = event.number !== undefined ? BADGE_ROOM + 10 + (event.tail ? 10 : 0) : 0;
+  if (a !== b) sizing.demands.push({ from: a, to: b, width: label.width + 2 * BAR + 30 + badge });
+}
+
+/** A note beside a lane, over two lanes, or over one. */
+function noteDemand(sizing: Sizing, event: SequenceEvent & { type: "note" }) {
+  const width = sizing.labelOf(event.text).width + 22,
+    a = sizing.index.get(event.who[0])!;
+  if (event.placement !== "over") beyond(sizing, a, event.placement, width + 34);
+  else if (event.who.length === 2)
+    sizing.demands.push({ from: a, to: sizing.index.get(event.who[1])!, width: width - 30 });
+  else widen(sizing.extents[a], width / 2 + MARGIN);
+}
+
+/** A box around participants as wide as its title, `room`. */
+function groupDemand(sizing: Sizing, room: number, number: number) {
+  const { diagram, ids, index, head } = sizing;
+  const members = ids
+    .filter((id) => diagram.participants.get(id)!.box === number)
+    .map((id) => index.get(id)!);
+  if (!members.length || !room) return;
+  const first = Math.min(...members),
+    last = Math.max(...members);
+  if (first === last) widen(sizing.extents[first], room / 2);
+  else
+    sizing.demands.push({
+      from: first,
+      to: last,
+      width: room - head(ids[first]).width / 2 - head(ids[last]).width / 2 - 20,
+    });
+}
+
+/** How many bars are open on each lifeline. */
+type Nesting = Map<string, number>;
+
+/** Opens (`by` 1) or closes (`by` -1) a bar on a lifeline. */
+const nest = (nesting: Nesting, who: string, by: number) =>
+  nesting.set(who, Math.max(0, (nesting.get(who) ?? 0) + by));
+
+/** Follows the bars a message opens and closes. */
+function nestMessage(nesting: Nesting, event: MessageEvent) {
+  if (event.activate) nest(nesting, event.to, 1);
+  if (event.deactivate) nest(nesting, event.from, -1);
+}
+
+/**
+ * A message label stands between activation bars of the lifelines it passes: the widest stretch
+ * between two of them (or the message's ends) is made wide enough for it. A self message's loop
+ * and label stand right of its bars, clear of the next lifeline's bars.
+ */
+function barDemands(sizing: Sizing) {
+  const nesting: Nesting = new Map();
+  for (const event of sizing.diagram.events) {
+    if (event.type === "activate") nest(nesting, event.who, 1);
+    else if (event.type === "deactivate") nest(nesting, event.who, -1);
+    else if (event.type === "message") {
+      if (event.from === event.to) selfDemand(sizing, nesting, event);
+      acrossBars(sizing, nesting, event);
+      nestMessage(nesting, event);
+    }
+  }
+}
+
+/** A self message's loop and label stand right of its bars. */
+function selfDemand(sizing: Sizing, nesting: Nesting, event: MessageEvent) {
+  beyond(
+    sizing,
+    sizing.index.get(event.from)!,
+    "right",
+    (nesting.get(event.from) ?? 0) * NEST +
+      SELF +
+      sizing.labelOf(event.text).width +
+      30 +
+      (event.number !== undefined ? BADGE_ROOM + 10 : 0) +
+      BAR / 2 +
+      2 * NEST,
+  );
+}
+
+/** The widest stretch between the bars a message's label passes is wide enough for the label. */
+function acrossBars(sizing: Sizing, nesting: Nesting, event: MessageEvent) {
+  const a = sizing.index.get(event.from)!,
+    b = sizing.index.get(event.to)!,
+    low = Math.min(a, b),
+    high = Math.max(a, b);
+  const barred = sizing.ids
+    .slice(low + 1, high)
+    .map((id, k) => ((nesting.get(id) ?? 0) > 0 ? low + 1 + k : -1))
+    .filter((lane) => lane >= 0);
+  if (!event.text || !barred.length) return;
+  const stops = [low, ...barred, high];
+  const [p, q] = stops
+    .slice(1)
+    .map((lane, k) => [stops[k], lane])
+    .toSorted((u, v) => v[1] - v[0] - (u[1] - u[0]))[0];
+  const margin = (lane: number) =>
+    (lane === low || lane === high ? BAR / 2 + 2 * NEST : BAR / 2 + 2 * NEST + 4) +
+    (lane === a ? badgeRoom(event) : 0);
+  sizing.demands.push({
+    from: p,
+    to: q,
+    width: sizing.labelOf(event.text).width + 8 + margin(p) + margin(q),
   });
-  // A message label stands between activation bars of the lifelines it passes: the widest stretch
-  // between two of them (or the message's ends) is made wide enough for it. A self message's loop
-  // and label stand right of its bars, clear of the next lifeline's bars.
-  {
-    const nesting = new Map<string, number>(),
-      active = (id: string) => (nesting.get(id) ?? 0) > 0;
-    for (const event of diagram.events) {
-      if (event.type === "activate") nesting.set(event.who, (nesting.get(event.who) ?? 0) + 1);
-      else if (event.type === "deactivate")
-        nesting.set(event.who, Math.max(0, (nesting.get(event.who) ?? 0) - 1));
-      else if (event.type === "message") {
-        const a = index.get(event.from)!,
-          b = index.get(event.to)!,
-          low = Math.min(a, b),
-          high = Math.max(a, b);
-        if (a === b)
-          beyond(
-            a,
-            "right",
-            (nesting.get(event.from) ?? 0) * NEST +
-              SELF +
-              labelOf(event.text).width +
-              30 +
-              (event.number !== undefined ? BADGE_ROOM + 10 : 0) +
-              BAR / 2 +
-              2 * NEST,
-          );
-        const barred = ids
-          .slice(low + 1, high)
-          .map((id, k) => (active(id) ? low + 1 + k : -1))
-          .filter((lane) => lane >= 0);
-        if (event.text && barred.length) {
-          const stops = [low, ...barred, high];
-          const [p, q] = stops
-            .slice(1)
-            .map((lane, k) => [stops[k], lane])
-            .toSorted((u, v) => v[1] - v[0] - (u[1] - u[0]))[0];
-          const margin = (lane: number) =>
-            (lane === low || lane === high ? BAR / 2 + 2 * NEST : BAR / 2 + 2 * NEST + 4) +
-            (lane === a && event.number !== undefined ? BADGE_ROOM + (event.tail ? 10 : 0) : 0);
-          demands.push({
-            from: p,
-            to: q,
-            width: labelOf(event.text).width + 8 + margin(p) + margin(q),
-          });
-        }
-        if (event.activate) nesting.set(event.to, (nesting.get(event.to) ?? 0) + 1);
-        if (event.deactivate)
-          nesting.set(event.from, Math.max(0, (nesting.get(event.from) ?? 0) - 1));
-      }
-    }
+}
+
+/** The room a message's badge takes beside its sender's lifeline. */
+const badgeRoom = (event: MessageEvent) =>
+  event.number !== undefined ? BADGE_ROOM + (event.tail ? 10 : 0) : 0;
+
+/** A fragment as sizing sees it: the lanes it involves, the widths of its conditions, the fragment around it. */
+interface Fragment {
+  id: string;
+  kind: string;
+  lanes: Set<number>;
+  widths: number[];
+  parent?: Fragment;
+}
+
+/** The lifelines an event takes part in. */
+function involved(event: SequenceEvent): string[] {
+  if (event.type === "message") return [event.from, event.to];
+  if (event.type === "note") return event.who;
+  return event.type === "activate" || event.type === "deactivate" ? [event.who] : [];
+}
+
+/** The width of a condition: its words wrapped at 200px, never wider than on one line. */
+function guardWidth(measure: Measure, text: string) {
+  const label = `[${text}]`,
+    full = measure(label, SMALL, 400);
+  return Math.min(
+    full,
+    Math.max(200, ...label.split(/\s+/).map((word) => measure(word, SMALL, 400))),
+  );
+}
+
+/** A fragment that starts, with the width of its first condition. */
+const fragmentOf = (
+  measure: Measure,
+  event: SequenceEvent & { type: "start" },
+  parent: Fragment | undefined,
+): Fragment => ({
+  id: event.id,
+  kind: event.kind,
+  lanes: new Set<number>(),
+  widths: event.kind !== "rect" && event.text ? [guardWidth(measure, event.text)] : [],
+  parent,
+});
+
+/** The fragments of a diagram, each with the lanes it involves and the widths of its conditions. */
+function fragmentsOf(sizing: Sizing): Fragment[] {
+  const stack: Fragment[] = [],
+    frames: Fragment[] = [];
+  for (const event of sizing.diagram.events) {
+    if (event.type === "start") {
+      const frame = fragmentOf(sizing.measure, event, stack.at(-1));
+      stack.push(frame);
+      frames.push(frame);
+    } else if (event.type === "else") {
+      if (event.text) stack.at(-1)?.widths.push(guardWidth(sizing.measure, event.text));
+    } else if (event.type === "end") stack.pop();
+    else
+      for (const id of involved(event))
+        stack.forEach((frame) => frame.lanes.add(sizing.index.get(id)!));
   }
-  // A fragment's conditions stand right of the lifeline of its first participant: the stretch up to
-  // the next lifeline is made wide enough (or, for a fragment around one lifeline, the fragment itself).
+  return frames;
+}
+
+/**
+ * A fragment's conditions stand right of the lifeline of its first participant: the stretch up
+ * to the next lifeline is made wide enough (or, for a fragment around one lifeline, the fragment
+ * itself). Returns the room those around one lifeline keep right of it.
+ */
+function fragmentDemands(sizing: Sizing): Map<string, number> {
   const guardRoom = new Map<string, number>();
-  {
-    type Open = { id: string; kind: string; lanes: Set<number>; widths: number[]; parent?: Open };
-    const stack: Open[] = [],
-      frames: Open[] = [];
-    const width = (text: string) => {
-      const label = `[${text}]`,
-        full = measure(label, SMALL, 400);
-      return Math.min(
-        full,
-        Math.max(200, ...label.split(/\s+/).map((word) => measure(word, SMALL, 400))),
-      );
-    };
-    for (const event of diagram.events) {
-      const involve = (...who: string[]) =>
-        stack.forEach((frame) => who.forEach((id) => frame.lanes.add(index.get(id)!)));
-      if (event.type === "start") {
-        const frame: Open = {
-          id: event.id,
-          kind: event.kind,
-          lanes: new Set<number>(),
-          widths: event.kind !== "rect" && event.text ? [width(event.text)] : [],
-          parent: stack.at(-1),
-        };
-        stack.push(frame);
-        frames.push(frame);
-      } else if (event.type === "else") {
-        if (event.text) stack.at(-1)?.widths.push(width(event.text));
-      } else if (event.type === "end") stack.pop();
-      else if (event.type === "message") involve(event.from, event.to);
-      else if (event.type === "note") involve(...event.who);
-      else if (event.type === "activate" || event.type === "deactivate") involve(event.who);
-    }
-    for (const frame of frames) {
-      if (!frame.lanes.size || !frame.widths.length) continue;
-      const lo = Math.min(...frame.lanes),
-        need = 6 + BAR / 2 + 2 * NEST + Math.max(...frame.widths) + 8;
-      if (lo + 1 < ids.length) demands.push({ from: lo, to: lo + 1, width: need + 6 });
-      else extents[lo].right = Math.max(extents[lo].right, need);
-      if (frame.lanes.size === 1) guardRoom.set(frame.id, need - (BAR + 10 + 8));
-    }
-    // A frame reaches left of its first lifeline by its keyword tab (as frameBoxes draws it), and 8 more
-    // around each frame inside it that starts there: the stretch from the lifeline before is made wide
-    // enough that the tab clears that lifeline's activation bars.
-    const lowest = (frame: Open) => (frame.lanes.size ? Math.min(...frame.lanes) : -1);
-    const reach = (frame: Open): number =>
-      Math.max(
-        BAR + 18,
-        (frame.kind === "rect" ? 0 : measure(frame.kind, SMALL, 600) + 20) + BAR + 2,
-        ...frames
-          .filter((child) => child.parent === frame && lowest(child) === lowest(frame))
-          .map((child) => reach(child) + 8),
-      );
-    for (const frame of frames) {
-      const lo = lowest(frame);
-      if (lo > 0)
-        demands.push({ from: lo - 1, to: lo, width: reach(frame) + BAR / 2 + 2 * NEST + 6 });
-    }
+  const frames = fragmentsOf(sizing);
+  for (const frame of frames) {
+    if (!frame.lanes.size || !frame.widths.length) continue;
+    const lo = Math.min(...frame.lanes),
+      need = 6 + BAR / 2 + 2 * NEST + Math.max(...frame.widths) + 8;
+    if (lo + 1 < sizing.ids.length) sizing.demands.push({ from: lo, to: lo + 1, width: need + 6 });
+    else sizing.extents[lo].right = Math.max(sizing.extents[lo].right, need);
+    if (frame.lanes.size === 1) guardRoom.set(frame.id, need - (BAR + 10 + 8));
   }
+  tabDemands(sizing, frames);
+  return guardRoom;
+}
+
+/**
+ * A frame reaches left of its first lifeline by its keyword tab (as frameBoxes draws it), and 8
+ * more around each frame inside it that starts there: the stretch from the lifeline before is
+ * made wide enough that the tab clears that lifeline's activation bars.
+ */
+function tabDemands(sizing: Sizing, frames: Fragment[]) {
+  const lowest = (frame: Fragment) => (frame.lanes.size ? Math.min(...frame.lanes) : -1);
+  const reach = (frame: Fragment): number =>
+    Math.max(
+      BAR + 18,
+      (frame.kind === "rect" ? 0 : sizing.measure(frame.kind, SMALL, 600) + 20) + BAR + 2,
+      ...frames
+        .filter((child) => child.parent === frame && lowest(child) === lowest(frame))
+        .map((child) => reach(child) + 8),
+    );
+  for (const frame of frames) {
+    const lo = lowest(frame);
+    if (lo > 0)
+      sizing.demands.push({ from: lo - 1, to: lo, width: reach(frame) + BAR / 2 + 2 * NEST + 6 });
+  }
+}
+
+/** The lanes' center lines: solved from what their content needs, then moved to where the source places them. */
+function laneCenters(sizing: Sizing, placedAt: (id: string) => number | undefined) {
+  const { extents, demands, ids, head } = sizing;
   // Frames need room for their keyword tab left of the first column.
-  const framed = diagram.events.some((event) => event.type === "start");
+  const framed = sizing.diagram.events.some((event) => event.type === "start");
   const { centers } = solveLanes(extents, demands, {
     gap: GAP,
     start: 0,
@@ -234,74 +350,99 @@ export function sequenceLanes(
       ? centers[lane]
       : left + head(id).width / 2;
   });
-  const xs = wanted.some((center) => center !== undefined)
+  return wanted.some((center) => center !== undefined)
     ? placedLanes(extents, demands, GAP, centers[0], wanted)
     : centers;
-  const x = (id: string) => xs[index.get(id)!];
+}
 
-  // Frames' horizontal extent depends only on what happens inside them: find it first, so their
-  // conditions can be placed clear of the lifelines and bars in their header rows.
-  const frameX = new Map<string, Box>();
-  {
-    const stack: (LaneFrame & { who: Set<string> })[] = [],
-      all: (LaneFrame & { who: Set<string>; parent?: LaneFrame })[] = [];
-    const nesting = new Map<string, number>();
-    for (const event of diagram.events) {
-      const involve = (...who: string[]) =>
-        stack.forEach((frame) => who.forEach((id) => frame.who.add(id)));
-      if (event.type === "start") {
-        const frame = {
-          id: event.id,
-          kind: event.kind,
-          text: event.text,
-          top: 0,
-          bottom: 1,
-          members: [],
-          extra: guardRoom.get(event.id) ?? 0,
-          branches: [],
-          children: [],
-          depth: stack.length,
-          who: new Set<string>(),
-          parent: stack.at(-1),
-        };
-        stack.at(-1)?.children.push(frame);
-        all.push(frame);
-        stack.push(frame);
-      } else if (event.type === "end") stack.pop();
-      else if (event.type === "activate") {
-        nesting.set(event.who, (nesting.get(event.who) ?? 0) + 1);
-        involve(event.who);
-      } else if (event.type === "deactivate")
-        nesting.set(event.who, Math.max(0, (nesting.get(event.who) ?? 0) - 1));
-      else if (event.type === "note") {
-        involve(...event.who);
-        if (event.placement === "right")
-          stack.forEach((frame) => {
-            frame.extra = Math.max(frame.extra, labelOf(event.text).width + 20 + 16 + BAR);
-          });
-      } else if (event.type === "message") {
-        if (event.activate) nesting.set(event.to, (nesting.get(event.to) ?? 0) + 1);
-        involve(event.from, event.to);
-        if (event.from === event.to)
-          stack.forEach((frame) => {
-            frame.extra = Math.max(
-              frame.extra,
-              (nesting.get(event.from) ?? 0) * NEST + SELF + labelOf(event.text).width + 12,
-            );
-          });
-        if (event.deactivate)
-          nesting.set(event.from, Math.max(0, (nesting.get(event.from) ?? 0) - 1));
-      }
-    }
-    for (const frame of all) frame.members = [...frame.who].map(x);
-    for (const [id, box] of frameBoxes(
-      all.filter((frame) => !frame.parent),
-      measure,
-      { reach: BAR + 10, fallback: xs[0] ?? 0 },
-    ))
-      frameX.set(id, box);
+/** A frame as its horizontal extent is found: the lifelines it involves and the frame around it. */
+type Extent = LaneFrame & { who: Set<string>; parent?: LaneFrame };
+
+/** The frames still open, the bars open on each lifeline, and the room the frames need right of their lifelines. */
+interface FrameWalk {
+  sizing: Sizing;
+  stack: Extent[];
+  nesting: Nesting;
+}
+
+/** The open frames reach `amount` right of their rightmost lifeline. */
+function reachRight(walk: FrameWalk, amount: number) {
+  walk.stack.forEach((frame) => {
+    frame.extra = Math.max(frame.extra, amount);
+  });
+}
+
+/**
+ * What an event inside the open frames asks of them: its lifelines (a bar that closes takes no
+ * part), and room for a note or a self message right of them.
+ */
+function frameContent(walk: FrameWalk, event: SequenceEvent) {
+  const { stack, nesting, sizing } = walk;
+  if (event.type === "deactivate") {
+    nest(nesting, event.who, -1);
+    return;
   }
-  return { frameX, guardRoom, head, headers, ids, labelOf, titleRoom, x, xs };
+  for (const id of involved(event)) stack.forEach((frame) => frame.who.add(id));
+  if (event.type === "activate") nest(nesting, event.who, 1);
+  else if (event.type === "note" && event.placement === "right")
+    reachRight(walk, sizing.labelOf(event.text).width + 20 + 16 + BAR);
+  else if (event.type === "message") frameMessage(walk, event);
+}
+
+/** A message inside the open frames: the bars it opens and closes, and room for a self message's loop and label. */
+function frameMessage(walk: FrameWalk, event: MessageEvent) {
+  const { nesting, sizing } = walk;
+  if (event.activate) nest(nesting, event.to, 1);
+  if (event.from === event.to)
+    reachRight(
+      walk,
+      (nesting.get(event.from) ?? 0) * NEST + SELF + sizing.labelOf(event.text).width + 12,
+    );
+  if (event.deactivate) nest(nesting, event.from, -1);
+}
+
+/**
+ * Frames' horizontal extent depends only on what happens inside them: found first, so their
+ * conditions can be placed clear of the lifelines and bars in their header rows.
+ */
+function frameExtents(
+  sizing: Sizing,
+  guardRoom: Map<string, number>,
+  x: (id: string) => number,
+  fallback: number,
+): Map<string, Box> {
+  const walk: FrameWalk = { sizing, stack: [], nesting: new Map() },
+    all: Extent[] = [];
+  for (const event of sizing.diagram.events) {
+    if (event.type === "start") {
+      const frame: Extent = {
+        id: event.id,
+        kind: event.kind,
+        text: event.text,
+        top: 0,
+        bottom: 1,
+        members: [],
+        extra: guardRoom.get(event.id) ?? 0,
+        branches: [],
+        children: [],
+        depth: walk.stack.length,
+        who: new Set<string>(),
+        parent: walk.stack.at(-1),
+      };
+      walk.stack.at(-1)?.children.push(frame);
+      all.push(frame);
+      walk.stack.push(frame);
+    } else if (event.type === "end") walk.stack.pop();
+    else frameContent(walk, event);
+  }
+  for (const frame of all) frame.members = [...frame.who].map(x);
+  return new Map(
+    frameBoxes(
+      all.filter((frame) => !frame.parent),
+      sizing.measure,
+      { reach: BAR + 10, fallback },
+    ),
+  );
 }
 
 /** A sequence number badge: its radius, its gap to the bar or lifeline it leaves, and the room it takes on the message. */
