@@ -37,7 +37,7 @@ Done when the views are a list of titles, the overview first, each saying what i
 1. **Read the guide:** `tam-diagrams guide <type>` prints the notation of the view's type: what it shows, its rules, each statement under a comment that says what it means, an example, and what is refused with what to write instead (the same guide for people: `docs/guides/<type>.md`). Write from it: the Mermaid types read a subset of Mermaid under TAM's rules, and the block diagram takes only Mermaid's arrows.
 2. **Write the source** to `<name>.tam` for a block diagram, `<name>.mmd` for the others. Names are labels in boxes: a few words, `<br>` to break one. With lanes, name each node first inside its lane. Done when every statement is a row of the guide.
 3. **Check:** `tam-diagrams check <file>` prints `<file>:<line>: <message>` for each error, naming what to write instead. Fix and check again until it prints nothing.
-4. **Render:** `tam-diagrams render <file> --background -o <name>.svg` draws the view on its white page, which reads on dark pages too.
+4. **Render:** `tam-diagrams render <file> --background -o <name>.svg` draws the view on its white page, which reads on dark pages too. Done when every view's SVG is written.
 
 ## 3. Hand over
 
@@ -46,7 +46,7 @@ Done when the views are a list of titles, the overview first, each saying what i
 - **As draw.io:** `tam-diagrams convert <file> -o <name>.drawio` writes a page drawn with the TAMshapes stencils, for people who edit in draw.io.
 - **To arrange by hand:** `tam-diagrams edit <file>` serves the editor on the file and opens it in a window on the user's screen; Save writes the file back, and the command runs until stopped. Offer it, and start it in the background once they agree.
 
-Done when the user has every view's title, source and picture.
+Done when the user has every view's title, its source as its file has it, and its picture.
 
 When the user finds a view hard to read, fix it in this order, then check and render it again: `direction LR` for a tall, narrow picture, protocols only where they tell something, shorter names, two views instead of one, and last, positions by hand (the guide's position rows).
 
