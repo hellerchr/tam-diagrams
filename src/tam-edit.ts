@@ -11,7 +11,6 @@ import {
   ELEMENT,
   ELEMENT_KINDS,
   INTERFACE,
-  isActive,
   isStorage,
   LABEL_PLACE,
   parseTam,
@@ -73,11 +72,6 @@ function read(line: string): Declaration | undefined {
     .replace(/:::/g, " :::")
     .trim()
     .split(/\s+/);
-  const at = placed && {
-    x: Number(placed[1]),
-    y: Number(placed[2]),
-    ...(placed[3] ? { width: Number(placed[3]), height: Number(placed[4]) } : {}),
-  };
   return {
     indent: indentOf(line),
     kind,
@@ -86,12 +80,23 @@ function read(line: string): Declaration | undefined {
     color: options.find((option) => option.startsWith(":::"))?.slice(3),
     stack: options.includes("stack"),
     multiple: options.includes("..."),
-    ...(at ? { at } : {}),
+    ...(placed ? { at: placementOf(placed) } : {}),
     ...(copy ? { copyAt: { x: Number(copy[1]), y: Number(copy[2]) } } : {}),
-    brace: !brace ? "" : brace === "{" ? "{" : "{}",
+    brace: braceOf(brace),
     comment,
   };
 }
+
+/** A placement as `PLACEMENT` matched it: `@x,y`, with `WxH` when it has a size. */
+const placementOf = (placed: RegExpMatchArray): Placement => ({
+  x: Number(placed[1]),
+  y: Number(placed[2]),
+  ...(placed[3] ? { width: Number(placed[3]), height: Number(placed[4]) } : {}),
+});
+
+/** The brace a declaration ends with, as a declaration holds it. */
+const braceOf = (brace: string | undefined): Declaration["brace"] =>
+  !brace ? "" : brace === "{" ? "{" : "{}";
 
 /** A label as a declaration holds it: in brackets, or in quotes when it has a bracket itself. */
 const labelText = (label: string) =>
@@ -102,7 +107,6 @@ const labelText = (label: string) =>
       : `[${label.replace(/\]/g, ")")}]`;
 
 function write(declaration: Declaration): string {
-  const { at } = declaration;
   return [
     `${declaration.indent}${declaration.kind}`,
     declaration.id && ` ${declaration.id}`,
@@ -110,18 +114,19 @@ function write(declaration: Declaration): string {
     declaration.color && `:::${declaration.color}`,
     declaration.stack && " stack",
     declaration.multiple && " ...",
-    at &&
-      ` @${number(at.x)},${number(at.y)}${at.width === undefined ? "" : ` ${number(at.width)}x${number(at.height!)}`}`,
-    // A copy's position is the second one: it is written only after the element's own.
-    at &&
-      declaration.multiple &&
-      declaration.copyAt &&
-      ` @${number(declaration.copyAt.x)},${number(declaration.copyAt.y)}`,
+    placesText(declaration),
     declaration.brace && ` ${declaration.brace}`,
     declaration.comment && ` ${declaration.comment}`,
   ]
     .filter(Boolean)
     .join("");
+}
+
+/** The placements of a declaration: its own, and its copy's after it, the second one. */
+function placesText({ at, copyAt, multiple }: Declaration): string {
+  if (!at) return "";
+  const own = ` @${number(at.x)},${number(at.y)}${at.width === undefined ? "" : ` ${number(at.width)}x${number(at.height!)}`}`;
+  return multiple && copyAt ? `${own} @${number(copyAt.x)},${number(copyAt.y)}` : own;
 }
 
 /** Text as a label holds it: line breaks as `<br>`, and nothing that would end the label or its line. */
@@ -151,16 +156,28 @@ function writeConnection(connection: Connection): string {
 
 /** A connection as a statement, without the place of its label. */
 function writeLink(connection: Connection): string {
-  const { from, to, word, both } = connection,
-    label = connection.label && cleanWire(connection.label),
-    protocol = connection.protocol && cleanWire(connection.protocol),
-    at = protocol ? ` @${protocol}` : "";
+  const { from, to, word } = connection,
+    { label, protocol, at } = wireTexts(connection);
   if (word === "anchor") return `${from} -.- ${to}`;
   if (word === "dependency") return `${from} -. ${label ?? "use"} .-> ${to}`;
   if (word === "---")
     return label || protocol
       ? `${from} -- ${label ?? ""}${at} --- ${to}`.replace("--  @", "-- @")
       : `${from} --- ${to}`;
+  return writeArrow(connection);
+}
+
+/** A connection's label and protocol as its statement holds them, and the protocol behind its `@`. */
+function wireTexts(connection: Connection) {
+  const label = connection.label && cleanWire(connection.label),
+    protocol = connection.protocol && cleanWire(connection.protocol);
+  return { label, protocol, at: protocol ? ` @${protocol}` : "" };
+}
+
+/** A connection with an arrowhead and a word: an access, a call, a request, a socket's line. */
+function writeArrow(connection: Connection): string {
+  const { from, to, word, both } = connection,
+    { label, at } = wireTexts(connection);
   if (word === "requires") return `${from} -- requires${label ? ` ${label}` : ""}${at} --> ${to}`;
   return `${from} ${both ? "<--" : "--"} ${word}${label ? `: ${label}` : ""}${at} --> ${to}`;
 }
@@ -297,8 +314,13 @@ function openBlock(lines: string[], index: number): number {
 
 /** The indent of the statements in the block a declaration opens. */
 function innerIndent(lines: string[], start: number, end: number): string {
+  return firstIndent(lines, start, end) ?? `${indentOf(lines[start])}  `;
+}
+
+/** The indent of the first statement in the block a declaration opens; none in an empty block. */
+function firstIndent(lines: string[], start: number, end: number): string | undefined {
   const first = lines.slice(start + 1, end).find((line) => line.trim());
-  return first ? indentOf(first) : `${indentOf(lines[start])}  `;
+  return first && indentOf(first);
 }
 
 /** Where a new top-level element goes: after the last one, or after the header of a source without any. */
@@ -364,20 +386,30 @@ export function setElement(source: string, id: string, change: ElementChange): s
     node = declared(diagram, id);
   const declaration = isElement(node) ? read(lines[node.line - 1]) : undefined;
   if (!declaration) return source;
+  const next = changed(declaration, change);
+  // A group needs no id, every other kind does.
+  if (!next.id) next.id = freshId(idsOf(diagram), next.label || next.kind);
+  lines[node!.line - 1] = write(next);
+  return lines.join("\n");
+}
+
+/** A declaration with a change made. */
+function changed(declaration: Declaration, change: ElementChange): Declaration {
   const next = { ...declaration };
   if (change.kind) next.kind = change.kind;
   if (change.label !== undefined) next.label = cleanLabel(change.label);
   if (change.color !== undefined)
     next.color = change.color && COLORS.has(change.color) ? change.color : undefined;
+  return withMultiplicity(next, change);
+}
+
+/** A declaration stacked or shown as several as a change says: an element drawn as several is drawn one way, stacked or as copies with dots. */
+function withMultiplicity(next: Declaration, change: ElementChange): Declaration {
   if (change.stack !== undefined) next.stack = change.stack;
   if (change.multiple !== undefined) next.multiple = change.multiple;
-  // An element drawn as several is drawn one way: stacked, or as copies with dots.
   if (change.stack) next.multiple = false;
   if (change.multiple) next.stack = false;
-  // A group needs no id, every other kind does.
-  if (!next.id) next.id = freshId(idsOf(diagram), next.label || next.kind);
-  lines[node!.line - 1] = write(next);
-  return lines.join("\n");
+  return next;
 }
 
 /** The connection a wire of the picture draws, as its statement says it; a copy's wire is its original's. */
@@ -430,21 +462,33 @@ export function connectionOf(source: string, edge: string): Connection | undefin
 export function defaultConnection(diagram: TamDiagram, from: string, to: string): Connection {
   const a = declared(diagram, from)!,
     b = declared(diagram, to)!;
-  const holds = (outer: TamNode, part: TamNode) => inside(diagram, outer.id).includes(part.id);
-  const connection = (word: Connection["word"], label?: string, swap = false): Connection => ({
+  const [word, label, swap] = kindWord(a, b) ?? activeWord(diagram, a, b);
+  return {
     from: swap ? b.id : a.id,
     to: swap ? a.id : b.id,
     word,
     both: false,
     ...(label ? { label } : {}),
-  });
-  if (a.kind === "note" || b.kind === "note")
-    return connection("anchor", undefined, a.kind !== "note");
-  if (a.kind === "package" || b.kind === "package") return connection("dependency", "use");
-  if (isStorage(a) && isStorage(b)) return connection("dependency", "pointer");
-  if (isStorage(a) || isStorage(b)) return connection("reads/writes", undefined, isStorage(a));
-  if (holds(a, b) || holds(b, a)) return connection("delegates", undefined, holds(b, a));
-  return connection("calls");
+  };
+}
+
+/** A default word with its label, and whether the ends swap. */
+type DefaultWord = [Connection["word"], string | undefined, boolean];
+
+/** The word a note or a package takes, or a storage at either end. */
+function kindWord(a: TamNode, b: TamNode): DefaultWord | undefined {
+  if (a.kind === "note" || b.kind === "note") return ["anchor", undefined, a.kind !== "note"];
+  if (a.kind === "package" || b.kind === "package") return ["dependency", "use", false];
+  if (isStorage(a) && isStorage(b)) return ["dependency", "pointer", false];
+  if (isStorage(a) || isStorage(b)) return ["reads/writes", undefined, isStorage(a)];
+  return undefined;
+}
+
+/** The word between two agents: one delegates to the agent it holds, else calls the other. */
+function activeWord(diagram: TamDiagram, a: TamNode, b: TamNode): DefaultWord {
+  const holds = (outer: TamNode, part: TamNode) => inside(diagram, outer.id).includes(part.id);
+  if (holds(a, b) || holds(b, a)) return ["delegates", undefined, holds(b, a)];
+  return ["calls", undefined, false];
 }
 
 /**
@@ -471,10 +515,7 @@ export function connect(
     lines[node!.line - 1] = write({ ...declaration, id });
     connection[end] = id;
   }
-  // After the last statement, before blank lines at the end of the source.
-  let end = lines.length;
-  while (end > 0 && !lines[end - 1].trim()) end--;
-  lines.splice(end, 0, writeConnection(connection));
+  lines.splice(statementsEnd(lines), 0, writeConnection(connection));
   return lines.join("\n");
 }
 
@@ -500,19 +541,26 @@ export function setConnection(source: string, edge: string, change: ConnectionCh
   const next: Connection = { ...old, ...rest };
   if (reverse) [next.from, next.to] = [old.to, old.from];
   if (next.word !== "calls" && next.word !== "sends data") next.both = false;
-  // An access carries no protocol, and a dependency only its keyword.
-  if (next.word === "dependency") {
-    next.protocol = undefined;
-    if (old.word !== "dependency" && change.label === undefined) next.label = "use";
-  } else if (old.word === "dependency" && change.label === undefined) next.label = undefined;
-  if (["reads", "writes", "reads/writes", "delegates"].includes(next.word))
-    next.protocol = undefined;
+  fitWord(next, old, change.label !== undefined);
   rewrite(
     lines,
     found.line,
     found.connections.map((connection, index) => (index === found.index ? next : connection)),
   );
   return lines.join("\n");
+}
+
+/**
+ * Fits what a connection carries to its word: an access carries no protocol, and a dependency only
+ * its keyword, `use` unless a label is `given`.
+ */
+function fitWord(next: Connection, old: Connection, given: boolean) {
+  if (next.word === "dependency") {
+    next.protocol = undefined;
+    if (old.word !== "dependency" && !given) next.label = "use";
+  } else if (old.word === "dependency" && !given) next.label = undefined;
+  if (["reads", "writes", "reads/writes", "delegates"].includes(next.word))
+    next.protocol = undefined;
 }
 
 /** Gives an element an interface it provides or requires: a ball or a socket on a line. */
@@ -526,9 +574,7 @@ export function addInterface(
     lines = linesOf(source),
     text = cleanLabel(name).replace(/<br>/g, " ");
   if (!isElement(node) || !text) return source;
-  let end = lines.length;
-  while (end > 0 && !lines[end - 1].trim()) end--;
-  lines.splice(end, 0, `${node.id} ${offers} ${text}`);
+  lines.splice(statementsEnd(lines), 0, `${node.id} ${offers} ${text}`);
   return lines.join("\n");
 }
 
@@ -550,105 +596,124 @@ export function renameId(source: string, id: string, next: string): string {
   const diagram = parseTam(source),
     node = declared(diagram, id),
     lines = linesOf(source);
-  if (
-    !isElement(node) ||
-    !/^[A-Za-z_]\w*$/.test(next) ||
-    RESERVED.has(next) ||
-    diagram.nodes.has(next) ||
-    next === node.id
-  )
-    return source;
+  if (!isElement(node) || !canTake(diagram, node, next)) return source;
   const declaration = read(lines[node.line - 1]);
   if (!declaration) return source;
   // Bottom up, so the lines above keep their numbers.
   for (let index = lines.length - 1; index >= 0; index--) {
-    if (index === node.line - 1) {
+    if (index === node.line - 1)
       lines[index] = write({ ...declaration, id: next, label: declaration.label ?? node.id });
-      continue;
-    }
-    const statement = statementOf(lines[index]);
-    if (read(lines[index])) continue;
-    const offer = statement.match(INTERFACE);
-    if (offer) {
-      if (offer[1] === node.id)
-        lines[index] = lines[index].replace(new RegExp(`^(\\s*)${node.id}\\b`), `$1${next}`);
-      continue;
-    }
-    const connections = quietly(() => readConnections(statement, 0));
-    if (!connections?.some((item) => item.from === node.id || item.to === node.id)) continue;
-    // A statement that names only this element among its ends keeps its text.
-    const only = connections.length === 1;
-    if (only) {
-      const [left, ...rest] = lines[index].split(/(?=\s(?:<--|--|-\.|---))/),
-        tail = rest.join("");
-      const renamed = (text: string) =>
-        text.replace(new RegExp(`(^|[^\\w])${node.id}(?![\\w])`, "g"), `$1${next}`);
-      const [connection] = connections,
-        end = tail.match(/(-->|---|\.->|-\.-)\s*\w+(?:\s+@\s*[-+\d.]+\s*,\s*[-+\d.]+)?\s*(%%.*)?$/);
-      if (end && left !== undefined) {
-        const at = tail.lastIndexOf(end[0]) + end[1].length;
-        lines[index] =
-          (connection.from === node.id ? renamed(left) : left) +
-          tail.slice(0, at) +
-          (connection.to === node.id ? renamed(tail.slice(at)) : tail.slice(at));
-        continue;
-      }
-    }
-    rewrite(
-      lines,
-      index,
-      connections.map((item) => ({
-        ...item,
-        from: item.from === node.id ? next : item.from,
-        to: item.to === node.id ? next : item.to,
-      })),
-    );
+    else if (!read(lines[index])) renameIn(lines, index, node.id, next);
   }
   return lines.join("\n");
+}
+
+/** Whether an element may take an id: a word no other element has, not reserved, and not its own. */
+const canTake = (diagram: TamDiagram, node: TamNode, next: string) =>
+  /^[A-Za-z_]\w*$/.test(next) &&
+  !RESERVED.has(next) &&
+  !diagram.nodes.has(next) &&
+  next !== node.id;
+
+/** Renames an element in the interface or the connections a statement declares. */
+function renameIn(lines: string[], index: number, id: string, next: string) {
+  const statement = statementOf(lines[index]),
+    offer = statement.match(INTERFACE);
+  if (offer) {
+    if (offer[1] === id)
+      lines[index] = lines[index].replace(new RegExp(`^(\\s*)${id}\\b`), `$1${next}`);
+    return;
+  }
+  const connections = quietly(() => readConnections(statement, 0));
+  if (!connections?.some((item) => item.from === id || item.to === id)) return;
+  // A statement that names only this element among its ends keeps its text.
+  const kept = connections.length === 1 && renamedEnds(lines[index], connections[0], id, next);
+  if (kept) {
+    lines[index] = kept;
+    return;
+  }
+  rewrite(
+    lines,
+    index,
+    connections.map((item) => withEnds(item, (end) => (end === id ? next : end))),
+  );
+}
+
+/** A line of one connection with the element renamed at its ends, the rest of its text as it was; undefined where its end is not found. */
+function renamedEnds(line: string, connection: Connection, id: string, next: string) {
+  const [left, ...rest] = line.split(/(?=\s(?:<--|--|-\.|---))/),
+    tail = rest.join("");
+  const renamed = (text: string) =>
+    text.replace(new RegExp(`(^|[^\\w])${id}(?![\\w])`, "g"), `$1${next}`);
+  const end = tail.match(/(-->|---|\.->|-\.-)\s*\w+(?:\s+@\s*[-+\d.]+\s*,\s*[-+\d.]+)?\s*(%%.*)?$/);
+  if (!end || left === undefined) return undefined;
+  const at = tail.lastIndexOf(end[0]) + end[1].length;
+  return (
+    (connection.from === id ? renamed(left) : left) +
+    tail.slice(0, at) +
+    (connection.to === id ? renamed(tail.slice(at)) : tail.slice(at))
+  );
+}
+
+/** What a removal takes away: elements with their parts, whole lines, and connections out of their statements. */
+interface Removal {
+  gone: Set<string>;
+  dropped: Set<number>;
+  /** The connections that go, by the index of their statement's line and their index in it. */
+  cut: Map<number, Set<number>>;
 }
 
 /** Removes elements, with what they hold and every connection at them, and connections, by id. */
 export function remove(source: string, ids: Iterable<string>): string {
   const diagram = parseTam(source),
     lines = linesOf(source);
-  const gone = new Set<string>(),
-    dropped = new Set<number>(),
-    cut = new Map<number, Set<number>>();
-  for (const id of ids) {
-    const node = declared(diagram, id);
-    if (isElement(node)) {
-      for (const part of [node.id, ...inside(diagram, node.id)]) gone.add(part);
-      for (let index = node.line - 1; index <= blockEnd(lines, node.line - 1); index++)
-        dropped.add(index);
-      continue;
-    }
-    const found = findConnection(diagram, lines, id);
-    if (found) cut.set(found.line, (cut.get(found.line) ?? new Set()).add(found.index));
-    else if (diagram.edges.some((edge) => edge.id === id.replace(/#\d+$/, "")))
-      // An interface's line: the statement that declares it goes.
-      dropped.add(diagram.edges.find((edge) => edge.id === id.replace(/#\d+$/, ""))!.line - 1);
-  }
+  const removal: Removal = { gone: new Set(), dropped: new Set(), cut: new Map() };
+  for (const id of ids) noteRemoval(diagram, lines, removal, id);
   // Bottom up, so the lines above keep their numbers.
-  for (let index = lines.length - 1; index >= 0; index--) {
-    if (dropped.has(index)) {
-      lines.splice(index, 1);
-      continue;
-    }
-    const statement = statementOf(lines[index]),
-      owner = statement.match(INTERFACE)?.[1];
-    if (owner && !read(lines[index]) && gone.has(owner)) {
-      lines.splice(index, 1);
-      continue;
-    }
-    const connections = read(lines[index]) ? null : quietly(() => readConnections(statement, 0));
-    if (!connections) continue;
-    const kept = connections.filter(
-      (connection, at) =>
-        !cut.get(index)?.has(at) && !gone.has(connection.from) && !gone.has(connection.to),
-    );
-    if (kept.length < connections.length) rewrite(lines, index, kept);
-  }
+  for (let index = lines.length - 1; index >= 0; index--) removeAt(lines, index, removal);
   return tidy(lines).join("\n");
+}
+
+/** Notes what removing one element or connection takes away. */
+function noteRemoval(diagram: TamDiagram, lines: string[], removal: Removal, id: string) {
+  const node = declared(diagram, id);
+  if (isElement(node)) {
+    for (const part of [node.id, ...inside(diagram, node.id)]) removal.gone.add(part);
+    for (let index = node.line - 1; index <= blockEnd(lines, node.line - 1); index++)
+      removal.dropped.add(index);
+    return;
+  }
+  const found = findConnection(diagram, lines, id),
+    { cut } = removal;
+  if (found) cut.set(found.line, (cut.get(found.line) ?? new Set()).add(found.index));
+  else if (diagram.edges.some((edge) => edge.id === id.replace(/#\d+$/, "")))
+    // An interface's line: the statement that declares it goes.
+    removal.dropped.add(
+      diagram.edges.find((edge) => edge.id === id.replace(/#\d+$/, ""))!.line - 1,
+    );
+}
+
+/** Whether a statement declares an interface of an element that goes. */
+function ownerGone(statement: string, declares: boolean, gone: Set<string>) {
+  const owner = statement.match(INTERFACE)?.[1];
+  return !!owner && !declares && gone.has(owner);
+}
+
+/** Removes a line, or the connections of its statement, that a removal takes away. */
+function removeAt(lines: string[], index: number, { gone, dropped, cut }: Removal) {
+  const statement = statementOf(lines[index]),
+    declares = !!read(lines[index]);
+  if (dropped.has(index) || ownerGone(statement, declares, gone)) {
+    lines.splice(index, 1);
+    return;
+  }
+  const connections = declares ? null : quietly(() => readConnections(statement, 0));
+  if (!connections) return;
+  const kept = connections.filter(
+    (connection, at) =>
+      !cut.get(index)?.has(at) && !gone.has(connection.from) && !gone.has(connection.to),
+  );
+  if (kept.length < connections.length) rewrite(lines, index, kept);
 }
 
 /** The result, or null where the statement is no connection at all. */
@@ -696,33 +761,44 @@ export function moveInto(source: string, ids: Iterable<string>, parent: string |
     lines = linesOf(source);
   const target = parent ? declared(diagram, parent) : undefined;
   if (parent && !isElement(target)) return source;
-  const moving = outermost(diagram, ids).filter(
-    (node) =>
-      holder(diagram, node.id) !== (target?.id ?? null) &&
-      node.id !== target?.id &&
-      !(target && inside(diagram, node.id).includes(target.id)),
-  );
+  const moving = outermost(diagram, ids).filter((node) => movesInto(diagram, node, target));
   if (!moving.length) return source;
   // Taken out bottom up, so the lines above keep their numbers; put back in their order.
   const blocks: string[][] = [];
   let targetLine = target ? target.line - 1 : -1;
   for (const node of moving.toReversed()) {
     const start = node.line - 1,
-      count = blockEnd(lines, start) - start + 1,
-      base = indentOf(lines[start]).length;
-    blocks.unshift(
-      lines.splice(start, count).map((line) => line.slice(Math.min(base, indentOf(line).length))),
-    );
-    if (start < targetLine) targetLine -= count;
+      block = takeOut(lines, start);
+    blocks.unshift(block);
+    if (start < targetLine) targetLine -= block.length;
   }
-  let at: number,
-    indent = "";
-  if (target) {
-    at = openBlock(lines, targetLine);
-    indent = innerIndent(lines, targetLine, at);
-  } else at = afterElements(lines);
-  lines.splice(at, 0, ...blocks.flat().map((line) => (line.trim() ? indent + line : line)));
+  putBack(lines, blocks.flat(), target ? targetLine : undefined);
   return tidy(lines).join("\n");
+}
+
+/** Puts lines into the block of the declaration at `targetLine`, indented as its parts; at the top level without it. */
+function putBack(lines: string[], moved: string[], targetLine: number | undefined) {
+  const at = targetLine === undefined ? afterElements(lines) : openBlock(lines, targetLine),
+    indent = targetLine === undefined ? "" : innerIndent(lines, targetLine, at);
+  lines.splice(at, 0, ...moved.map((line) => (line.trim() ? indent + line : line)));
+}
+
+/** Whether an element moves into `target`: one that stands elsewhere and does not hold it. */
+const movesInto = (diagram: TamDiagram, node: TamNode, target: TamNode | undefined) =>
+  holder(diagram, node.id) !== (target?.id ?? null) &&
+  node.id !== target?.id &&
+  !(target && inside(diagram, node.id).includes(target.id));
+
+/** Takes a declaration with its block out of the lines, its indent removed. */
+function takeOut(lines: string[], start: number): string[] {
+  const count = blockEnd(lines, start) - start + 1;
+  return dedent(lines.splice(start, count));
+}
+
+/** Lines without the indent of the first of them. */
+function dedent(lines: string[]): string[] {
+  const base = indentOf(lines[0]).length;
+  return lines.map((line) => line.slice(Math.min(base, indentOf(line).length)));
 }
 
 /**
@@ -734,25 +810,25 @@ export function unwrap(source: string, id: string): string {
   const diagram = parseTam(source),
     node = declared(diagram, id);
   if (!isElement(node) || !node.children.length) return source;
-  const joins = diagram.edges
-    .filter((edge) => edge.source === node.id || edge.target === node.id)
-    .map((edge) => edge.id);
-  const lines = linesOf(joins.length ? remove(source, joins) : source);
+  const lines = linesOf(withoutConnections(source, diagram, node.id));
   // The declaration may have moved up when connections above it went: find it again by its id.
   const start = lines.findIndex((line) => read(line)?.id === node.id),
     end = blockEnd(lines, start);
   if (start < 0 || end === start) return source;
   const outer = indentOf(lines[start]).length,
-    inner =
-      lines
-        .slice(start + 1, end)
-        .find((line) => line.trim())
-        ?.match(/^\s*/)![0].length ?? outer;
-  const shift = Math.max(0, inner - outer);
+    shift = Math.max(0, (firstIndent(lines, start, end)?.length ?? outer) - outer);
   const parts = lines
     .slice(start + 1, end)
     .map((line) => (line.slice(0, shift).trim() ? line : line.slice(shift)));
   return [...lines.slice(0, start), ...parts, ...lines.slice(end + 1)].join("\n");
+}
+
+/** A source without the connections at an element. */
+function withoutConnections(source: string, diagram: TamDiagram, id: string): string {
+  const joins = diagram.edges
+    .filter((edge) => edge.source === id || edge.target === id)
+    .map((edge) => edge.id);
+  return joins.length ? remove(source, joins) : source;
 }
 
 /**
@@ -801,15 +877,8 @@ export function duplicate(
         id,
         // An element without a name shows its id: the copy shows the same.
         label: declaration.label ?? (declaration.id || undefined),
-        at: declaration.at && {
-          ...declaration.at,
-          x: declaration.at.x + offset.x,
-          y: declaration.at.y + offset.y,
-        },
-        copyAt: declaration.copyAt && {
-          x: declaration.copyAt.x + offset.x,
-          y: declaration.copyAt.y + offset.y,
-        },
+        at: declaration.at && shifted(declaration.at, offset),
+        copyAt: declaration.copyAt && shifted(declaration.copyAt, offset),
       });
     });
     lines.splice(end + 1, 0, ...copy);
@@ -826,26 +895,23 @@ export function copyOf(source: string, ids: Iterable<string>): string {
     lines = linesOf(source),
     nodes = outermost(diagram, ids),
     copied = new Set(nodes.flatMap((node) => [node.id, ...inside(diagram, node.id)]));
-  const out: string[] = [];
-  for (const node of nodes) {
-    const start = node.line - 1,
-      base = indentOf(lines[start]).length;
-    for (const line of lines.slice(start, blockEnd(lines, start) + 1))
-      out.push(line.slice(Math.min(base, indentOf(line).length)));
-  }
-  for (const line of lines) {
-    const statement = statementOf(line);
-    if (!statement || read(line)) continue;
-    const owner = statement.match(INTERFACE)?.[1];
-    if (owner) {
-      if (copied.has(owner)) out.push(statement);
-      continue;
-    }
-    for (const connection of quietly(() => readConnections(statement, 0)) ?? [])
-      if (copied.has(connection.from) && copied.has(connection.to))
-        out.push(writeConnection(connection));
-  }
-  return out.join("\n");
+  return [
+    ...nodes.flatMap((node) =>
+      dedent(lines.slice(node.line - 1, blockEnd(lines, node.line - 1) + 1)),
+    ),
+    ...lines.flatMap((line) => statementsAmong(line, copied)),
+  ].join("\n");
+}
+
+/** The interface or the connections a line declares among the `copied` elements. */
+function statementsAmong(line: string, copied: Set<string>): string[] {
+  const statement = statementOf(line);
+  if (!statement || read(line)) return [];
+  const owner = statement.match(INTERFACE)?.[1];
+  if (owner) return copied.has(owner) ? [statement] : [];
+  return (quietly(() => readConnections(statement, 0)) ?? [])
+    .filter((connection) => copied.has(connection.from) && copied.has(connection.to))
+    .map(writeConnection);
 }
 
 /**
@@ -858,63 +924,118 @@ export function paste(
   fragment: string,
   options: { at?: { x: number; y: number }; placed?: boolean } = {},
 ): { source: string; ids: string[] } {
-  const diagram = parseTam(source),
-    lines = linesOf(source),
-    taken = idsOf(diagram),
-    renamed = new Map<string, string>(),
-    made: string[] = [];
-  // Parsed on its own first: what is pasted is a diagram of its own.
-  const pasted = parseTam(fragment),
-    places = [...pasted.nodes.values()].flatMap((node) => (node.at ? [node.at] : []));
-  const dx = options.at && places.length ? options.at.x - Math.min(...places.map((p) => p.x)) : 0,
-    dy = options.at && places.length ? options.at.y - Math.min(...places.map((p) => p.y)) : 0;
-  const declarations: string[] = [],
-    statements: string[] = [];
-  let depth = 0;
-  for (const line of linesOf(fragment)) {
-    const statement = statementOf(line),
-      declaration = read(line);
-    if (declaration) {
-      const id = declaration.id && freshId(taken, declaration.id.replace(/\d+$/, ""));
-      if (declaration.id) renamed.set(declaration.id, id);
-      if (!depth && id) made.push(id);
-      if (declaration.brace === "{") depth++;
-      declarations.push(
-        write({
-          ...declaration,
-          id,
-          label: declaration.label ?? (declaration.id || undefined),
-          at:
-            options.placed === false || !declaration.at
-              ? undefined
-              : { ...declaration.at, x: declaration.at.x + dx, y: declaration.at.y + dy },
-          copyAt:
-            options.placed === false || !declaration.copyAt
-              ? undefined
-              : { x: declaration.copyAt.x + dx, y: declaration.copyAt.y + dy },
-        }),
-      );
-    } else if (statement === "}" || statement === "...") {
-      if (statement === "}") depth--;
-      declarations.push(line);
-    } else if (statement.match(INTERFACE)) {
-      const [, owner, offers, name] = statement.match(INTERFACE)!;
-      statements.push(`${renamed.get(owner) ?? owner} ${offers} ${name}`);
-    } else
-      for (const connection of quietly(() => readConnections(statement, 0)) ?? [])
-        statements.push(
-          writeConnection({
-            ...connection,
-            from: renamed.get(connection.from) ?? connection.from,
-            to: renamed.get(connection.to) ?? connection.to,
-          }),
-        );
-  }
-  lines.splice(afterElements(lines), 0, ...declarations);
+  const lines = linesOf(source);
+  const pasting: Pasting = {
+    taken: idsOf(parseTam(source)),
+    renamed: new Map(),
+    made: [],
+    depth: 0,
+    offset: undefined,
+    declarations: [],
+    statements: [],
+  };
+  // Parsed on its own first, placed or not: what is pasted is a diagram of its own.
+  const offset = offsetTo(fragment, options.at);
+  if (options.placed !== false) pasting.offset = offset;
+  for (const line of linesOf(fragment)) pasteLine(pasting, line);
+  lines.splice(afterElements(lines), 0, ...pasting.declarations);
+  lines.splice(statementsEnd(lines), 0, ...pasting.statements);
+  return { source: lines.join("\n"), ids: pasting.made };
+}
+
+/** A fragment on its way into a source: the ids its elements get, and its lines as they go in. */
+interface Pasting {
+  /** The ids the source has, and those the pasted elements got. */
+  taken: Set<string>;
+  renamed: Map<string, string>;
+  /** The top-level elements added. */
+  made: string[];
+  depth: number;
+  /** How far the places of the elements move; none where they are dropped. */
+  offset?: { x: number; y: number };
+  declarations: string[];
+  statements: string[];
+}
+
+/** How far the places of a fragment move for their top left to stand `at`. */
+function offsetTo(fragment: string, at: { x: number; y: number } | undefined) {
+  const places = [...parseTam(fragment).nodes.values()].flatMap((node) =>
+    node.at ? [node.at] : [],
+  );
+  if (!at || !places.length) return { x: 0, y: 0 };
+  return {
+    x: at.x - Math.min(...places.map((p) => p.x)),
+    y: at.y - Math.min(...places.map((p) => p.y)),
+  };
+}
+
+/** Takes one line of a fragment in: a declaration, the end of a block, an interface or connections. */
+function pasteLine(pasting: Pasting, line: string) {
+  const statement = statementOf(line),
+    declaration = read(line),
+    offer = statement.match(INTERFACE);
+  if (declaration) pasteDeclaration(pasting, declaration);
+  else if (statement === "}" || statement === "...") {
+    if (statement === "}") pasting.depth--;
+    pasting.declarations.push(line);
+  } else if (offer) {
+    const [, owner, offers, name] = offer;
+    pasting.statements.push(`${pasting.renamed.get(owner) ?? owner} ${offers} ${name}`);
+  } else pasteConnections(pasting, statement);
+}
+
+/** Takes the connections of a statement in, between the elements as they are renamed. */
+function pasteConnections(pasting: Pasting, statement: string) {
+  for (const connection of quietly(() => readConnections(statement, 0)) ?? [])
+    pasting.statements.push(
+      writeConnection(withEnds(connection, (id) => pasting.renamed.get(id) ?? id)),
+    );
+}
+
+/** Takes a declaration in with an id of its own, moved by the offset. */
+function pasteDeclaration(pasting: Pasting, declaration: Declaration) {
+  const id = declaration.id && freshId(pasting.taken, declaration.id.replace(/\d+$/, ""));
+  if (declaration.id) pasting.renamed.set(declaration.id, id);
+  if (!pasting.depth && id) pasting.made.push(id);
+  if (declaration.brace === "{") pasting.depth++;
+  pasting.declarations.push(
+    write({
+      ...declaration,
+      id,
+      label: declaration.label ?? (declaration.id || undefined),
+      ...placesMoved(declaration, pasting.offset),
+    }),
+  );
+}
+
+/** The places of a declaration moved by an offset; none without one. */
+const placesMoved = (
+  { at, copyAt }: Declaration,
+  offset: { x: number; y: number } | undefined,
+) => ({
+  at: offset && at && shifted(at, offset),
+  copyAt: offset && copyAt && shifted(copyAt, offset),
+});
+
+/** A placement moved by an offset. */
+const shifted = (at: Placement, by: { x: number; y: number }): Placement => ({
+  ...at,
+  x: at.x + by.x,
+  y: at.y + by.y,
+});
+
+/** A connection with its ends renamed. */
+const withEnds = (connection: Connection, rename: (id: string) => string): Connection => ({
+  ...connection,
+  from: rename(connection.from),
+  to: rename(connection.to),
+});
+
+/** Where statements added to a source go: after the last one, before blank lines at its end. */
+function statementsEnd(lines: string[]): number {
   let end = lines.length;
   while (end > 0 && !lines[end - 1].trim()) end--;
-  lines.splice(end, 0, ...statements);
-  return { source: lines.join("\n"), ids: made };
+  return end;
 }
 
 /** Sets the title, the direction or the level; an empty title or level removes its line. */

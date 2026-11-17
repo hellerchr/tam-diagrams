@@ -1,7 +1,14 @@
 /** Turning a layout into placements: every element stays where the picture shows it, written into the source. */
 
 import { type Box, centerOf, overlaps, type Scene } from "./scene.ts";
-import { ELEMENT_KINDS, parseTam, type Placement, type TamDiagram, type TamNode } from "./tam.ts";
+import {
+  ELEMENT_KINDS,
+  isAncestor,
+  parseTam,
+  type Placement,
+  type TamDiagram,
+  type TamNode,
+} from "./tam.ts";
 import type { Measure } from "./text.ts";
 import type { ElkLayout } from "./elk.ts";
 import { copyOf, place, unplace } from "./tam-edit.ts";
@@ -77,15 +84,14 @@ export function overlapping(diagram: TamDiagram, scene: Scene): [string, string]
     const node = diagram.nodes.get(shape.id);
     return !!node && kinds.includes(node.kind) && !shape.id.endsWith("#row");
   });
-  const holds = (outer: string, inner: string) => {
-    for (let node = diagram.nodes.get(inner); node?.parent; node = diagram.nodes.get(node.parent))
-      if (node.parent === outer) return true;
-    return false;
-  };
   const pairs: [string, string][] = [];
   drawn.forEach((a, index) => {
     for (const b of drawn.slice(index + 1))
-      if (overlaps(a.box, b.box, 0.5) && !holds(a.id, b.id) && !holds(b.id, a.id))
+      if (
+        overlaps(a.box, b.box, 0.5) &&
+        !isAncestor(diagram, a.id, b.id) &&
+        !isAncestor(diagram, b.id, a.id)
+      )
         pairs.push([a.id, b.id]);
   });
   return pairs;
@@ -104,18 +110,7 @@ export async function layoutWithin(
   layout?: ElkLayout,
 ): Promise<string> {
   const diagram = parseTam(source),
-    declared = new Set(declaredElements(diagram).map((node) => node.id));
-  /** The elements an element holds: rows of copies and of dots are no elements. */
-  const parts = (id: string): string[] =>
-    diagram.nodes
-      .get(id)!
-      .children.flatMap((child) =>
-        child.endsWith("#row") ? parts(child) : declared.has(child) ? [child] : [],
-      );
-  const named = ids.filter((id) => declared.has(id)),
-    [only] = named,
-    inside = named.length === 1 && parts(only).length > 0,
-    scope = inside ? parts(only) : named;
+    { scope, inside } = scopeOf(diagram, ids);
   if (scope.length < (inside ? 1 : 2)) return source;
   const before = elementBoxes(diagram, layoutPlaced(diagram, measure)),
     stood = scope.flatMap((id) => before.get(id) ?? []);
@@ -125,16 +120,47 @@ export async function layoutWithin(
     alone = parseTam(fragment),
     pinned = parseTam(pin(fragment, await bestLayout(alone, measure, layout), measure)),
     after = [...elementBoxes(pinned, layoutPlaced(pinned, measure)).values()];
-  const dx = Math.min(...stood.map((box) => box.x)) - Math.min(...after.map((box) => box.x)),
-    dy = Math.min(...stood.map((box) => box.y)) - Math.min(...after.map((box) => box.y));
+  const places = movedPlaces(diagram, pinned, {
+    x: Math.min(...stood.map((box) => box.x)) - Math.min(...after.map((box) => box.x)),
+    y: Math.min(...stood.map((box) => box.y)) - Math.min(...after.map((box) => box.y)),
+  });
+  if (inside) places.set(inside, undefined);
+  return place(source, places);
+}
+
+/**
+ * The elements a layout within lays out: the parts of one element when `ids` names a single
+ * element that holds others, which is then `inside`, else the named elements.
+ */
+function scopeOf(diagram: TamDiagram, ids: string[]): { scope: string[]; inside?: string } {
+  const declared = new Set(declaredElements(diagram).map((node) => node.id));
+  /** The elements an element holds: rows of copies and of dots are no elements. */
+  const parts = (id: string): string[] =>
+    diagram.nodes
+      .get(id)!
+      .children.flatMap((child) =>
+        child.endsWith("#row") ? parts(child) : declared.has(child) ? [child] : [],
+      );
+  const named = ids.filter((id) => declared.has(id)),
+    [only] = named;
+  return named.length === 1 && parts(only).length > 0
+    ? { scope: parts(only), inside: only }
+    : { scope: named };
+}
+
+/** The places a pinned layout gives the elements of a diagram, moved by an offset. */
+function movedPlaces(
+  diagram: TamDiagram,
+  pinned: TamDiagram,
+  by: { x: number; y: number },
+): Map<string, Placement | undefined> {
   const places = new Map<string, Placement | undefined>();
   for (const node of pinned.nodes.values())
     if (node.at && diagram.nodes.has(node.id) && !node.id.endsWith("#row"))
       places.set(node.id, {
         ...node.at,
-        x: Math.round(node.at.x + dx),
-        y: Math.round(node.at.y + dy),
+        x: Math.round(node.at.x + by.x),
+        y: Math.round(node.at.y + by.y),
       });
-  if (inside) places.set(only, undefined);
-  return place(source, places);
+  return places;
 }
