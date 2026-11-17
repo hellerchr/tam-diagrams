@@ -29,13 +29,18 @@ import {
   relationshipParts,
   type RelationshipParts,
 } from "./uml-er.ts";
-
-const linesOf = (source: string) => source.replace(/\r\n?/g, "\n").split("\n");
-
-const indentOf = (line: string) => line.match(/^\s*/)![0];
-
-/** One more level of indentation, in the style of the source: a tab where it indents with tabs. */
-const stepOf = (lines: string[]) => (lines.some((line) => line.startsWith("\t")) ? "\t" : "  ");
+import {
+  blockLineText,
+  canTakeId,
+  counted,
+  entityCoded,
+  freshId,
+  indentOf,
+  linesOf,
+  renamedOnly,
+  rootEnd,
+  stepOf,
+} from "./uml-edit-text.ts";
 
 const PLAIN = /^[\p{L}_][\p{L}\p{N}_-]*$/u;
 
@@ -59,32 +64,13 @@ const ref = (id: string) =>
   PLAIN.test(id) && !SYNTAX_WORDS.test(id) ? id : `"${id.replace(/"/g, "'")}"`;
 
 /**
- * A text as the source holds it between quotes: line breaks as `<br>` (or a space), and the
- * characters the syntax reads for itself as Mermaid's entity codes.
- */
-const quotedText = (text: string, breaks = "<br>") =>
-  text
-    .trim()
-    .replace(/"/g, "#quot;")
-    .replace(/</g, "#lt;")
-    .replace(/>/g, "#gt;")
-    .replace(/\s*\n\s*/g, breaks);
-
-/**
  * A relationship's label as the source writes it: one plain word as it is, anything else in
  * quotes. Mermaid asks for a label, so none is an empty one in quotes.
  */
 const labelOf = (text: string) => {
-  const label = quotedText(text);
+  const label = entityCoded(text);
   return /^[\p{L}\p{N}_-]+$/u.test(label) ? label : `"${label}"`;
 };
-
-/** An attribute as a line of an entity's block: one line, which a closing brace does not end. */
-const attributeText = (text: string) =>
-  text
-    .replace(/\s*\n\s*/g, " ")
-    .trim()
-    .replace(/[\s}]+$/, "");
 
 /** The lines from an opening statement to its closing brace, as indices; `close` is -1 while open. */
 interface Block {
@@ -131,6 +117,79 @@ interface Outline {
   indent: string;
 }
 
+/** The entity a statement names, made known to the outline where it is first named. */
+function ensureEntity(outline: Outline, raw: string, index: number, offset: number): EntityLines {
+  const id = erId(raw),
+    start = indentOf(outline.lines[index]).length + offset;
+  outline.names.push({ id, index, start, end: start + raw.length });
+  let item = outline.entities.get(id);
+  if (!item) {
+    item = { id, declarations: [], entries: [], mentions: [], styles: [] };
+    outline.entities.set(id, item);
+  }
+  item.mentions.push(index);
+  return item;
+}
+
+/** An entity's block that is still open as the outline is read. */
+interface OpenBody {
+  item: EntityLines;
+  block: Block;
+}
+
+/**
+ * Reads a line of an open block as an attribute, or as its last when the brace closes it there;
+ * returns the block while it stays open.
+ */
+function readBodyLine(body: OpenBody, text: string, index: number, inline = false) {
+  const close = blockEnd(text),
+    raw = close < 0 ? text : text.slice(0, close);
+  if (raw.trim()) body.item.entries.push({ index, text: raw.trim(), inline: inline || close >= 0 });
+  if (close < 0) return body;
+  body.block.close = index;
+  return null;
+}
+
+/** Reads a styling statement: each name of its list, where it stands in the statement. */
+function readStyling(outline: Outline, text: string, index: number) {
+  const match = text.match(STYLED);
+  if (!match) return;
+  let offset = match[1].length + text.slice(match[1].length).match(/^\s*/)![0].length;
+  for (const piece of match[2].split(",")) {
+    const raw = piece.trim(),
+      start = indentOf(outline.lines[index]).length + offset + piece.indexOf(raw);
+    outline.names.push({ id: erId(raw), index, start, end: start + raw.length });
+    outline.entities.get(erId(raw))?.styles.push(index);
+    offset += piece.length + 1;
+  }
+}
+
+/** Reads an entity's declaration; returns its block when the block goes on below. */
+function readEntity(outline: Outline, match: RegExpMatchArray, index: number): OpenBody | null {
+  const item = ensureEntity(outline, match[1], index, 0),
+    inner = match[6]?.slice(1),
+    block = inner === undefined ? null : { open: index, close: -1 };
+  item.declarations.push({ index, body: block, aliased: match[2] !== undefined });
+  return block && readBodyLine({ item, block }, inner!, index, true);
+}
+
+/** Reads a statement outside every block; returns the block it opens, if any. */
+function readStatement(outline: Outline, text: string, index: number): OpenBody | null {
+  if (ER_STYLING.test(text)) {
+    readStyling(outline, text, index);
+    return null;
+  }
+  const match = text.match(ER_ENTITY);
+  if (match) return readEntity(outline, match, index);
+  const parts = relationshipParts(text);
+  if (parts) {
+    outline.relationships.push(index);
+    ensureEntity(outline, parts.left.text, index, parts.left.start);
+    ensureEntity(outline, parts.right.text, index, parts.right.start);
+  }
+  return null;
+}
+
 /** Reads where each entity is declared and named; the source is one the parser accepts. */
 function outlineOf(source: string): Outline {
   const lines = linesOf(source),
@@ -142,71 +201,12 @@ function outlineOf(source: string): Outline {
     relationships: [],
     indent: statements.length ? indentOf(lines[statements[0].line - 1]) : "  ",
   };
-  const ensure = (raw: string, index: number, offset: number) => {
-    const id = erId(raw),
-      start = indentOf(lines[index]).length + offset;
-    outline.names.push({ id, index, start, end: start + raw.length });
-    let item = outline.entities.get(id);
-    if (!item) {
-      item = { id, declarations: [], entries: [], mentions: [], styles: [] };
-      outline.entities.set(id, item);
-    }
-    item.mentions.push(index);
-    return item;
-  };
-  const entry = (item: EntityLines, index: number, raw: string, inline: boolean) => {
-    if (raw.trim()) item.entries.push({ index, text: raw.trim(), inline });
-  };
-  let body: { item: EntityLines; block: Block } | null = null;
+  let body: OpenBody | null = null;
   const accessibility = accessibilityLines();
   for (const { text, line } of statements) {
-    const index = line - 1;
-    if (body) {
-      const close = blockEnd(text);
-      if (close < 0) entry(body.item, index, text, false);
-      else {
-        entry(body.item, index, text.slice(0, close), true);
-        body.block.close = index;
-        body = null;
-      }
-      continue;
-    }
-    if (accessibility(text) || /^direction\s/i.test(text)) continue;
-    let match: RegExpMatchArray | null;
-    if (ER_STYLING.test(text)) {
-      if (!(match = text.match(STYLED))) continue;
-      // Each name of the list, where it stands in the statement.
-      let offset = match[1].length + text.slice(match[1].length).match(/^\s*/)![0].length;
-      for (const piece of match[2].split(",")) {
-        const raw = piece.trim(),
-          start = indentOf(lines[index]).length + offset + piece.indexOf(raw);
-        outline.names.push({ id: erId(raw), index, start, end: start + raw.length });
-        outline.entities.get(erId(raw))?.styles.push(index);
-        offset += piece.length + 1;
-      }
-      continue;
-    }
-    if ((match = text.match(ER_ENTITY))) {
-      const item = ensure(match[1], index, 0),
-        inner = match[6]?.slice(1),
-        block = inner === undefined ? null : { open: index, close: -1 };
-      item.declarations.push({ index, body: block, aliased: match[2] !== undefined });
-      if (!block) continue;
-      const close = blockEnd(inner!);
-      if (close < 0) {
-        entry(item, index, inner!, true);
-        body = { item, block };
-      } else {
-        entry(item, index, inner!.slice(0, close), true);
-        block.close = index;
-      }
-      continue;
-    }
-    const parts = relationshipParts(text);
-    if (!parts) continue;
-    outline.relationships.push(index);
-    ensure(parts.left.text, index, parts.left.start);
-    ensure(parts.right.text, index, parts.right.start);
+    if (body) body = readBodyLine(body, text, line - 1);
+    else if (!accessibility(text) && !/^direction\s/i.test(text))
+      body = readStatement(outline, text, line - 1);
   }
   return outline;
 }
@@ -218,13 +218,6 @@ function reads(source: string): ErDiagram | undefined {
   } catch {
     return undefined;
   }
-}
-
-/** Where a statement is added at the end: after the last line with text. */
-function rootEnd(lines: string[]): number {
-  let at = lines.length;
-  while (at > 0 && !lines[at - 1].trim()) at--;
-  return at;
 }
 
 /** The source with a statement of its own for an entity that relationships only mention. */
@@ -239,6 +232,39 @@ function declare(source: string, id: string): string {
   return lines.join("\n");
 }
 
+/** Whether a block shares a line with an attribute: its brace opens or closes beside one. */
+const sharesLine = (lines: string[], { open, close }: Block) =>
+  lines[close].trim() !== "}" || !/\{\s*$/.test(lines[open]) || close === open;
+
+/** The lines of a block whose last attribute shares its line with the closing brace, the brace on its own line. */
+function closeOnOwnLine(lines: string[], { open, close }: Block) {
+  const last = lines[close].trim();
+  lines.splice(
+    close,
+    1,
+    indentOf(lines[close]) + last.slice(0, blockEnd(last)).trimEnd(),
+    `${indentOf(lines[open])}}`,
+  );
+}
+
+/** The lines of a block whose first attribute shares its line with the opening brace, the attribute on its own line. */
+function openOnOwnLine(lines: string[], { open, close }: Block) {
+  const indent = indentOf(lines[open]),
+    line = lines[open].trimEnd(),
+    braces = line.trim().match(ER_ENTITY)![6],
+    head = line.slice(0, line.length - braces.length + 1),
+    inner = braces.slice(1),
+    end = close === open ? blockEnd(inner) : -1,
+    first = (end < 0 ? inner : inner.slice(0, end)).trim();
+  lines.splice(
+    open,
+    1,
+    head,
+    ...(first ? [indent + stepOf(lines) + first] : []),
+    ...(close === open ? [`${indent}}`] : []),
+  );
+}
+
 /**
  * The source with the entity declared and each of its blocks open over lines of its own:
  * `ORDER {`, one line an attribute, `}`. An entity without a block gets one.
@@ -249,7 +275,6 @@ function withBody(source: string, id: string): string {
     const { lines, entities } = outlineOf(text),
       item = entities.get(id);
     if (!item) return source;
-    const step = stepOf(lines);
     if (!item.declarations.some((found) => found.body)) {
       const { index } = item.declarations[0],
         line = lines[index];
@@ -257,39 +282,11 @@ function withBody(source: string, id: string): string {
       return lines.join("\n");
     }
     // The first block that shares a line with an attribute, from its end.
-    const shared = item.declarations.find(
-      ({ body }) =>
-        body &&
-        (lines[body.close].trim() !== "}" ||
-          !/\{\s*$/.test(lines[body.open]) ||
-          body.close === body.open),
-    );
+    const shared = item.declarations.find(({ body }) => body && sharesLine(lines, body))?.body;
     if (!shared) return lines.join("\n");
-    const { open, close } = shared.body!,
-      indent = indentOf(lines[open]);
-    if (close > open && lines[close].trim() !== "}") {
-      const last = lines[close].trim();
-      lines.splice(
-        close,
-        1,
-        indentOf(lines[close]) + last.slice(0, blockEnd(last)).trimEnd(),
-        `${indent}}`,
-      );
-    } else {
-      const line = lines[open].trimEnd(),
-        braces = line.trim().match(ER_ENTITY)![6],
-        head = line.slice(0, line.length - braces.length + 1),
-        inner = braces.slice(1),
-        end = close === open ? blockEnd(inner) : -1,
-        first = (end < 0 ? inner : inner.slice(0, end)).trim();
-      lines.splice(
-        open,
-        1,
-        head,
-        ...(first ? [indent + step + first] : []),
-        ...(close === open ? [`${indent}}`] : []),
-      );
-    }
+    if (shared.close > shared.open && lines[shared.close].trim() !== "}")
+      closeOnOwnLine(lines, shared);
+    else openOnOwnLine(lines, shared);
     text = lines.join("\n");
   }
 }
@@ -335,7 +332,7 @@ export function erAttributes(source: string, id: string): string[] {
  * entity that relationships only mention gets its own statement.
  */
 export function addErAttribute(source: string, id: string, text: string): string {
-  const attribute = attributeText(text);
+  const attribute = blockLineText(text);
   if (!attribute || !parseErDiagram(source).entities.has(id)) return source;
   const outline = outlineOf(withBody(source, id)),
     { block, indent } = bodyOf(outline, id);
@@ -348,7 +345,7 @@ export function addErAttribute(source: string, id: string, text: string): string
  * Comments in the block stay; an entity left without attributes loses an empty block.
  */
 export function setErAttributes(source: string, id: string, attributes: string[]): string {
-  const texts = attributes.map(attributeText).filter(Boolean),
+  const texts = attributes.map(blockLineText).filter(Boolean),
     old = erAttributes(source, id);
   if (!parseErDiagram(source).entities.has(id)) return source;
   if (texts.length === old.length && texts.every((text, index) => text === old[index]))
@@ -381,7 +378,7 @@ function attributeAt(source: string, id: string, index: number) {
  * removes the attribute; a text the syntax does not read leaves the source as it is.
  */
 export function setErAttribute(source: string, id: string, index: number, text: string): string {
-  const attribute = attributeText(text);
+  const attribute = blockLineText(text);
   if (!attribute) return removeErAttribute(source, id, index);
   const found = attributeAt(source, id, index);
   if (!found || found.entry.text === attribute) return source;
@@ -429,27 +426,39 @@ const isSymbol = (text: string) => /^[|o{}]{2}$/.test(text);
 const cardinalityText = (kind: Cardinality, side: "left" | "right", old: string) =>
   isSymbol(old) ? CARDINALITIES[kind][side] : CARDINALITIES[kind].words[0];
 
-/**
- * A relationship's line with other pieces; what is not changed stays as it is written. The
- * cardinalities and the line keep their style: symbols stay symbols, words stay words.
- */
-function relationshipLine(
-  line: string,
-  change: {
-    left?: Cardinality;
-    right?: Cardinality;
-    identifying?: boolean;
-    label?: string;
-    /** Other names at the ends. */
-    ends?: (left: string, right: string) => [string, string];
-    /** Whether the ends change places, each with its cardinality. */
-    reverse?: boolean;
-  },
-): string {
-  const text = line.trim(),
-    parts = relationshipParts(text);
-  if (!parts) return line;
-  const texts: Record<keyof Omit<RelationshipParts, "label">, string> = {
+/** A change of the pieces of a relationship's line. */
+interface RelationshipChange {
+  left?: Cardinality;
+  right?: Cardinality;
+  identifying?: boolean;
+  label?: string;
+  /** Whether the ends change places, each with its cardinality. */
+  reverse?: boolean;
+}
+
+/** The pieces of a relationship's line that a change writes anew, by their names in `RelationshipParts`. */
+type PieceTexts = Record<keyof Omit<RelationshipParts, "label">, string>;
+
+/** The line of a relationship that identifies or not, in the style of the old one: a symbol or words. */
+const lineText = (old: string, identifying: boolean) =>
+  /^[-.]+$/.test(old) ? (identifying ? "--" : "..") : identifying ? "to" : "optionally to";
+
+/** The pieces of a line whose ends change places; a symbol faces its entity, words read the same at either end. */
+function reversed(texts: PieceTexts, parts: RelationshipParts): PieceTexts {
+  const turned = (text: string, kind: Cardinality, side: "left" | "right") =>
+    isSymbol(text) ? CARDINALITIES[kind][side] : text;
+  return {
+    left: texts.right,
+    right: texts.left,
+    line: texts.line,
+    leftCardinality: turned(texts.rightCardinality, parts.rightCardinality.kind, "left"),
+    rightCardinality: turned(texts.leftCardinality, parts.leftCardinality.kind, "right"),
+  };
+}
+
+/** The pieces of a relationship's line once a change is made, the line and label aside. */
+function changedTexts(parts: RelationshipParts, change: RelationshipChange): PieceTexts {
+  const texts: PieceTexts = {
     left: parts.left.text,
     leftCardinality: parts.leftCardinality.text,
     line: parts.line.text,
@@ -461,24 +470,19 @@ function relationshipLine(
   if (change.right)
     texts.rightCardinality = cardinalityText(change.right, "right", texts.rightCardinality);
   if (change.identifying !== undefined && change.identifying !== parts.line.identifying)
-    texts.line = /^[-.]+$/.test(texts.line)
-      ? change.identifying
-        ? "--"
-        : ".."
-      : change.identifying
-        ? "to"
-        : "optionally to";
-  if (change.ends) [texts.left, texts.right] = change.ends(texts.left, texts.right);
-  if (change.reverse) {
-    [texts.left, texts.right] = [texts.right, texts.left];
-    // A symbol faces its entity; words read the same at either end.
-    const turned = (text: string, kind: Cardinality, side: "left" | "right") =>
-      isSymbol(text) ? CARDINALITIES[kind][side] : text;
-    [texts.leftCardinality, texts.rightCardinality] = [
-      turned(texts.rightCardinality, parts.rightCardinality.kind, "left"),
-      turned(texts.leftCardinality, parts.leftCardinality.kind, "right"),
-    ];
-  }
+    texts.line = lineText(texts.line, change.identifying);
+  return change.reverse ? reversed(texts, parts) : texts;
+}
+
+/**
+ * A relationship's line with other pieces; what is not changed stays as it is written. The
+ * cardinalities and the line keep their style: symbols stay symbols, words stay words.
+ */
+function relationshipLine(line: string, change: RelationshipChange): string {
+  const text = line.trim(),
+    parts = relationshipParts(text);
+  if (!parts) return line;
+  const texts = changedTexts(parts, change);
   // From the right, so the pieces before keep their columns.
   let result = text;
   if (change.label !== undefined) {
@@ -504,16 +508,6 @@ function wordOf(label: string): string {
   return PLAIN.test(word) ? word : "";
 }
 
-/** An entity's id: its name as one word when that is free, else the base with a number. */
-function freshId(taken: (id: string) => boolean, base: string, label: string): string {
-  const name = wordOf(label);
-  if (name && !taken(name)) return name;
-  for (let count = name ? 2 : 1; ; count++) {
-    const id = `${name || base}${count}`;
-    if (!taken(id)) return id;
-  }
-}
-
 /** The name new entities get with a number: in capitals where the entities of the source are. */
 const baseOf = (diagram: ErDiagram) =>
   diagram.entities.size && [...diagram.entities.keys()].every((id) => id === id.toUpperCase())
@@ -526,7 +520,7 @@ const baseOf = (diagram: ErDiagram) =>
  * `Entity` with a number that no entity of the diagram has. Returns its id, empty for a piece
  * that is no entity.
  */
-export function addErPiece(
+function addErPiece(
   source: string,
   piece: { kind: string; label?: string; parent?: string | null },
 ): { source: string; id: string } {
@@ -535,16 +529,23 @@ export function addErPiece(
     outline = outlineOf(source),
     { lines } = outline,
     label = (piece.label ?? "").replace(/\s*\n\s*/g, " ").trim(),
-    id = freshId((name) => diagram.entities.has(name), baseOf(diagram), label),
+    id = freshId((name) => diagram.entities.has(name), baseOf(diagram), wordOf(label)),
     ends = [...outline.entities.values()].flatMap((item) =>
       item.declarations.map(({ index, body }) => (body ? body.close : index)),
     );
   lines.splice(
     ends.length ? Math.max(...ends) + 1 : rootEnd(lines),
     0,
-    `${outline.indent}${ref(id)}${label && label !== id ? `["${quotedText(label, " ")}"]` : ""}`,
+    `${outline.indent}${ref(id)}${label && label !== id ? `["${entityCoded(label, " ")}"]` : ""}`,
   );
   return { source: lines.join("\n"), id };
+}
+
+/** Where a relationship is added: after the last one, with its indent, and else at the end. */
+function relationshipEnd({ relationships, lines, indent }: Outline) {
+  if (!relationships.length) return { at: rootEnd(lines), indent };
+  const at = Math.max(...relationships) + 1;
+  return { at, indent: indentOf(lines[at - 1]) };
 }
 
 /**
@@ -566,8 +567,7 @@ export function joinEntities(
   if (!found || !diagram.entities.has(from) || !diagram.entities.has(to))
     return { source, edge: "" };
   const [left, right] = found.ends,
-    at = outline.relationships.length ? Math.max(...outline.relationships) + 1 : rootEnd(lines),
-    indent = outline.relationships.length ? indentOf(lines[at - 1]) : outline.indent;
+    { at, indent } = relationshipEnd(outline);
   lines.splice(
     at,
     0,
@@ -579,7 +579,7 @@ export function joinEntities(
 }
 
 /** Joins two entities as `joinEntities` does. */
-export function connectEntities(source: string, from: string, to: string, kind?: string): string {
+function connectEntities(source: string, from: string, to: string, kind?: string): string {
   return joinEntities(source, from, to, kind).source;
 }
 
@@ -588,19 +588,26 @@ export function connectEntities(source: string, from: string, to: string, kind?:
  * name as its alias (`ORDER["Purchase order"]`); a name that is the id itself takes the alias
  * away.
  */
-export function renameEntity(source: string, id: string, label: string): string {
+function renameEntity(source: string, id: string, label: string): string {
   if (!parseErDiagram(source).entities.has(id)) return source;
   const outline = outlineOf(declare(source, id)),
     { lines } = outline,
     declarations = outline.entities.get(id)!.declarations,
     declaration = declarations.findLast((found) => found.aliased) ?? declarations[0],
-    name = quotedText(label, " "),
+    name = entityCoded(label, " "),
     line = lines[declaration.index],
     [, head, , rest] = line.trim().match(ENTITY_PARTS)!;
   lines[declaration.index] =
     indentOf(line) + (name && name !== id ? `${head}["${name}"]${rest}` : head + rest);
   return lines.join("\n");
 }
+
+/** Whether an entity can go by a new id: one with no quote or line break that no entity has. */
+const canTakeEntityId = (diagram: ErDiagram, id: string, name: string) =>
+  canTakeId((item) => diagram.entities.has(item), id, name, !/["\n]/.test(name));
+
+/** How many entities and relationships a diagram has. */
+const countsOf = (diagram: ErDiagram) => [diagram.entities.size, diagram.relationships.length];
 
 /**
  * Gives an entity another id, wherever the source names it: in its declarations, relationships
@@ -611,14 +618,7 @@ export function renameEntity(source: string, id: string, label: string): string 
 export function renameEntityId(source: string, id: string, newId: string): string {
   const diagram = parseErDiagram(source),
     name = newId.trim().replace(/^"(.*)"$/, "$1");
-  if (
-    !diagram.entities.has(id) ||
-    !name ||
-    name === id ||
-    /["\n]/.test(name) ||
-    diagram.entities.has(name)
-  )
-    return source;
+  if (!canTakeEntityId(diagram, id, name)) return source;
   const outline = outlineOf(source),
     { lines } = outline,
     written = ref(name);
@@ -631,10 +631,8 @@ export function renameEntityId(source: string, id: string, newId: string): strin
   const result = lines.join("\n"),
     now = reads(result);
   if (
-    !now?.entities.has(name) ||
-    now.entities.has(id) ||
-    now.entities.size !== diagram.entities.size ||
-    now.relationships.length !== diagram.relationships.length
+    !now ||
+    !renamedOnly((item) => now.entities.has(item), id, name, countsOf(diagram), countsOf(now))
   )
     return source;
   const aliased = outlineOf(result)
@@ -677,11 +675,7 @@ export function isGeneratedErId(source: string, id: string): boolean {
  * another entity has that id; then the id stays and the name is its alias. Returns the id the
  * entity has afterwards.
  */
-export function retitleEntity(
-  source: string,
-  id: string,
-  name: string,
-): { source: string; id: string } {
+function retitleEntity(source: string, id: string, name: string): { source: string; id: string } {
   const diagram = parseErDiagram(source),
     word = wordOf(name);
   let next = id;
@@ -696,7 +690,7 @@ export function retitleEntity(
 function changeRelationship(
   source: string,
   edge: string,
-  change: (relationship: ErRelationship) => Parameters<typeof relationshipLine>[1] | undefined,
+  change: (relationship: ErRelationship) => RelationshipChange | undefined,
 ): string {
   const relationship = parseErDiagram(source).relationships.find((item) => item.id === edge),
     lines = linesOf(source),
@@ -708,9 +702,9 @@ function changeRelationship(
 }
 
 /** Gives a relationship another label; an empty one is written as `""`, which shows none. */
-export function labelErRelationship(source: string, edge: string, label: string): string {
+function labelErRelationship(source: string, edge: string, label: string): string {
   return changeRelationship(source, edge, (relationship) =>
-    labelText(`"${quotedText(label)}"`) === (relationship.label ?? "")
+    labelText(`"${entityCoded(label)}"`) === (relationship.label ?? "")
       ? undefined
       : { label: labelOf(label) },
   );
@@ -720,7 +714,7 @@ export function labelErRelationship(source: string, edge: string, label: string)
  * Makes a relationship one of another kind, between the same ends: both cardinalities become
  * those of the kind. Whether it identifies, and its label, stay.
  */
-export function relinkErRelationship(source: string, edge: string, kind: string): string {
+function relinkErRelationship(source: string, edge: string, kind: string): string {
   const found = KINDS.find((item) => item.kind === kind);
   return changeRelationship(source, edge, (relationship) =>
     !found || kind === kindOfRelationship(relationship)
@@ -799,12 +793,12 @@ export function duplicateEntity(source: string, id: string): { source: string; i
   const diagram = parseErDiagram(source),
     item = diagram.entities.get(id);
   if (!item) return { source, id: "" };
-  const copy = freshId((name) => diagram.entities.has(name), baseOf(diagram), id),
+  const copy = freshId((name) => diagram.entities.has(name), baseOf(diagram), wordOf(id)),
     outline = outlineOf(declare(source, id)),
     { lines } = outline,
     declaration = outline.entities.get(id)!.declarations.at(-1)!,
     indent = indentOf(lines[declaration.index]),
-    head = `${ref(copy)}${item.label === id ? "" : `["${quotedText(item.label, " ")}"]`}`,
+    head = `${ref(copy)}${item.label === id ? "" : `["${entityCoded(item.label, " ")}"]`}`,
     attributes = erAttributes(source, id),
     text = attributes.length
       ? [`${head} {`, ...attributes.map((line) => stepOf(lines) + line), "}"]
@@ -817,14 +811,8 @@ export function duplicateEntity(source: string, id: string): { source: string; i
   return { source: lines.join("\n"), id: copy };
 }
 
-/**
- * Removes entities with their relationships and styling, and single relationships, by id. An
- * entity that only a removed relationship names stays, as a statement of its own in its place.
- */
-export function removeErParts(source: string, ids: Iterable<string>): string {
-  const diagram = parseErDiagram(source),
-    outline = outlineOf(source),
-    { lines } = outline;
+/** The entities among some ids, and the lines of the relationships among them, as indices. */
+function chosenParts(diagram: ErDiagram, ids: Iterable<string>) {
   const gone = new Set<string>(),
     dropped = new Set<number>();
   for (const id of ids) {
@@ -832,29 +820,62 @@ export function removeErParts(source: string, ids: Iterable<string>): string {
     if (diagram.entities.has(id)) gone.add(id);
     else if (line) dropped.add(line - 1);
   }
+  return { gone, dropped };
+}
+
+/** The names each styling line lists, by the index of its line. */
+function styledNames({ names, lines }: Outline): Map<number, string[]> {
   const styled = new Map<number, string[]>();
-  for (const place of outline.names)
+  for (const place of names)
     if (ER_STYLING.test(lines[place.index].trim()))
       styled.set(place.index, [...(styled.get(place.index) ?? []), place.id]);
-  for (const id of gone) {
-    const item = outline.entities.get(id);
-    if (!item) continue;
-    for (const { index, body } of item.declarations)
-      for (let at = index; at <= (body ? body.close : index); at++) dropped.add(at);
-    for (const index of item.mentions) dropped.add(index);
-    // A styling line goes when every entity it names does.
-    for (const index of item.styles)
-      if (styled.get(index)!.every((name) => gone.has(name))) dropped.add(index);
-  }
-  // What stays loses no entity: one that only the removed lines name is declared where it stood.
+  return styled;
+}
+
+/**
+ * Adds to the dropped lines those of an entity that goes: its declarations with their blocks, the
+ * relationships that name it, and the styling lines whose every entity goes.
+ */
+function dropEntity(
+  item: EntityLines,
+  gone: Set<string>,
+  styled: Map<number, string[]>,
+  dropped: Set<number>,
+) {
+  for (const { index, body } of item.declarations)
+    for (let at = index; at <= (body ? body.close : index); at++) dropped.add(at);
+  for (const index of item.mentions) dropped.add(index);
+  for (const index of item.styles)
+    if (styled.get(index)!.every((name) => gone.has(name))) dropped.add(index);
+}
+
+/** The statements that keep an entity which only dropped lines name, by the line each follows. */
+function keptEntities(outline: Outline, gone: Set<string>, dropped: Set<number>) {
   const kept = new Map<number, string[]>();
   for (const item of outline.entities.values()) {
     if (gone.has(item.id) || item.mentions.some((index) => !dropped.has(index))) continue;
     const first = item.mentions[0];
-    kept.set(first, [...(kept.get(first) ?? []), indentOf(lines[first]) + ref(item.id)]);
+    kept.set(first, [...(kept.get(first) ?? []), indentOf(outline.lines[first]) + ref(item.id)]);
   }
+  return kept;
+}
+
+/**
+ * Removes entities with their relationships and styling, and single relationships, by id. An
+ * entity that only a removed relationship names stays, as a statement of its own in its place.
+ */
+export function removeErParts(source: string, ids: Iterable<string>): string {
+  const outline = outlineOf(source),
+    { gone, dropped } = chosenParts(parseErDiagram(source), ids),
+    styled = styledNames(outline);
+  for (const id of gone) {
+    const item = outline.entities.get(id);
+    if (item) dropEntity(item, gone, styled, dropped);
+  }
+  // What stays loses no entity: one that only the removed lines name is declared where it stood.
+  const kept = keptEntities(outline, gone, dropped);
   if (!dropped.size) return source;
-  return lines
+  return outline.lines
     .flatMap((line, index) => [...(dropped.has(index) ? [] : [line]), ...(kept.get(index) ?? [])])
     .join("\n");
 }
@@ -895,10 +916,6 @@ export function attachEr(
   return { source: joined.source, id: added.id, edge: joined.edge };
 }
 
-/** A count with its word: `1 relationship`, `3 relationships`; nothing for none. */
-const counted = (count: number, one: string) =>
-  count > 0 ? `${count} ${one}${count > 1 ? "s" : ""}` : "";
-
 /**
  * What a removal takes with it, in words: the entities it names and how many relationships go
  * with them, as in `CUSTOMER, ORDER with 3 relationships`; for relationships alone, how many go.
@@ -916,7 +933,7 @@ export function erRemovalSummary(source: string, ids: Iterable<string>): string 
     rest = counted(
       names.length ? lost - before.relationships.filter(({ id }) => chosen.has(id)).length : lost,
       "relationship",
-    );
+    ).join("");
   return names.length ? `${names.join(", ")}${rest ? ` with ${rest}` : ""}` : rest;
 }
 

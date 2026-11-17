@@ -15,7 +15,27 @@
 
 import type { Structure, StructureEdge, StructureNode } from "./structure.ts";
 import { accessibilityLines, scan } from "./uml.ts";
-import { type ClassDiagram, parseClassDiagram, parseMember, type Relation } from "./uml-class.ts";
+import {
+  type ClassDiagram,
+  type ClassNote,
+  parseClassDiagram,
+  parseMember,
+  type Relation,
+  type UmlClass,
+} from "./uml-class.ts";
+import {
+  blockLineText,
+  canTakeId,
+  counted,
+  entityCoded,
+  freshId,
+  indentOf,
+  linesOf,
+  listed,
+  renamedOnly,
+  rootEnd,
+  stepOf,
+} from "./uml-edit-text.ts";
 
 /** The kinds of class a canvas adds, by the annotation that makes a class one. */
 const ANNOTATIONS: Record<string, string> = {
@@ -33,13 +53,6 @@ const kindOfAnnotation = (annotation: string): string | undefined =>
       : /^enum(eration)?$/i.test(annotation)
         ? "enumeration"
         : undefined;
-
-const linesOf = (source: string) => source.replace(/\r\n?/g, "\n").split("\n");
-
-const indentOf = (line: string) => line.match(/^\s*/)![0];
-
-/** One more level of indentation, in the style of the source: a tab where it indents with tabs. */
-const stepOf = (lines: string[]) => (lines.some((line) => line.startsWith("\t")) ? "\t" : "  ");
 
 // The statements of a class diagram, as uml-class.ts reads them.
 const NAME = "(?:`[^`]+`|[\\p{L}\\p{N}_.]+(?:~[^~]+~)?)";
@@ -79,27 +92,8 @@ const declared = (diagram: ClassDiagram, id: string) => {
   return generic && !ref(id).startsWith("`") ? `${id}~${generic}~` : ref(id);
 };
 
-/**
- * A label as the source holds it: line breaks as `<br>` (or a space, in a name), and the characters
- * the syntax reads for itself as Mermaid's entity codes.
- */
-const labelText = (label: string, breaks = "<br>") =>
-  label
-    .trim()
-    .replace(/"/g, "#quot;")
-    .replace(/</g, "#lt;")
-    .replace(/>/g, "#gt;")
-    .replace(/\s*\n\s*/g, breaks);
-
 /** A label inside the brackets of a namespace, which end at the first `]`. */
-const spaceLabel = (label: string) => labelText(label, " ").replace(/\]/g, "#93;");
-
-/** A member as a line of a class body: one line, which a closing brace does not end. */
-const memberText = (text: string) =>
-  text
-    .replace(/\s*\n\s*/g, " ")
-    .trim()
-    .replace(/[\s}]+$/, "");
+const spaceLabel = (label: string) => entityCoded(label, " ").replace(/\]/g, "#93;");
 
 /** The lines from an opening statement to its closing brace, as indices; `close` is -1 while open. */
 interface Block {
@@ -160,6 +154,166 @@ interface Outline {
   indent: string;
 }
 
+/** Notes the place of a class's name, which starts `offset` characters into the statement. */
+function notePlace(outline: Outline, raw: string, index: number, offset: number) {
+  const start = indentOf(outline.lines[index]).length + offset;
+  outline.names.push({ id: idOf(raw), index, start, end: start + raw.length });
+}
+
+/** The class a statement names, made known to the outline where it is first named. */
+function ensureClass(outline: Outline, raw: string, index: number, offset = 0): ClassLines {
+  const id = idOf(raw);
+  notePlace(outline, raw, index, offset);
+  let item = outline.classes.get(id);
+  if (!item) {
+    item = { id, declarations: [], entries: [], marks: [], styles: [], mentions: [] };
+    outline.classes.set(id, item);
+  }
+  item.mentions.push(index);
+  return item;
+}
+
+/** Notes a member or an annotation of a class. */
+function addEntry(item: ClassLines, index: number, raw: string, inline: boolean, outside = false) {
+  item.entries.push({
+    index,
+    text: raw.trim(),
+    annotation: raw.trim().match(/^<<\s*(.+?)\s*>>$/)?.[1],
+    inline,
+    outside,
+  });
+}
+
+/** A class body that is still open as the outline is read. */
+interface OpenBody {
+  item: ClassLines;
+  block: Block;
+}
+
+/** A namespace block that is still open as the outline is read, by its dotted id. */
+interface OpenSpace {
+  id: string;
+  block: Block;
+}
+
+/**
+ * Reads a line of an open class body as a member, or as its last when the brace closes it there;
+ * returns the body while it stays open.
+ */
+function readBodyLine(body: OpenBody, text: string, index: number, inline = false) {
+  const closes = text.endsWith("}"),
+    raw = closes ? text.slice(0, -1) : text;
+  if (raw.trim()) addEntry(body.item, index, raw, inline || closes);
+  if (!closes) return body;
+  body.block.close = index;
+  return null;
+}
+
+/** Reads one kind of statement outside a class body; returns the body it opens, if any. */
+type StatementReader = (
+  outline: Outline,
+  match: RegExpMatchArray,
+  text: string,
+  index: number,
+  open: OpenSpace[],
+) => OpenBody | null | void;
+
+const readNamespace: StatementReader = (outline, match, _text, index, open) => {
+  const id = open.length ? `${open.at(-1)!.id}.${match[1]}` : match[1],
+    block = { open: index, close: match[3] ? index : -1 };
+  outline.spaces.set(id, [...(outline.spaces.get(id) ?? []), block]);
+  outline.blocks.push({ id, name: match[1], block });
+  if (!match[3]) open.push({ id, block });
+};
+
+const readClass: StatementReader = (outline, match, text, index) => {
+  const item = ensureClass(outline, match[1], index, text.match(/^class\s+/)![0].length),
+    inner = match[4]?.slice(1).trim(),
+    block = inner === undefined ? null : { open: index, close: -1 };
+  item.declarations.push({
+    index,
+    body: block,
+    labelled: match[2] !== undefined,
+    annotation: match[3],
+  });
+  return block && readBodyLine({ item, block }, inner!, index, true);
+};
+
+const readRelation: StatementReader = (outline, match, _text, index) => {
+  outline.relations.push(index);
+  // A lollipop end names an interface ball, not a class.
+  if (!(match[4] === "()" && !match[6])) ensureClass(outline, match[1], index);
+  if (!(match[6] === "()" && !match[4]))
+    ensureClass(
+      outline,
+      match[9],
+      index,
+      match.slice(1, 9).reduce((sum, part) => sum + (part?.length ?? 0), 0),
+    );
+};
+
+const readStyled: StatementReader = (outline, match, text, index) => {
+  notePlace(outline, match[1], index, text.match(/^\w+\s+/)![0].length);
+  // Styling of a class named only later is left alone: it draws nothing.
+  outline.classes.get(idOf(match[1]))?.styles.push(index);
+};
+
+/** The statements an outline reads, each with what it notes; the first that matches is read. */
+const STATEMENTS: [RegExp, StatementReader][] = [
+  [NAMESPACE, readNamespace],
+  [CLASS, readClass],
+  [
+    ANNOTATION,
+    (outline, match, text, index) => {
+      ensureClass(outline, match[2], index, text.length - match[2].length).marks.push({
+        index,
+        annotation: match[1],
+      });
+    },
+  ],
+  [
+    NOTE_FOR,
+    (outline, match, text, index, open) => {
+      ensureClass(outline, match[1], index, text.match(/^note\s+for\s+/)![0].length);
+      if (!open.length) outline.notes.push(index);
+    },
+  ],
+  [
+    NOTE,
+    (outline, _match, _text, index, open) => {
+      if (!open.length) outline.notes.push(index);
+    },
+  ],
+  [RELATION, readRelation],
+  [
+    MEMBER,
+    (outline, match, _text, index) =>
+      addEntry(ensureClass(outline, match[1], index), index, match[2], false, true),
+  ],
+  [
+    CSS,
+    (outline, match, _text, index) => {
+      ensureClass(outline, match[1], index).styles.push(index);
+    },
+  ],
+  [STYLED, readStyled],
+];
+
+/** Reads a statement outside every class body; returns the body it opens, if any. */
+function readStatement(outline: Outline, text: string, index: number, open: OpenSpace[]) {
+  if (text === "}") {
+    const closed = open.pop();
+    if (closed) closed.block.close = index;
+    return null;
+  }
+  if (open.length) outline.nested.add(index);
+  for (const [pattern, read] of STATEMENTS) {
+    const match = text.match(pattern);
+    if (match) return read(outline, match, text, index, open) ?? null;
+  }
+  return null;
+}
+
 /** Reads where each class and namespace is declared; the source is one the parser accepts. */
 function outlineOf(source: string): Outline {
   const lines = linesOf(source),
@@ -175,113 +329,49 @@ function outlineOf(source: string): Outline {
     nested: new Set(),
     indent: statements.length ? indentOf(lines[statements[0].line - 1]) : "  ",
   };
-  /** Notes the place of a class's name, which starts `offset` characters into the statement. */
-  const name = (raw: string, index: number, offset: number) => {
-    const start = indentOf(lines[index]).length + offset;
-    outline.names.push({ id: idOf(raw), index, start, end: start + raw.length });
-  };
-  const ensure = (raw: string, index: number, offset = 0) => {
-    const id = idOf(raw);
-    name(raw, index, offset);
-    let item = outline.classes.get(id);
-    if (!item) {
-      item = { id, declarations: [], entries: [], marks: [], styles: [], mentions: [] };
-      outline.classes.set(id, item);
-    }
-    item.mentions.push(index);
-    return item;
-  };
-  const entry = (item: ClassLines, index: number, raw: string, inline: boolean, outside = false) =>
-    item.entries.push({
-      index,
-      text: raw.trim(),
-      annotation: raw.trim().match(/^<<\s*(.+?)\s*>>$/)?.[1],
-      inline,
-      outside,
-    });
-  const open: { id: string; block: Block }[] = [];
-  let body: { item: ClassLines; block: Block } | null = null;
+  const open: OpenSpace[] = [];
+  let body: OpenBody | null = null;
   const accessibility = accessibilityLines();
   for (const { text, line } of statements) {
-    const index = line - 1;
-    if (body) {
-      if (text.endsWith("}")) {
-        if (text !== "}") entry(body.item, index, text.slice(0, -1), true);
-        body.block.close = index;
-        body = null;
-      } else entry(body.item, index, text, false);
-      continue;
-    }
-    if (accessibility(text) || /^direction\s/i.test(text)) continue;
-    if (text === "}") {
-      const closed = open.pop();
-      if (closed) closed.block.close = index;
-      continue;
-    }
-    if (open.length) outline.nested.add(index);
-    let match: RegExpMatchArray | null;
-    if ((match = text.match(NAMESPACE))) {
-      const id = open.length ? `${open.at(-1)!.id}.${match[1]}` : match[1],
-        block = { open: index, close: match[3] ? index : -1 };
-      outline.spaces.set(id, [...(outline.spaces.get(id) ?? []), block]);
-      outline.blocks.push({ id, name: match[1], block });
-      if (!match[3]) open.push({ id, block });
-    } else if ((match = text.match(CLASS))) {
-      const item = ensure(match[1], index, text.match(/^class\s+/)![0].length),
-        inner = match[4]?.slice(1).trim(),
-        block = inner === undefined ? null : { open: index, close: -1 };
-      item.declarations.push({
-        index,
-        body: block,
-        labelled: match[2] !== undefined,
-        annotation: match[3],
-      });
-      if (!block) continue;
-      if (inner!.endsWith("}")) {
-        if (inner!.slice(0, -1).trim()) entry(item, index, inner!.slice(0, -1), true);
-        block.close = index;
-        continue;
-      }
-      if (inner) entry(item, index, inner, true);
-      body = { item, block };
-    } else if ((match = text.match(ANNOTATION)))
-      ensure(match[2], index, text.length - match[2].length).marks.push({
-        index,
-        annotation: match[1],
-      });
-    else if ((match = text.match(NOTE_FOR))) {
-      ensure(match[1], index, text.match(/^note\s+for\s+/)![0].length);
-      if (!open.length) outline.notes.push(index);
-    } else if (NOTE.test(text)) {
-      if (!open.length) outline.notes.push(index);
-    } else if ((match = text.match(RELATION))) {
-      outline.relations.push(index);
-      // A lollipop end names an interface ball, not a class.
-      if (!(match[4] === "()" && !match[6])) ensure(match[1], index);
-      if (!(match[6] === "()" && !match[4]))
-        ensure(
-          match[9],
-          index,
-          match.slice(1, 9).reduce((sum, part) => sum + (part?.length ?? 0), 0),
-        );
-    } else if ((match = text.match(MEMBER)))
-      entry(ensure(match[1], index), index, match[2], false, true);
-    else if ((match = text.match(CSS))) ensure(match[1], index).styles.push(index);
-    else if ((match = text.match(STYLED))) {
-      name(match[1], index, text.match(/^\w+\s+/)![0].length);
-      const item = outline.classes.get(idOf(match[1]));
-      // Styling of a class named only later is left alone: it draws nothing.
-      if (item) item.styles.push(index);
-    }
+    if (body) body = readBodyLine(body, text, line - 1);
+    else if (!accessibility(text) && !/^direction\s/i.test(text))
+      body = readStatement(outline, text, line - 1, open);
   }
   return outline;
 }
 
-/** Where a statement is added outside every namespace: after the last line with text. */
-function rootEnd(lines: string[]): number {
-  let at = lines.length;
-  while (at > 0 && !lines[at - 1].trim()) at--;
+/** The line after the last of some lines, if there are any. */
+const after = (ends: number[]) => (ends.length ? Math.max(...ends) + 1 : undefined);
+
+/**
+ * The line after the last class declared outside every namespace, past the statements that say
+ * more of a class there: its members, annotations and styling.
+ */
+function afterLastClass(outline: Outline): number | undefined {
+  const classes = [...outline.classes.values()],
+    more = new Set(
+      classes.flatMap((item) => [
+        ...item.entries.filter((entry) => entry.outside).map((entry) => entry.index),
+        ...item.marks.map((mark) => mark.index),
+        ...item.styles,
+      ]),
+    );
+  let at = after(
+    classes.flatMap((item) =>
+      item.declarations
+        .filter(({ index }) => !outline.nested.has(index))
+        .map(({ index, body }) => (body ? body.close : index)),
+    ),
+  );
+  while (at !== undefined && more.has(at)) at++;
   return at;
+}
+
+/** The first relation, with the comments right above it, which stay with it. */
+function firstRelation({ relations, lines }: Outline): number | undefined {
+  let relation = relations.length ? Math.min(...relations) : undefined;
+  while (relation && lines[relation - 1].trim().startsWith("%%")) relation--;
+  return relation;
 }
 
 /**
@@ -291,37 +381,16 @@ function rootEnd(lines: string[]): number {
  * where there is neither; a note after the last note. Else after the last line with text.
  */
 function rootPlace(outline: Outline, kind: "class" | "note" | "package"): number {
-  const { lines } = outline,
-    end = rootEnd(lines),
-    after = (ends: number[]) => (ends.length ? Math.max(...ends) + 1 : undefined);
+  const end = rootEnd(outline.lines);
   if (kind === "note") return after(outline.notes) ?? end;
-  const classes = [...outline.classes.values()],
-    // The statements that say more of a class: its members, annotations and styling.
-    more = new Set(
-      classes.flatMap((item) => [
-        ...item.entries.filter((entry) => entry.outside).map((entry) => entry.index),
-        ...item.marks.map((mark) => mark.index),
-        ...item.styles,
-      ]),
+  const lastClass = afterLastClass(outline),
+    lastSpace = after(
+      outline.blocks
+        .filter(({ block }) => !outline.nested.has(block.open))
+        .map(({ block }) => block.close),
     );
-  let lastClass = after(
-    classes.flatMap((item) =>
-      item.declarations
-        .filter(({ index }) => !outline.nested.has(index))
-        .map(({ index, body }) => (body ? body.close : index)),
-    ),
-  );
-  while (lastClass !== undefined && more.has(lastClass)) lastClass++;
-  const lastSpace = after(
-    outline.blocks
-      .filter(({ block }) => !outline.nested.has(block.open))
-      .map(({ block }) => block.close),
-  );
-  let relation = outline.relations.length ? Math.min(...outline.relations) : undefined;
-  // A comment above the first relation stays with it.
-  while (relation && lines[relation - 1].trim().startsWith("%%")) relation--;
   const [first, second] = kind === "class" ? [lastClass, lastSpace] : [lastSpace, lastClass];
-  return first ?? second ?? relation ?? end;
+  return first ?? second ?? firstRelation(outline) ?? end;
 }
 
 /**
@@ -405,20 +474,28 @@ function withBody(source: string, id: string): string {
       indentOf(lines[close]) + lines[close].trim().slice(0, -1).trimEnd(),
       `${indent}}`,
     );
+  openOnOwnLine(lines, line, declaration.body, indent + step);
+  return lines.join("\n");
+}
+
+/**
+ * Gives the first member of a body, which shares its line with the opening brace, a line of its
+ * own at the indentation of the body; a body on one line closes on a line of its own too.
+ */
+function openOnOwnLine(lines: string[], line: string, { open, close }: Block, inside: string) {
   const braces = line.trim().match(CLASS)![4],
     head = line.trimEnd().slice(0, line.trimEnd().length - braces.length + 1),
     inner = braces.slice(1).trim();
-  if (inner) {
-    const member = close === open ? inner.slice(0, -1).trim() : inner;
-    lines.splice(
-      open,
-      1,
-      head,
-      ...(member ? [indent + step + member] : []),
-      ...(close === open ? [`${indent}}`] : []),
-    );
-  }
-  return lines.join("\n");
+  if (!inner) return;
+  const member = close === open ? inner.slice(0, -1).trim() : inner,
+    indent = indentOf(line);
+  lines.splice(
+    open,
+    1,
+    head,
+    ...(member ? [inside + member] : []),
+    ...(close === open ? [`${indent}}`] : []),
+  );
 }
 
 /** The body of a class whose body `withBody` has opened, and the indentation of its lines. */
@@ -450,7 +527,7 @@ export function classMembers(source: string, id: string): string[] {
  * a class that is only mentioned gets its `class` statement.
  */
 export function addClassMember(source: string, id: string, text: string): string {
-  const member = memberText(text);
+  const member = blockLineText(text);
   if (!member || !parseClassDiagram(source).classes.has(id)) return source;
   const outline = outlineOf(withBody(source, id)),
     { block, indent } = bodyOf(outline, id);
@@ -463,7 +540,7 @@ export function addClassMember(source: string, id: string, text: string): string
  * statements, and the new ones stand in the body. Annotations and comments in the body stay.
  */
 export function setClassMembers(source: string, id: string, members: string[]): string {
-  const texts = members.map(memberText).filter(Boolean);
+  const texts = members.map(blockLineText).filter(Boolean);
   if (!parseClassDiagram(source).classes.has(id)) return source;
   if (!texts.length && !classMembers(source, id).length) return source;
   const outline = outlineOf(withBody(source, id)),
@@ -498,7 +575,7 @@ function memberAt(source: string, id: string, index: number) {
  * the body or as a `Class : member` statement. An empty text removes the member.
  */
 export function setClassMember(source: string, id: string, index: number, text: string): string {
-  const member = memberText(text);
+  const member = blockLineText(text);
   if (!member) return removeClassMember(source, id, index);
   const found = memberAt(source, id, index);
   if (!found || found.entry.text === member) return source;
@@ -560,6 +637,12 @@ export function setClassKind(source: string, id: string, kind: string): string {
   );
 }
 
+/** A `class` statement without the annotation it gives the class. */
+function withoutAnnotation(line: string): string {
+  const [, head, label = "", rest] = line.trim().match(CLASS_PARTS)!;
+  return indentOf(line) + head + label + rest.replace(/\s*<<\s*[^>]+?\s*>>/, "");
+}
+
 /**
  * The source of a class the parser knows without the annotations that `goes` names, however they
  * are written, and with another one as the first line of its body when given.
@@ -571,32 +654,30 @@ function annotate(
   add?: string,
 ): string {
   let outline = outlineOf(source);
-  const found = (item: ClassLines) =>
-    item.entries.filter((entry) => entry.annotation && goes(entry.annotation));
   // An annotation on a line with a brace gets a line of its own first; so does the new one.
-  if (add || found(outline.classes.get(id)!).some((entry) => entry.inline))
+  if (add || annotationEntries(outline.classes.get(id)!, goes).some((entry) => entry.inline))
     outline = outlineOf(withBody(source, id));
   const item = outline.classes.get(id)!,
     { lines } = outline,
     gone = new Set([
-      ...found(item).map((entry) => entry.index),
+      ...annotationEntries(item, goes).map((entry) => entry.index),
       ...item.marks.filter((mark) => goes(mark.annotation)).map((mark) => mark.index),
     ]);
   for (const declaration of item.declarations)
-    if (declaration.annotation && goes(declaration.annotation)) {
-      const line = lines[declaration.index],
-        [, head, label = "", rest] = line.trim().match(CLASS_PARTS)!;
-      lines[declaration.index] =
-        indentOf(line) + head + label + rest.replace(/\s*<<\s*[^>]+?\s*>>/, "");
-    }
-  const body = add ? bodyOf(outline, id) : null;
+    if (declaration.annotation && goes(declaration.annotation))
+      lines[declaration.index] = withoutAnnotation(lines[declaration.index]);
+  const opened = add ? bodyOf(outline, id).block.open : -1;
   return lines
     .flatMap((line, index) => [
       ...(gone.has(index) ? [] : [line]),
-      ...(body && index === body.block.open ? [`${indentOf(line)}${stepOf(lines)}<<${add}>>`] : []),
+      ...(index === opened ? [`${indentOf(line)}${stepOf(lines)}<<${add}>>`] : []),
     ])
     .join("\n");
 }
+
+/** The entries of a class that are annotations `goes` names. */
+const annotationEntries = (item: ClassLines, goes: (annotation: string) => boolean) =>
+  item.entries.filter((entry) => entry.annotation && goes(entry.annotation));
 
 /**
  * The stereotype of a class: the annotation it is drawn under, whatever it says (`interface`,
@@ -619,35 +700,66 @@ export function setClassStereotype(source: string, id: string, text: string): st
       .replace(/\s+/g, " ")
       .trim(),
     found = parseClassDiagram(source).classes.get(id);
-  if (!found || (name && name === classStereotype(source, id) && found.annotations.length < 2))
-    return source;
+  if (!found || hasOnlyStereotype(found, name)) return source;
   if (!name || !found.annotations.length)
     return annotate(source, id, () => true, name || undefined);
+  return restereotyped(source, id, name);
+}
+
+/**
+ * The source with a class's annotations rewritten in place to one that says a name: the first
+ * keeps its place and the others go. Where that cannot be done in place, `annotate` does it.
+ */
+function restereotyped(source: string, id: string, name: string): string {
   const outline = outlineOf(source),
-    item = outline.classes.get(id)!,
-    { lines } = outline,
-    written = /<<\s*[^>]+?\s*>>/,
-    places = [
-      ...item.entries
-        .filter((entry) => entry.annotation)
-        .map((entry) => ({ index: entry.index, line: !entry.inline, whole: true })),
-      ...item.marks.map((mark) => ({ index: mark.index, line: true, whole: true })),
-      ...item.declarations
-        .filter((declaration) => declaration.annotation)
-        .map((declaration) => ({ index: declaration.index, line: true, whole: false })),
-    ].toSorted((a, b) => a.index - b.index);
+    places = annotationPlaces(outline.classes.get(id)!);
   // An annotation on a line with a brace has no place of its own to be rewritten in.
   if (places.some((place) => !place.line)) return annotate(source, id, () => true, name);
-  const [kept, ...rest] = places,
-    gone = new Set<number>();
-  lines[kept.index] = lines[kept.index].replace(written, () => `<<${name}>>`);
-  for (const place of rest)
-    if (place.whole) gone.add(place.index);
-    else lines[place.index] = lines[place.index].replace(new RegExp(`\\s*${written.source}`), "");
-  const result = lines.filter((_, index) => !gone.has(index)).join("\n");
+  const result = withOneAnnotation(outline.lines, places, name);
   return reads(result)?.classes.get(id)?.annotations.join() === name
     ? result
     : annotate(source, id, () => true, name);
+}
+
+/** Whether a name is a class's one and only annotation. */
+const hasOnlyStereotype = (found: UmlClass, name: string) =>
+  !!name && name === found.annotations[0] && found.annotations.length < 2;
+
+/** An annotation as it is written. */
+const WRITTEN_ANNOTATION = /<<\s*[^>]+?\s*>>/;
+
+/**
+ * Where the source gives a class an annotation, in the order of the lines: whether it stands on a
+ * line without a brace, and whether it is the whole statement or a piece of a `class` statement.
+ */
+const annotationPlaces = (item: ClassLines) =>
+  [
+    ...item.entries
+      .filter((entry) => entry.annotation)
+      .map((entry) => ({ index: entry.index, line: !entry.inline, whole: true })),
+    ...item.marks.map((mark) => ({ index: mark.index, line: true, whole: true })),
+    ...item.declarations
+      .filter((declaration) => declaration.annotation)
+      .map((declaration) => ({ index: declaration.index, line: true, whole: false })),
+  ].toSorted((a, b) => a.index - b.index);
+
+/** The source with the first annotation of a class saying a name, and the others gone. */
+function withOneAnnotation(
+  lines: string[],
+  places: ReturnType<typeof annotationPlaces>,
+  name: string,
+): string {
+  const [kept, ...rest] = places,
+    gone = new Set<number>();
+  lines[kept.index] = lines[kept.index].replace(WRITTEN_ANNOTATION, () => `<<${name}>>`);
+  for (const place of rest)
+    if (place.whole) gone.add(place.index);
+    else
+      lines[place.index] = lines[place.index].replace(
+        new RegExp(`\\s*${WRITTEN_ANNOTATION.source}`),
+        "",
+      );
+  return lines.filter((_, index) => !gone.has(index)).join("\n");
 }
 
 /** The ways a kind of relation is written: from its first end to its second, and the other way round. */
@@ -680,16 +792,6 @@ function wordOf(label: string): string {
     : (words[0] ?? "");
 }
 
-/** A piece's id: its name as one word when it has one that is free, else the base with a number. */
-function freshId(taken: (id: string) => boolean, base: string, label: string): string {
-  const name = wordOf(label);
-  if (name && !taken(name)) return name;
-  for (let count = name ? 2 : 1; ; count++) {
-    const id = `${name || base}${count}`;
-    if (!taken(id)) return id;
-  }
-}
-
 /** Whether an id is taken in a diagram: by a class or a namespace, or as one a note or a lollipop gets. */
 const usedIn = (diagram: ClassDiagram) => (name: string) =>
   diagram.classes.has(name) || diagram.namespaces.has(name) || /^(note|interface)\d+$/.test(name);
@@ -707,76 +809,108 @@ const spaceOf = (diagram: ClassDiagram, id: string | null | undefined) =>
  * interface of the class given as its parent, and nothing without one. Returns the id of its
  * shape, empty when nothing is added.
  */
-export function addClassPiece(
+function addClassPiece(
   source: string,
   piece: { kind: string; label?: string; parent?: string | null },
 ): { source: string; id: string } {
   const diagram = parseClassDiagram(source),
     outline = outlineOf(source),
-    step = stepOf(outline.lines),
-    label = (piece.label ?? "").replace(/\s*\n\s*/g, " ").trim(),
     parent = spaceOf(diagram, piece.parent);
-  if (piece.kind === "lollipop") return addLollipop(source, piece.parent ?? "", label);
-  let id = "",
-    text: string[];
-  if (piece.kind === "note") text = [`note "${labelText(piece.label ?? "") || "Note"}"`];
-  else if (piece.kind === "package") {
-    // A name is free when no package has it, wherever that one stands.
-    const names = new Set([...diagram.namespaces.keys()].map((space) => space.split(".").at(-1)));
-    const name = freshId((name) => names.has(name), "Package", label);
-    id = `ns:${parent ? `${parent}.${name}` : name}`;
-    text = [`namespace ${name}${label && label !== name ? `["${spaceLabel(label)}"]` : ""} {`, "}"];
-  } else {
-    const kind = piece.kind in ANNOTATIONS ? piece.kind : "class";
-    id = freshId(usedIn(diagram), kind[0].toUpperCase() + kind.slice(1), label);
-    const head = `class ${id}${label && label !== id ? `["${labelText(label, " ")}"]` : ""}`;
-    text = kind === "class" ? [head] : [`${head} {`, `${step}<<${ANNOTATIONS[kind]}>>`, "}"];
-  }
-  const at = put(
-      outline,
-      text,
-      parent,
-      piece.kind === "note" || piece.kind === "package" ? piece.kind : "class",
-    ),
+  if (piece.kind === "lollipop")
+    return addLollipop(source, piece.parent ?? "", nameOf(piece.label));
+  const made = newPart(diagram, piece.kind, piece.label, parent, stepOf(outline.lines)),
+    kind = piece.kind === "note" || piece.kind === "package" ? piece.kind : "class",
+    at = put(outline, made.text, parent, kind),
     result = outline.lines.join("\n");
   // Notes are numbered in the order of the source: the one on the new line says which it is.
-  if (piece.kind === "note")
-    id = parseClassDiagram(result).notes.find((note) => note.line === at + 1)?.id ?? "";
-  return { source: result, id };
+  if (piece.kind !== "note") return { source: result, id: made.id };
+  return {
+    source: result,
+    id: parseClassDiagram(result).notes.find((note) => note.line === at + 1)?.id ?? "",
+  };
+}
+
+/** A name a piece is added with, on one line. */
+const nameOf = (label: string | undefined) => (label ?? "").replace(/\s*\n\s*/g, " ").trim();
+
+/** The statements of a new part of a kind and the id of its shape; a note's id is known once it stands. */
+function newPart(
+  diagram: ClassDiagram,
+  kind: string,
+  label: string | undefined,
+  parent: string | null,
+  step: string,
+): { id: string; text: string[] } {
+  if (kind === "note") return { id: "", text: [`note "${entityCoded(label ?? "") || "Note"}"`] };
+  if (kind === "package") return newPackage(diagram, nameOf(label), parent);
+  return newClass(diagram, kind in ANNOTATIONS ? kind : "class", nameOf(label), step);
+}
+
+/** The statements of a new package: its name is free when no package has it, wherever that one stands. */
+function newPackage(diagram: ClassDiagram, label: string, parent: string | null) {
+  const names = new Set([...diagram.namespaces.keys()].map((space) => space.split(".").at(-1))),
+    name = freshId((name) => names.has(name), "Package", wordOf(label));
+  return {
+    id: `ns:${parent ? `${parent}.${name}` : name}`,
+    text: [`namespace ${name}${label && label !== name ? `["${spaceLabel(label)}"]` : ""} {`, "}"],
+  };
+}
+
+/** The statements of a new class of a kind, with its annotation where the kind has one. */
+function newClass(diagram: ClassDiagram, kind: string, label: string, step: string) {
+  const id = freshId(usedIn(diagram), kind[0].toUpperCase() + kind.slice(1), wordOf(label)),
+    head = `class ${id}${label && label !== id ? `["${entityCoded(label, " ")}"]` : ""}`;
+  return {
+    id,
+    text: kind === "class" ? [head] : [`${head} {`, `${step}<<${ANNOTATIONS[kind]}>>`, "}"],
+  };
 }
 
 /**
  * A relation's line with another operator, label or name at an end; what is not changed stays,
  * the multiplicities among it.
  */
-function relationLine(
-  line: string,
-  change: {
-    operator?: (start: string, end: string) => string;
-    label?: string;
-    ends?: (left: string, right: string, start: string, end: string) => [string, string];
-    /** The multiplicity at the first end, at the second end, or both; an empty one goes. */
-    multiplicity?: { start?: string; end?: string };
-    /** Whether the ends change places, each with its multiplicity. */
-    reverse?: boolean;
-  },
-): string {
+function relationLine(line: string, change: RelationChange): string {
   const match = line.trim().match(RELATION);
   if (!match) return line;
-  const [, left, gap, startLabel = "", start = "", stroke, end = "", space, endLabel = "", right] =
-    match;
-  const quoted = (text: string) => (text.trim() ? `${text.trim()} ` : ""),
-    given = (text: string | undefined, old: string) =>
-      text === undefined ? quoted(old) : text ? `"${text}" ` : "";
-  let near = given(change.multiplicity?.start, startLabel),
-    far = given(change.multiplicity?.end, endLabel),
-    [first, second] = change.ends ? change.ends(left, right, start, end) : [left, right];
-  if (change.reverse) [near, far, first, second] = [far, near, second, first];
-  const operator = change.operator ? change.operator(start, end) : start + stroke + end,
-    label = change.label === undefined ? (match[10] ?? "").trim() : change.label;
+  const [, , gap, , start = "", stroke, end = "", space] = match,
+    { first, second, near, far } = relationEnds(match, change),
+    operator = change.operator?.(start, end) ?? start + stroke + end,
+    label = change.label ?? (match[10] ?? "").trim();
   // A multiplicity stands a space away from the name before it.
-  return `${indentOf(line)}${first}${near ? gap || " " : gap}${near}${operator}${far ? space || " " : space}${far}${second}${label ? ` : ${label}` : ""}`;
+  return `${indentOf(line)}${first}${spaced(gap, near)}${near}${operator}${spaced(space, far)}${far}${second}${label ? ` : ${label}` : ""}`;
 }
+
+/** The names at the ends of a relation's line once a change is made, and the multiplicity beside each. */
+function relationEnds(match: RegExpMatchArray, change: RelationChange) {
+  const [, left, , startLabel = "", start = "", , end = "", , endLabel = "", right] = match,
+    near = multiplicityText(change.multiplicity?.start, startLabel),
+    far = multiplicityText(change.multiplicity?.end, endLabel),
+    [first, second] = change.ends?.(left, right, start, end) ?? [left, right];
+  return change.reverse
+    ? { first: second, second: first, near: far, far: near }
+    : { first, second, near, far };
+}
+
+/** A change of the pieces of a relation's line. */
+interface RelationChange {
+  operator?: (start: string, end: string) => string;
+  label?: string;
+  ends?: (left: string, right: string, start: string, end: string) => [string, string];
+  /** The multiplicity at the first end, at the second end, or both; an empty one goes. */
+  multiplicity?: { start?: string; end?: string };
+  /** Whether the ends change places, each with its multiplicity. */
+  reverse?: boolean;
+}
+
+/** A multiplicity as a relation writes it, in quotes with a space after; the old one when none is given. */
+const multiplicityText = (text: string | undefined, old: string) => {
+  if (text === undefined) return old.trim() ? `${old.trim()} ` : "";
+  return text ? `"${text}" ` : "";
+};
+
+/** The gap before a multiplicity: at least a space, where there is one. */
+const spaced = (gap: string, multiplicity: string) => (multiplicity ? gap || " " : gap);
 
 /**
  * Joins two classes with a relation of a kind, an association when none is given. The first end
@@ -785,23 +919,26 @@ function relationLine(
  * note becomes one for the class at the other, whatever the kind: that is the only way a note
  * comes to a class, or to another one.
  */
-export function connectClasses(source: string, from: string, to: string, kind?: string): string {
+function connectClasses(source: string, from: string, to: string, kind?: string): string {
   const diagram = parseClassDiagram(source),
     lines = linesOf(source);
   const note = diagram.notes.find((item) => item.id === from || item.id === to);
-  if (note) {
-    const target = note.id === from ? to : from,
-      index = note.line - 1;
-    if (!diagram.classes.has(target) || /\s/.test(ref(target))) return source;
-    lines[index] = lines[index].replace(
-      /^(\s*note)(?:\s+for\s+\S+)?(?=\s+")/,
-      (_, head: string) => `${head} for ${ref(target)}`,
-    );
-    return lines.join("\n");
-  }
+  if (note) return noteFor(source, diagram, note, note.id === from ? to : from);
   const operator = OPERATORS[kind ?? "association"]?.[0];
   if (!operator || !diagram.classes.has(from) || !diagram.classes.has(to)) return source;
   lines.splice(rootEnd(lines), 0, `${outlineOf(source).indent}${ref(from)} ${operator} ${ref(to)}`);
+  return lines.join("\n");
+}
+
+/** The source with a note made the note of a class; unchanged where the class cannot be named. */
+function noteFor(source: string, diagram: ClassDiagram, note: ClassNote, target: string): string {
+  if (!diagram.classes.has(target) || /\s/.test(ref(target))) return source;
+  const lines = linesOf(source),
+    index = note.line - 1;
+  lines[index] = lines[index].replace(
+    /^(\s*note)(?:\s+for\s+\S+)?(?=\s+")/,
+    (_, head: string) => `${head} for ${ref(target)}`,
+  );
   return lines.join("\n");
 }
 
@@ -811,50 +948,59 @@ export function connectClasses(source: string, from: string, to: string, kind?: 
  * takes the label away. A namespace gets its label the same way, a note its text, and a lollipop
  * interface its name on the relation that draws it.
  */
-export function renameClassPart(source: string, id: string, label: string): string {
-  const diagram = parseClassDiagram(source);
-  const note = diagram.notes.find((item) => item.id === id),
+function renameClassPart(source: string, id: string, label: string): string {
+  const diagram = parseClassDiagram(source),
+    note = diagram.notes.find((item) => item.id === id),
     ball = diagram.lollipops.find((item) => item.id === id),
     space = spaceOf(diagram, id);
-  if (!note && !ball && !space && !diagram.classes.has(id)) return source;
-  if (!note && !space && !ball) source = declare(source, id);
-  const outline = outlineOf(source),
-    { lines } = outline;
-  const write = (index: number, change: (text: string) => string) => {
-    lines[index] = indentOf(lines[index]) + change(lines[index].trim());
-    return lines.join("\n");
-  };
-  if (note)
-    return write(note.line - 1, (text) =>
-      text.replace(/"[\s\S]*"$/, () => `"${labelText(label) || " "}"`),
-    );
-  if (ball) {
-    const name = label.replace(/\s*\n\s*/g, " ").trim();
-    if (!name) return source;
-    lines[ball.line - 1] = relationLine(lines[ball.line - 1], {
-      ends: (left, right, start, end) =>
-        start === "()" && !end ? [ref(name), right] : [left, ref(name)],
-    });
-    return lines.join("\n");
-  }
-  if (space) {
-    const blocks = outline.spaces.get(space) ?? [],
-      labelled = blocks.findLast((block) => NAMESPACE_PARTS.exec(lines[block.open].trim())?.[2]),
-      block = labelled ?? blocks[0],
-      name = spaceLabel(label);
-    // A namespace that only a dotted name implies has no statement to carry a label.
-    if (!block) return source;
-    return write(block.open, (text) => {
-      const [, head, , rest] = text.match(NAMESPACE_PARTS)!;
-      return name && name !== space.split(".").at(-1) ? `${head}["${name}"]${rest}` : head + rest;
-    });
-  }
-  const declarations = outline.classes.get(id)!.declarations,
+  if (note) return rewriteLine(linesOf(source), note.line - 1, (text) => noteText(text, label));
+  if (ball) return renameBall(source, ball.line - 1, label);
+  if (space) return renameSpaceLabel(source, space, label);
+  if (!diagram.classes.has(id)) return source;
+  const outline = outlineOf(declare(source, id)),
+    declarations = outline.classes.get(id)!.declarations,
     declaration = declarations.findLast((found) => found.labelled) ?? declarations[0],
-    name = labelText(label, " ");
-  return write(declaration.index, (text) => {
+    name = entityCoded(label, " ");
+  return rewriteLine(outline.lines, declaration.index, (text) => {
     const [, head, , rest] = text.match(CLASS_PARTS)!;
     return name && name !== id ? `${head}["${name}"]${rest}` : head + rest;
+  });
+}
+
+/** The source with one statement changed, its indentation kept. */
+function rewriteLine(lines: string[], index: number, change: (text: string) => string): string {
+  lines[index] = indentOf(lines[index]) + change(lines[index].trim());
+  return lines.join("\n");
+}
+
+/** A note statement with another text. */
+const noteText = (statement: string, label: string) =>
+  statement.replace(/"[\s\S]*"$/, () => `"${entityCoded(label) || " "}"`);
+
+/** The source with a lollipop interface under another name, on the relation that draws it. */
+function renameBall(source: string, index: number, label: string): string {
+  const name = label.replace(/\s*\n\s*/g, " ").trim(),
+    lines = linesOf(source);
+  if (!name) return source;
+  lines[index] = relationLine(lines[index], {
+    ends: (left, right, start, end) =>
+      start === "()" && !end ? [ref(name), right] : [left, ref(name)],
+  });
+  return lines.join("\n");
+}
+
+/** The source with a namespace under another label, on the statement that has one or else its first. */
+function renameSpaceLabel(source: string, space: string, label: string): string {
+  const { lines, spaces } = outlineOf(source),
+    blocks = spaces.get(space) ?? [],
+    labelled = blocks.findLast((block) => NAMESPACE_PARTS.exec(lines[block.open].trim())?.[2]),
+    block = labelled ?? blocks[0],
+    name = spaceLabel(label);
+  // A namespace that only a dotted name implies has no statement to carry a label.
+  if (!block) return source;
+  return rewriteLine(lines, block.open, (text) => {
+    const [, head, , rest] = text.match(NAMESPACE_PARTS)!;
+    return name && name !== space.split(".").at(-1) ? `${head}["${name}"]${rest}` : head + rest;
   });
 }
 
@@ -905,29 +1051,45 @@ export function renameClassId(source: string, id: string, newId: string): string
   const diagram = parseClassDiagram(source),
     name = newId.trim(),
     space = spaceOf(diagram, id);
-  if (space) {
-    const parent = space.split(".").slice(0, -1).join("."),
-      full = name.replace(/^ns:/, "");
-    return renameSpace(
-      source,
-      diagram,
-      space,
-      parent && full.startsWith(`${parent}.`) ? full.slice(parent.length + 1) : full,
-    );
-  }
+  if (space) return renameSpace(source, diagram, space, lastName(space, name));
+  if (!canTakeClassId(diagram, id, name)) return source;
+  const result = withNameAt(outlineOf(source), id, ref(name)),
+    now = result === undefined ? undefined : reads(result);
   if (
-    !diagram.classes.has(id) ||
-    !name ||
-    name === id ||
-    /[`"\n]/.test(name) ||
-    /^(note|interface)\d+$|^ns:/.test(name) ||
-    RESERVED.test(name) ||
-    diagram.classes.has(name)
+    !now ||
+    !renamedOnly((item) => now.classes.has(item), id, name, countsOf(diagram), countsOf(now))
   )
     return source;
-  const outline = outlineOf(source),
-    { lines } = outline,
-    written = ref(name);
+  const labelled = outlineOf(result!)
+    .classes.get(name)!
+    .declarations.some((declaration) => declaration.labelled);
+  return labelled && now.classes.get(name)!.label === name
+    ? renameClassPart(result!, name, name)
+    : result!;
+}
+
+/** The last name a namespace is to go by, from a new id given whole (`ns:Sales.Billing`) or as the last name. */
+function lastName(space: string, name: string): string {
+  const parent = space.split(".").slice(0, -1).join("."),
+    full = name.replace(/^ns:/, "");
+  return parent && full.startsWith(`${parent}.`) ? full.slice(parent.length + 1) : full;
+}
+
+/** Whether a class can go by a new id: one the syntax writes, no word of it, that no class has. */
+const canTakeClassId = (diagram: ClassDiagram, id: string, name: string) =>
+  canTakeId(
+    (item) => diagram.classes.has(item),
+    id,
+    name,
+    !/[`"\n]/.test(name) && !/^(note|interface)\d+$|^ns:/.test(name) && !RESERVED.test(name),
+  );
+
+/**
+ * The source with a class written as another name wherever a statement names it, its type
+ * arguments kept; undefined where a name in backticks would need them.
+ */
+function withNameAt(outline: Outline, id: string, written: string): string | undefined {
+  const { lines } = outline;
   // From the right, so the places before keep their columns.
   const places = outline.names
     .filter((place) => place.id === id)
@@ -936,26 +1098,18 @@ export function renameClassId(source: string, id: string, newId: string): string
     const raw = lines[index].slice(start, end),
       generic = raw.startsWith("`") || !raw.includes("~") ? "" : raw.slice(raw.indexOf("~"));
     // A name in backticks carries no type arguments.
-    if (generic && written.startsWith("`")) return source;
+    if (generic && written.startsWith("`")) return undefined;
     lines[index] = lines[index].slice(0, start) + written + generic + lines[index].slice(end);
   }
-  const result = lines.join("\n"),
-    now = reads(result);
-  if (
-    !now?.classes.has(name) ||
-    now.classes.has(id) ||
-    now.classes.size !== diagram.classes.size ||
-    now.relations.length !== diagram.relations.length ||
-    now.notes.length !== diagram.notes.length
-  )
-    return source;
-  const labelled = outlineOf(result)
-    .classes.get(name)!
-    .declarations.some((declaration) => declaration.labelled);
-  return labelled && now.classes.get(name)!.label === name
-    ? renameClassPart(result, name, name)
-    : result;
+  return lines.join("\n");
 }
+
+/** How many classes, relations and notes a diagram has. */
+const countsOf = (diagram: ClassDiagram) => [
+  diagram.classes.size,
+  diagram.relations.length,
+  diagram.notes.length,
+];
 
 /** The ids a new class gets when it has no name yet, and the name a new package gets. */
 const GENERATED = /^(?:Class|Interface|Abstract|Enumeration|Package)\d+$/;
@@ -972,17 +1126,23 @@ export function isGeneratedClassId(source: string, id: string): boolean {
   if (space) return GENERATED.test(space.split(".").at(-1)!);
   if (!item) return false;
   if (GENERATED.test(id)) return true;
-  // A copy goes by the id of its original as one word, with a number from 2 where that is taken.
-  return [...diagram.classes.values()].some((original) => {
-    const base = wordOf(original.id),
-      number = id.startsWith(base) ? id.slice(base.length) : "x";
-    return (
-      original !== item &&
-      !!base &&
-      (number === "" || (/^\d+$/.test(number) && Number(number) > 1)) &&
-      (item.label === id || item.label === original.label)
-    );
-  });
+  return [...diagram.classes.values()].some(
+    (original) => original !== item && isCopyOf(item, original),
+  );
+}
+
+/**
+ * Whether a class looks like a copy of another: it goes by the id of the original as one word,
+ * with a number from 2 where that is taken, and shows the original's name or its own id.
+ */
+function isCopyOf(item: UmlClass, original: UmlClass) {
+  const base = wordOf(original.id),
+    number = item.id.startsWith(base) ? item.id.slice(base.length) : "x";
+  return (
+    !!base &&
+    (number === "" || (/^\d+$/.test(number) && Number(number) > 1)) &&
+    (item.label === item.id || item.label === original.label)
+  );
 }
 
 /**
@@ -991,7 +1151,7 @@ export function isGeneratedClassId(source: string, id: string): boolean {
  * the source names it, unless another class or package has that id; then the id stays and the
  * name is its label. A note gets its text. Returns the id the part has afterwards.
  */
-export function retitleClassPart(
+function retitleClassPart(
   source: string,
   id: string,
   name: string,
@@ -1013,11 +1173,11 @@ export function retitleClassPart(
 }
 
 /** Gives a relation another label; an empty one removes it. Its multiplicities stay. */
-export function labelRelation(source: string, edge: string, label: string): string {
+function labelRelation(source: string, edge: string, label: string): string {
   const relation = parseClassDiagram(source).relations.find((item) => item.id === edge),
     lines = linesOf(source);
   if (!relation) return source;
-  lines[relation.line - 1] = relationLine(lines[relation.line - 1], { label: labelText(label) });
+  lines[relation.line - 1] = relationLine(lines[relation.line - 1], { label: entityCoded(label) });
   return lines.join("\n");
 }
 
@@ -1026,20 +1186,23 @@ export function labelRelation(source: string, edge: string, label: string): stri
  * that a diamond stands at, stays the first end of the new kind. The relation that draws a
  * lollipop interface and the line of a note stay what they are.
  */
-export function relinkRelation(source: string, edge: string, kind: string): string {
+function relinkRelation(source: string, edge: string, kind: string): string {
   const diagram = parseClassDiagram(source),
     relation = diagram.relations.find((item) => item.id === edge),
     lines = linesOf(source);
   if (!relation || !OPERATORS[kind] || kind === kindOfRelation(relation)) return source;
   if (drawsBall(diagram, relation)) return source;
   lines[relation.line - 1] = relationLine(lines[relation.line - 1], {
-    operator: (start, end) => {
-      const pointed = start && !end ? /[<|]/.test(start) : false,
-        held = end && !start ? /[*o]/.test(end) : false;
-      return OPERATORS[kind][pointed || held ? 1 : 0];
-    },
+    operator: (start, end) => OPERATORS[kind][pointsBack(start, end) ? 1 : 0],
   });
   return lines.join("\n");
+}
+
+/** Whether a relation is written from its second end: an arrow at the start, or a diamond at the end. */
+function pointsBack(start: string, end: string): boolean {
+  if (start && !end) return /[<|]/.test(start);
+  if (end && !start) return /[*o]/.test(end);
+  return false;
 }
 
 /** Whether a relation draws a lollipop interface: one of its ends is the ball, not a class. */
@@ -1106,12 +1269,12 @@ export function duplicateClass(source: string, id: string): { source: string; id
   const diagram = parseClassDiagram(source),
     item = diagram.classes.get(id);
   if (!item) return { source, id: "" };
-  const copy = freshId(usedIn(diagram), "Class", id),
+  const copy = freshId(usedIn(diagram), "Class", wordOf(id)),
     outline = outlineOf(declare(source, id)),
     { lines } = outline,
     declaration = outline.classes.get(id)!.declarations.at(-1)!,
     indent = indentOf(lines[declaration.index]),
-    head = `class ${copy}${item.generic ? `~${item.generic}~` : ""}${item.label === id ? "" : `["${labelText(item.label, " ")}"]`}`,
+    head = `class ${copy}${item.generic ? `~${item.generic}~` : ""}${item.label === id ? "" : `["${entityCoded(item.label, " ")}"]`}`,
     inner = [
       ...item.annotations.map((annotation) => `<<${annotation}>>`),
       ...classMembers(source, id),
@@ -1133,20 +1296,80 @@ export function duplicateClass(source: string, id: string): { source: string; id
  */
 export function moveClassInto(source: string, id: string, namespace: string | null): string {
   const diagram = parseClassDiagram(source),
-    space =
-      namespace === null
-        ? null
-        : spaceOf(diagram, namespace.startsWith("ns:") ? namespace : `ns:${namespace}`),
+    move = moveOf(diagram, id, namespace);
+  if (!move) return source;
+  const { note, space } = move,
+    result = note ? movedNote(source, note, space) : movedClass(source, id, space),
+    now = reads(result);
+  if (!now || now.classes.size !== diagram.classes.size) return source;
+  return arrived(diagram, now, note ? undefined : id, space) ? result : source;
+}
+
+/**
+ * What a move takes, the note of an id or else its class, and the namespace it goes to; undefined
+ * for a move of nothing, to no namespace of the diagram, or to where the part stands.
+ */
+function moveOf(diagram: ClassDiagram, id: string, namespace: string | null) {
+  const space = namespace === null ? null : spaceOf(diagram, spaceId(namespace)),
     note = diagram.notes.find((item) => item.id === id),
     item = note ?? diagram.classes.get(id);
-  if (!item || (namespace !== null && !space) || item.namespace === space) return source;
-  const outline = outlineOf(note ? source : declare(source, id)),
-    { lines } = outline;
-  const ranges = note
-    ? [[note.line - 1, note.line - 1]]
-    : outline.classes
-        .get(id)!
-        .declarations.map(({ index, body }) => [index, body ? body.close : index]);
+  if (!item || (namespace !== null && !space) || item.namespace === space) return undefined;
+  return { note, space };
+}
+
+/** The source with ranges of lines moved to the end of a namespace, or to where their kind stands outside. */
+function moveLines(
+  source: string,
+  ranges: number[][],
+  space: string | null,
+  kind: "class" | "note",
+): string {
+  const { moved, rest } = cut(linesOf(source), ranges);
+  put(rest, moved, space, kind);
+  return rest.lines.join("\n");
+}
+
+/** The source with a note moved into a namespace or out of every one. */
+const movedNote = (source: string, note: ClassNote, space: string | null) =>
+  moveLines(source, [[note.line - 1, note.line - 1]], space, "note");
+
+/** The source with a class declared and its declarations, bodies and all, moved into a namespace or out of every one. */
+function movedClass(source: string, id: string, space: string | null): string {
+  const text = declare(source, id),
+    declarations = outlineOf(text).classes.get(id)!.declarations;
+  return moveLines(
+    text,
+    declarations.map(({ index, body }) => [index, body?.close ?? index]),
+    space,
+    "class",
+  );
+}
+
+/**
+ * Whether a move arrived: the class stands in the namespace, or, for a note, which may have
+ * another id now, the namespace holds one note more.
+ */
+function arrived(
+  before: ClassDiagram,
+  now: ClassDiagram,
+  id: string | undefined,
+  space: string | null,
+) {
+  if (id !== undefined) return now.classes.get(id)?.namespace === space;
+  const held = (found: ClassDiagram) =>
+    found.notes.filter((other) => other.namespace === space).length;
+  return held(now) === held(before) + 1;
+}
+
+/** A namespace's id as a group has it: `ns:` and the dotted id. */
+const spaceId = (namespace: string) =>
+  namespace.startsWith("ns:") ? namespace : `ns:${namespace}`;
+
+/**
+ * Cuts ranges of lines out of a source: the lines without their own indentation, and the outline
+ * of what is left.
+ */
+function cut(lines: string[], ranges: number[][]): { moved: string[]; rest: Outline } {
   const moved: string[] = [],
     gone = new Set<number>();
   for (const [from, to] of ranges) {
@@ -1160,15 +1383,7 @@ export function moveClassInto(source: string, id: string, namespace: string | nu
       );
     }
   }
-  const rest = outlineOf(lines.filter((_, index) => !gone.has(index)).join("\n"));
-  put(rest, moved, space, note ? "note" : "class");
-  const result = rest.lines.join("\n"),
-    now = reads(result),
-    held = (found: ClassDiagram) => found.notes.filter((other) => other.namespace === space).length;
-  const arrived = note
-    ? !!now && held(now) === held(diagram) + 1
-    : now?.classes.get(id)?.namespace === space;
-  return arrived && now!.classes.size === diagram.classes.size ? result : source;
+  return { moved, rest: outlineOf(lines.filter((_, index) => !gone.has(index)).join("\n")) };
 }
 
 /**
@@ -1180,33 +1395,45 @@ export function ungroupClassPackage(source: string, id: string): string {
   const space = spaceOf(parseClassDiagram(source), id);
   if (!space) return source;
   const outline = outlineOf(source),
-    { lines } = outline,
-    step = stepOf(lines),
-    at = space.split(".").length - 1,
     gone = new Set<number>();
-  for (const { id: full, name, block } of outline.blocks) {
-    if (full !== space && !full.startsWith(`${space}.`)) continue;
-    // A statement names the namespaces from the one it stands in downward.
-    const words = name.split("."),
-      first = full.split(".").length - words.length;
-    if (at < first) continue;
-    words.splice(at - first, 1);
-    const line = lines[block.open],
-      indent = indentOf(line);
-    if (words.length) {
-      const [, , label = "", rest] = line.trim().match(NAMESPACE_PARTS)!;
-      // A label is that of the last name: it goes with it.
-      lines[block.open] =
-        `${indent}namespace ${words.join(".")}${full === space ? "" : label}${rest}`;
-      continue;
-    }
-    gone.add(block.open).add(block.close);
-    for (let index = block.open + 1; index < block.close; index++)
-      if (lines[index].startsWith(indent + step))
-        lines[index] = indent + lines[index].slice(indent.length + step.length);
-  }
-  const result = lines.filter((_, index) => !gone.has(index)).join("\n");
+  for (const statement of outline.blocks)
+    if (statement.id === space || statement.id.startsWith(`${space}.`))
+      ungroupStatement(outline.lines, statement, space, gone);
+  const result = outline.lines.filter((_, index) => !gone.has(index)).join("\n");
   return reads(result) ? result : source;
+}
+
+/**
+ * Takes a namespace out of a statement that opens it or a namespace inside it: out of its dotted
+ * name, or, where it is the whole name, the statement and its brace go into `gone` and what the
+ * block holds moves one level out.
+ */
+function ungroupStatement(
+  lines: string[],
+  { id: full, name, block }: Outline["blocks"][number],
+  space: string,
+  gone: Set<number>,
+) {
+  // A statement names the namespaces from the one it stands in downward.
+  const at = space.split(".").length - 1,
+    words = name.split("."),
+    first = full.split(".").length - words.length;
+  if (at < first) return;
+  words.splice(at - first, 1);
+  const line = lines[block.open],
+    indent = indentOf(line),
+    step = stepOf(lines);
+  if (words.length) {
+    const [, , label = "", rest] = line.trim().match(NAMESPACE_PARTS)!;
+    // A label is that of the last name: it goes with it.
+    lines[block.open] =
+      `${indent}namespace ${words.join(".")}${full === space ? "" : label}${rest}`;
+    return;
+  }
+  gone.add(block.open).add(block.close);
+  for (let index = block.open + 1; index < block.close; index++)
+    if (lines[index].startsWith(indent + step))
+      lines[index] = indent + lines[index].slice(indent.length + step.length);
 }
 
 /**
@@ -1218,61 +1445,85 @@ export function ungroupClassPackage(source: string, id: string): string {
 export function removeClassParts(source: string, ids: Iterable<string>): string {
   const diagram = parseClassDiagram(source),
     outline = outlineOf(source),
-    { lines } = outline;
-  const gone = new Set<string>(),
-    dropped = new Set<number>(),
-    rewritten = new Map<number, string>();
-  const drop = (from: number, to = from) => {
-    for (let index = from; index <= to; index++) dropped.add(index);
-  };
-  const within = (space: string | null, id: string) =>
-    space === id || !!space?.startsWith(`${id}.`);
-  for (const id of ids) {
-    const space = spaceOf(diagram, id),
-      note = diagram.notes.find((item) => item.id === id || `${item.id}:link` === id),
-      line = [...diagram.relations, ...diagram.lollipops].find((item) => item.id === id)?.line;
-    if (space) {
-      for (const [other, blocks] of outline.spaces)
-        if (within(other, space)) for (const block of blocks) drop(block.open, block.close);
-      for (const item of diagram.classes.values())
-        if (within(item.namespace, space)) gone.add(item.id);
-    } else if (diagram.classes.has(id)) gone.add(id);
-    else if (note?.id === id) drop(note.line - 1);
-    else if (note)
-      rewritten.set(
-        note.line - 1,
-        lines[note.line - 1].replace(/^(\s*note)\s+for\s+\S+(?=\s+")/, "$1"),
-      );
-    else if (line) drop(line - 1);
-  }
-  for (const id of gone) {
+    removal: Removal = { gone: new Set(), dropped: new Set(), rewritten: new Map() };
+  for (const id of ids) choose(diagram, outline, id, removal);
+  for (const id of removal.gone) {
     const item = outline.classes.get(id);
-    if (!item) continue;
-    for (const { index, body } of item.declarations) drop(index, body ? body.close : index);
-    for (const index of [...item.mentions, ...item.styles]) drop(index);
+    if (item) dropClass(item, removal.dropped);
   }
   // What stays loses no class: one that only the removed lines name is declared where it stood.
-  const kept = new Map<number, string[]>();
-  for (const item of outline.classes.values()) {
-    // A statement in a namespace would take the class into it: the place is one outside.
-    const first = item.mentions.find((index) => !outline.nested.has(index));
-    if (
-      gone.has(item.id) ||
-      first === undefined ||
-      item.mentions.some((index) => !dropped.has(index) && !rewritten.has(index))
-    )
-      continue;
-    kept.set(first, [
-      ...(kept.get(first) ?? []),
-      `${indentOf(lines[first])}class ${declared(diagram, item.id)}`,
-    ]);
-  }
-  return lines
+  const kept = keptClasses(diagram, outline, removal);
+  return outline.lines
     .flatMap((line, index) => [
-      ...(dropped.has(index) ? [] : [rewritten.get(index) ?? line]),
+      ...(removal.dropped.has(index) ? [] : [removal.rewritten.get(index) ?? line]),
       ...(kept.get(index) ?? []),
     ])
     .join("\n");
+}
+
+/** What a removal takes: the classes that go, the lines that go, and the lines written anew. */
+interface Removal {
+  gone: Set<string>;
+  dropped: Set<number>;
+  rewritten: Map<number, string>;
+}
+
+/** Adds the lines from one index to another to those that go. */
+function drop(dropped: Set<number>, from: number, to = from) {
+  for (let index = from; index <= to; index++) dropped.add(index);
+}
+
+/** Adds the lines of a class that goes to those that go: its declarations with their bodies, and every line that names it. */
+function dropClass(item: ClassLines, dropped: Set<number>) {
+  for (const { index, body } of item.declarations) drop(dropped, index, body?.close ?? index);
+  for (const index of [...item.mentions, ...item.styles]) dropped.add(index);
+}
+
+/** Whether a namespace is another one or inside it. */
+const within = (space: string | null, id: string) => space === id || !!space?.startsWith(`${id}.`);
+
+/** Adds what goes with one chosen id to a removal. */
+function choose(diagram: ClassDiagram, outline: Outline, id: string, removal: Removal) {
+  const space = spaceOf(diagram, id),
+    note = diagram.notes.find((item) => item.id === id || `${item.id}:link` === id),
+    line = [...diagram.relations, ...diagram.lollipops].find((item) => item.id === id)?.line;
+  if (space) chooseSpace(diagram, outline, space, removal);
+  else if (diagram.classes.has(id)) removal.gone.add(id);
+  else if (note?.id === id) removal.dropped.add(note.line - 1);
+  // The line of a note leaves the note without a class.
+  else if (note)
+    removal.rewritten.set(
+      note.line - 1,
+      outline.lines[note.line - 1].replace(/^(\s*note)\s+for\s+\S+(?=\s+")/, "$1"),
+    );
+  else if (line) removal.dropped.add(line - 1);
+}
+
+/** Adds a namespace to a removal, with the namespaces and classes it holds. */
+function chooseSpace(diagram: ClassDiagram, outline: Outline, space: string, removal: Removal) {
+  for (const [other, blocks] of outline.spaces)
+    if (within(other, space))
+      for (const block of blocks) drop(removal.dropped, block.open, block.close);
+  for (const item of diagram.classes.values())
+    if (within(item.namespace, space)) removal.gone.add(item.id);
+}
+
+/**
+ * The `class` statements that keep a class which only removed lines name, by the line each
+ * follows: the first that names it outside every namespace, as one inside would take it in.
+ */
+function keptClasses(diagram: ClassDiagram, outline: Outline, removal: Removal) {
+  const kept = new Map<number, string[]>(),
+    stays = (index: number) => !removal.dropped.has(index) && !removal.rewritten.has(index);
+  for (const item of outline.classes.values()) {
+    const first = item.mentions.find((index) => !outline.nested.has(index));
+    if (removal.gone.has(item.id) || first === undefined || item.mentions.some(stays)) continue;
+    kept.set(first, [
+      ...(kept.get(first) ?? []),
+      `${indentOf(outline.lines[first])}class ${declared(diagram, item.id)}`,
+    ]);
+  }
+  return kept;
 }
 
 /**
@@ -1306,22 +1557,24 @@ export function whyNotClass(
   const diagram = parseClassDiagram(source),
     ends = [from, to],
     count = (test: (id: string) => boolean) => ends.filter(test).length,
-    notes = count((id) => diagram.notes.some((note) => note.id === id)),
-    classes = count((id) => diagram.classes.has(id));
-  if (notes === 2) return "A note is joined to a class, not to another note.";
-  if (notes === 1) {
-    if (!classes) return "A note is joined to a class: drop it on a class.";
-    const target = ends.find((id) => diagram.classes.has(id))!;
-    return /\s/.test(ref(target))
-      ? "A note cannot name a class whose id has spaces: give the class another id first."
-      : undefined;
-  }
+    notes = count((id) => diagram.notes.some((note) => note.id === id));
+  if (notes) return whyNotNote(diagram, ends, notes);
   if (count((id) => spaceOf(diagram, id) !== null))
     return "A package has no relations of its own: join the classes in it.";
   if (count((id) => diagram.lollipops.some((ball) => ball.id === id)))
     return "A lollipop interface belongs to the class it is drawn at.";
-  if (classes < 2) return "A relation joins two classes.";
+  if (count((id) => diagram.classes.has(id)) < 2) return "A relation joins two classes.";
   return kind === undefined || OPERATORS[kind] ? undefined : "There is no relation of that kind.";
+}
+
+/** Why a note is not joined to the other end, of the ends given, `notes` of which are notes. */
+function whyNotNote(diagram: ClassDiagram, ends: string[], notes: number): string | undefined {
+  if (notes === 2) return "A note is joined to a class, not to another note.";
+  const target = ends.find((id) => diagram.classes.has(id));
+  if (target === undefined) return "A note is joined to a class: drop it on a class.";
+  return /\s/.test(ref(target))
+    ? "A note cannot name a class whose id has spaces: give the class another id first."
+    : undefined;
 }
 
 /**
@@ -1361,26 +1614,16 @@ export function attachClass(
   at: string,
   link?: string,
 ): { source: string; id: string; edge: string } {
-  const diagram = parseClassDiagram(source),
-    node = readClasses(source).nodes.find((item) => item.id === at),
-    host = diagram.classes.has(at),
+  const node = readClasses(source).nodes.find((item) => item.id === at),
+    host = parseClassDiagram(source).classes.has(at),
     alone = (parent: string | null | undefined) => {
       const added = addClassPiece(source, { ...piece, parent });
       return { source: added.id ? added.source : source, id: added.id, edge: "" };
     };
-  if (piece.kind === "lollipop") {
-    const added = host ? addLollipop(source, at, piece.label ?? "") : { source, id: "" },
-      now = added.id ? parseClassDiagram(added.source) : undefined,
-      ball = now?.lollipops.find((item) => item.id === added.id);
-    return {
-      ...added,
-      edge: now?.relations.find((relation) => relation.line === ball?.line)?.id ?? "",
-    };
-  }
+  if (piece.kind === "lollipop") return attachLollipop(source, host ? at : "", piece.label);
   if (!node) return alone(null);
   if (node.group) return alone(at);
-  if (!host || piece.kind === "package" || (piece.kind !== "note" && link === undefined))
-    return alone(node.parent);
+  if (!joinsHost(piece.kind, host, link)) return alone(node.parent);
   const added = addClassPiece(source, { ...piece, parent: node.parent }),
     joined =
       piece.kind === "note"
@@ -1389,13 +1632,20 @@ export function attachClass(
   return { source: joined.source, id: added.id, edge: joined.edge };
 }
 
-/** A count with its word: `1 class`, `3 classes`; nothing for none. */
-const counted = (count: number, one: string, many = `${one}s`) =>
-  count > 0 ? [`${count} ${count > 1 ? many : one}`] : [];
+/** Whether a piece added at a part is joined to it: a note, or a class with a link, at a class. */
+const joinsHost = (kind: string, host: boolean, link: string | undefined) =>
+  host && kind !== "package" && (kind === "note" || link !== undefined);
 
-/** Words in a row: `a`, `a and b`, `a, b and c`. */
-const listed = (words: string[]) =>
-  words.length > 1 ? `${words.slice(0, -1).join(", ")} and ${words.at(-1)}` : (words[0] ?? "");
+/** Adds a lollipop interface to a class, none when no class is given, with the relation that draws it. */
+function attachLollipop(source: string, host: string, label: string | undefined) {
+  const added = host ? addLollipop(source, host, label ?? "") : { source, id: "" },
+    now = added.id ? parseClassDiagram(added.source) : undefined,
+    ball = now?.lollipops.find((item) => item.id === added.id);
+  return {
+    ...added,
+    edge: now?.relations.find((relation) => relation.line === ball?.line)?.id ?? "",
+  };
+}
 
 /**
  * What a removal takes with it, in words: the packages and classes it names, and how many

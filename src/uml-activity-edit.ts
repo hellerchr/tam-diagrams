@@ -10,14 +10,11 @@
 import type { Structure, StructureNode } from "./structure.ts";
 import { type FlowEdge, type Flowchart, parseFlowchart } from "./uml-activity.ts";
 import { accessibilityLines, escapeLabel, labelText as shownText, scan, STYLING } from "./uml.ts";
+import { dedent, indentOf, linesOf, numberedId, originalsOf } from "./uml-edit-text.ts";
 import { removePlaces } from "./uml-places.ts";
 
 /** What a canvas adds to an activity diagram. */
-export type FlowPiece = "step" | "decision" | "start" | "end" | "group" | "lane";
-
-const linesOf = (source: string) => source.replace(/\r\n?/g, "\n").split("\n");
-
-const indentOf = (line: string) => line.match(/^\s*/)![0];
+type FlowPiece = "step" | "decision" | "start" | "end" | "group" | "lane";
 
 /** The delimiters a node's shape is written with, longest opening first, as the parser reads them. */
 const DELIMITERS: [string, string[]][] = [
@@ -120,6 +117,7 @@ interface Model {
   header: number;
 }
 
+/** The place past the white space at a place in a text. */
 const blank = (text: string, at: number) => {
   while (at < text.length && /\s/.test(text[at])) at++;
   return at;
@@ -133,47 +131,61 @@ function readRef(text: string, from: number): Ref | null {
   if (!match) return null;
   const id = match[0],
     idEnd = start + id.length,
-    ref: Ref = { id, start, idEnd, end: idEnd, text: id };
-  const opener = DELIMITERS.find(([open]) => text.startsWith(open, idEnd));
+    ref: Ref = { id, start, idEnd, end: idEnd, text: id },
+    opener = DELIMITERS.find(([open]) => text.startsWith(open, idEnd));
   if (opener) {
-    const [open, closes] = opener,
-      inner = idEnd + open.length,
-      body = blank(text, inner);
-    let close: { at: number; text: string } | undefined;
-    if (text[body] === '"') {
-      const quote = text.indexOf('"', body + 1);
-      if (quote < 0) return null;
-      const after = blank(text, quote + 1),
-        found = closes.find((item) => text.startsWith(item, after));
-      if (!found) return null;
-      close = { at: after, text: found };
-    } else {
-      // The earliest closing delimiter ends the text.
-      for (const item of closes) {
-        const at = text.indexOf(item, inner);
-        if (at >= 0 && (!close || at < close.at)) close = { at, text: item };
-      }
-      if (!close) return null;
-    }
-    ref.end = close.at + close.text.length;
-    ref.shape = { open, start: inner, end: close.at, after: ref.end };
+    const shape = readShape(text, idEnd, opener);
+    if (!shape) return null;
+    ref.shape = shape;
+    ref.end = shape.after;
   }
-  const braces = text.slice(ref.end).match(/^@\{([^}]*)\}/);
-  if (braces) {
-    const at = ref.end + 2;
-    ref.braces = { start: ref.end, end: ref.end + braces[0].length };
-    for (const entry of braces[1].matchAll(/(\w+)\s*:\s*("(?:[^"]*)"|[^,]+)/g))
-      if (entry[1] === "label") {
-        const value = entry[2].trimEnd(),
-          valueAt = at + entry.index + entry[0].length - entry[2].length;
-        ref.braces.label = { start: valueAt, end: valueAt + value.length };
-      }
-    ref.end = ref.braces.end;
-  }
-  const css = text.slice(ref.end).match(/^:::[\w-]+/);
-  if (css) ref.end += css[0].length;
+  ref.braces = readBraces(text, ref.end);
+  if (ref.braces) ref.end = ref.braces.end;
+  ref.end += text.slice(ref.end).match(/^:::[\w-]+/)?.[0].length ?? 0;
   ref.text = text.slice(start, ref.end);
   return ref;
+}
+
+/** Reads the shape a node is written with after its id: where its label lies, and where it ends. */
+function readShape(text: string, idEnd: number, [open, closes]: [string, string[]]) {
+  const inner = idEnd + open.length,
+    body = blank(text, inner),
+    close = text[body] === '"' ? quotedClose(text, body, closes) : firstClose(text, inner, closes);
+  if (!close) return null;
+  return { open, start: inner, end: close.at, after: close.at + close.text.length };
+}
+
+/** The closing delimiter after a label in quotes. */
+function quotedClose(text: string, body: number, closes: string[]) {
+  const quote = text.indexOf('"', body + 1);
+  if (quote < 0) return undefined;
+  const after = blank(text, quote + 1),
+    found = closes.find((item) => text.startsWith(item, after));
+  return found ? { at: after, text: found } : undefined;
+}
+
+/** The earliest closing delimiter, which ends a label without quotes. */
+function firstClose(text: string, inner: number, closes: string[]) {
+  let close: { at: number; text: string } | undefined;
+  for (const item of closes) {
+    const at = text.indexOf(item, inner);
+    if (at >= 0 && (!close || at < close.at)) close = { at, text: item };
+  }
+  return close;
+}
+
+/** Reads the `@{ }` form at a place: where its braces lie, and the value of its `label` entry. */
+function readBraces(text: string, from: number): Ref["braces"] {
+  const braces = text.slice(from).match(/^@\{([^}]*)\}/);
+  if (!braces) return undefined;
+  const found: NonNullable<Ref["braces"]> = { start: from, end: from + braces[0].length };
+  for (const entry of braces[1].matchAll(/(\w+)\s*:\s*("(?:[^"]*)"|[^,]+)/g))
+    if (entry[1] === "label") {
+      const value = entry[2].trimEnd(),
+        valueAt = from + 2 + entry.index + entry[0].length - entry[2].length;
+      found.label = { start: valueAt, end: valueAt + value.length };
+    }
+  return found;
 }
 
 /** Reads an arrow with its text at a place of a statement, the way the parser does. */
@@ -228,26 +240,41 @@ function readChain(text: string): { groups: Ref[][]; arrows: Arrow[] } | null {
 /** Where the statements of a line lie, split at `;` outside quotes and brackets. */
 function split(text: string, from: number): { start: number; end: number }[] {
   const out: { start: number; end: number }[] = [];
+  let start = from;
+  for (const at of separators(text, from)) {
+    takePiece(out, text, start, at);
+    start = at + 1;
+  }
+  takePiece(out, text, start, text.length);
+  return out;
+}
+
+/** Notes where the statement between two places lies, without the blanks around it, when it says something. */
+function takePiece(
+  out: { start: number; end: number }[],
+  text: string,
+  start: number,
+  end: number,
+) {
+  const piece = text.slice(start, end),
+    lead = piece.length - piece.trimStart().length;
+  if (piece.trim()) out.push({ start: start + lead, end: start + lead + piece.trim().length });
+}
+
+/** Where a `;` separates statements in a line: outside quotes and brackets. */
+function separators(text: string, from: number): number[] {
+  const found: number[] = [];
   let depth = 0,
-    quote = false,
-    start = from;
-  const take = (end: number) => {
-    const piece = text.slice(start, end),
-      lead = piece.length - piece.trimStart().length;
-    if (piece.trim()) out.push({ start: start + lead, end: start + lead + piece.trim().length });
-  };
+    quote = false;
   for (let at = from; at < text.length; at++) {
     const c = text[at];
     if (c === '"') quote = !quote;
-    else if (!quote && "[({".includes(c)) depth++;
-    else if (!quote && "])}".includes(c)) depth = Math.max(0, depth - 1);
-    else if (!quote && !depth && c === ";") {
-      take(at);
-      start = at + 1;
-    }
+    else if (quote) continue;
+    else if ("[({".includes(c)) depth++;
+    else if ("])}".includes(c)) depth = Math.max(0, depth - 1);
+    else if (!depth && c === ";") found.push(at);
   }
-  take(text.length);
-  return out;
+  return found;
 }
 
 /**
@@ -258,11 +285,42 @@ function readModel(source: string): Model | null {
   const chart = parseFlowchart(source),
     lines = linesOf(source),
     rows = scan(source).lines,
-    header = rows[0].line - 1;
+    header = rows[0].line - 1,
+    reading: Reading = {
+      chart,
+      statements: [],
+      byLine: new Map(),
+      stack: [],
+      anonymous: 0,
+      edge: 0,
+    },
+    accessibility = accessibilityLines();
+  for (const place of placesOf(lines, rows, header)) {
+    const statement = addStatement(reading, place, lines[place.line].slice(place.start, place.end));
+    if (!accessibility(statement.text) && !readKind(reading, statement)) return null;
+  }
+  if (reading.edge !== chart.edges.length || reading.stack.length) return null;
+  return { chart, lines, statements: reading.statements, byLine: reading.byLine, header };
+}
+
+/** A model as it is read: the subgraphs open around a statement, and the edges matched so far. */
+interface Reading {
+  chart: Flowchart;
+  statements: Statement[];
+  byLine: Map<number, Statement[]>;
+  stack: Statement[];
+  /** The subgraphs without an id so far. */
+  anonymous: number;
+  /** The edges of the chart matched so far. */
+  edge: number;
+}
+
+/** Where the statements of a source lie: those after the header on its line, then those of the lines below. */
+function placesOf(lines: string[], rows: { line: number }[], header: number) {
   const head =
     lines[header].match(/^\s*(?:flowchart(?:-elk)?|graph|swimlane-beta)\s*[^\s;]*/)?.[0].length ??
     lines[header].length;
-  const places = [
+  return [
     ...split(lines[header], head).map((place) => ({ ...place, line: header })),
     ...rows
       .slice(1)
@@ -270,73 +328,80 @@ function readModel(source: string): Model | null {
         split(lines[line - 1], 0).map((place) => ({ ...place, line: line - 1 })),
       ),
   ];
-  const statements: Statement[] = [],
-    byLine = new Map<number, Statement[]>(),
-    stack: Statement[] = [],
-    accessibility = accessibilityLines();
-  let anonymous = 0,
-    edge = 0;
-  for (const place of places) {
-    const text = lines[place.line].slice(place.start, place.end),
-      statement: Statement = {
-        ...place,
-        index: statements.length,
-        text,
-        kind: "other",
-        scope: stack.at(-1)?.id ?? null,
-        groups: [],
-        arrows: [],
-        edges: [],
-      };
-    statements.push(statement);
-    byLine.set(place.line, [...(byLine.get(place.line) ?? []), statement]);
-    if (accessibility(text)) continue;
-    const subgraph = text.match(/^subgraph(?:\s+(.*))?$/);
-    if (/^direction\s+(TB|TD|BT|LR|RL)$/i.test(text)) statement.kind = "direction";
-    else if (text === "end") {
-      statement.kind = "end";
-      const opened = stack.pop();
-      if (!opened) return null;
-      opened.close = statement.index;
-    } else if (subgraph) {
-      const spec = (subgraph[1] ?? "").trim(),
-        bracket = spec.match(/^(\S+?)\s*\[(.*)\]$/);
-      statement.kind = "subgraph";
-      statement.form = bracket
-        ? "bracket"
-        : /^".*"$/.test(spec)
-          ? "quoted"
-          : spec
-            ? "plain"
-            : "bare";
-      statement.id =
-        statement.form === "bracket"
-          ? bracket![1]
-          : statement.form === "plain"
-            ? spec
-            : `subgraph#${++anonymous}`;
-      stack.push(statement);
-    } else if (STYLING.test(text)) statement.kind = "styling";
-    else {
-      const chain = readChain(text);
-      if (!chain) return null;
-      statement.kind = "chain";
-      statement.groups = chain.groups;
-      statement.arrows = chain.arrows;
-      for (let index = 0; index < chain.arrows.length; index++) {
-        const own: FlowEdge[] = [];
-        for (const from of chain.groups[index])
-          for (const to of chain.groups[index + 1]) {
-            const found = chart.edges[edge++];
-            if (!found || found.source !== from.id || found.target !== to.id) return null;
-            own.push(found);
-          }
-        statement.edges.push(own);
+}
+
+/** Notes a statement at a place, in the subgraph open there, yet of no kind. */
+function addStatement(
+  reading: Reading,
+  place: { line: number; start: number; end: number },
+  text: string,
+): Statement {
+  const statement: Statement = {
+    ...place,
+    index: reading.statements.length,
+    text,
+    kind: "other",
+    scope: reading.stack.at(-1)?.id ?? null,
+    groups: [],
+    arrows: [],
+    edges: [],
+  };
+  reading.statements.push(statement);
+  reading.byLine.set(place.line, [...(reading.byLine.get(place.line) ?? []), statement]);
+  return statement;
+}
+
+/** Reads what kind of statement a statement is, and what it says; false where it cannot be matched with the chart. */
+function readKind(reading: Reading, statement: Statement): boolean {
+  const { text } = statement,
+    subgraph = text.match(/^subgraph(?:\s+(.*))?$/);
+  if (/^direction\s+(TB|TD|BT|LR|RL)$/i.test(text)) statement.kind = "direction";
+  else if (text === "end") {
+    statement.kind = "end";
+    const opened = reading.stack.pop();
+    if (!opened) return false;
+    opened.close = statement.index;
+  } else if (subgraph) openSubgraph(reading, statement, (subgraph[1] ?? "").trim());
+  else if (STYLING.test(text)) statement.kind = "styling";
+  else return readChainStatement(reading, statement);
+  return true;
+}
+
+/** Reads a statement that opens a subgraph: how it is written, and its id. */
+function openSubgraph(reading: Reading, statement: Statement, spec: string) {
+  const bracket = spec.match(/^(\S+?)\s*\[(.*)\]$/);
+  statement.kind = "subgraph";
+  statement.form = subgraphForm(spec, !!bracket);
+  if (bracket) statement.id = bracket[1];
+  else statement.id = statement.form === "plain" ? spec : `subgraph#${++reading.anonymous}`;
+  reading.stack.push(statement);
+}
+
+/** How a subgraph is written: with an id and a name in brackets, a name in quotes, an id, or nothing. */
+function subgraphForm(spec: string, bracket: boolean): Statement["form"] {
+  if (bracket) return "bracket";
+  if (/^".*"$/.test(spec)) return "quoted";
+  return spec ? "plain" : "bare";
+}
+
+/** Reads a chain with the edges the parser made of each arrow; false where they do not match. */
+function readChainStatement(reading: Reading, statement: Statement): boolean {
+  const chain = readChain(statement.text);
+  if (!chain) return false;
+  statement.kind = "chain";
+  statement.groups = chain.groups;
+  statement.arrows = chain.arrows;
+  for (let index = 0; index < chain.arrows.length; index++) {
+    const own: FlowEdge[] = [];
+    for (const from of chain.groups[index])
+      for (const to of chain.groups[index + 1]) {
+        const found = reading.chart.edges[reading.edge++];
+        if (!found || found.source !== from.id || found.target !== to.id) return false;
+        own.push(found);
       }
-    }
+    statement.edges.push(own);
   }
-  if (edge !== chart.edges.length || stack.length) return null;
-  return { chart, lines, statements, byLine, header };
+  return true;
 }
 
 /** In quotes, unless a text is plain words: quotes keep every mark of the syntax a text. */
@@ -366,54 +431,74 @@ const operator = (start: string, stroke: FlowEdge["stroke"], end: string) =>
  * keeps its form, `-- text -->` or `-->|text|`, its end marks and its name; a text the form between
  * strokes cannot hold goes between pipes.
  */
-function arrowWith(token: string, change: { label?: string; stroke?: FlowEdge["stroke"] }): string {
+function arrowWith(token: string, change: ArrowChange): string {
   const named = token.match(NAMED)?.[0] ?? "",
     rest = token.slice(named.length),
     inline = rest.match(INLINE);
-  if (inline) {
-    const [, start, open, text, close] = inline,
-      was = open === "==" ? "thick" : open === "-." ? "dotted" : "solid",
-      stroke = change.stroke ?? was,
-      last = close.at(-1)!,
-      end = /[>ox]/.test(last) ? last : "";
-    if (change.label !== undefined && !change.label.trim())
-      return named + operator(start, stroke, end);
-    const words = change.label === undefined ? text : escapeLabel(change.label),
-      [head, tail] =
-        stroke === was
-          ? [open, close]
-          : stroke === "thick"
-            ? ["==", `==${end || "="}`]
-            : stroke === "dotted"
-              ? ["-.", `.-${end}`]
-              : ["--", `--${end || "-"}`],
-      made = `${start}${head} ${words} ${tail}`,
-      read = `${made} x`.match(INLINE);
-    if (read?.[0].length === made.length && read[3] === words && !/[;|[\](){}]/.test(words))
-      return named + made;
-    return named + operator(start, stroke, end) + pipeText(change.label ?? shownText(text));
-  }
+  if (inline) return named + inlineWith(inline, change);
   const plain = rest.match(INVISIBLE) ?? rest.match(PLAIN);
-  if (!plain) return token;
+  return plain ? named + plainWith(rest, plain, change) : token;
+}
+
+/** Another label (an empty one removes it) or another stroke for an arrow. */
+interface ArrowChange {
+  label?: string;
+  stroke?: FlowEdge["stroke"];
+}
+
+/** The stroke an arrow with its text between two strokes opens with. */
+const inlineStroke = (open: string): FlowEdge["stroke"] =>
+  open === "==" ? "thick" : open === "-." ? "dotted" : "solid";
+
+/** The two halves of an arrow of a stroke with its text between them, ending in a mark or none. */
+function halves(stroke: FlowEdge["stroke"], end: string): [string, string] {
+  if (stroke === "thick") return ["==", `==${end || "="}`];
+  if (stroke === "dotted") return ["-.", `.-${end}`];
+  return ["--", `--${end || "-"}`];
+}
+
+/** Whether an arrow with its text between two strokes reads back as written, with that text. */
+function readsInline(made: string, words: string): boolean {
+  const read = `${made} x`.match(INLINE);
+  return read?.[0].length === made.length && read[3] === words && !/[;|[\](){}]/.test(words);
+}
+
+/** An arrow with its text between two strokes, changed; a text that form cannot hold goes between pipes. */
+function inlineWith(inline: RegExpMatchArray, change: ArrowChange): string {
+  const [, start, open, text, close] = inline,
+    was = inlineStroke(open),
+    stroke = change.stroke ?? was,
+    last = close.at(-1)!,
+    end = /[>ox]/.test(last) ? last : "";
+  if (change.label !== undefined && !change.label.trim()) return operator(start, stroke, end);
+  const words = change.label === undefined ? text : escapeLabel(change.label),
+    [head, tail] = stroke === was ? [open, close] : halves(stroke, end),
+    made = `${start}${head} ${words} ${tail}`;
+  if (readsInline(made, words)) return made;
+  return operator(start, stroke, end) + pipeText(change.label ?? shownText(text));
+}
+
+/** The stroke of an arrow without text of its own, by its body. */
+function plainStroke(body: string): FlowEdge["stroke"] {
+  if (body.startsWith("~")) return "invisible";
+  if (body.startsWith("=")) return "thick";
+  return body.includes(".") ? "dotted" : "solid";
+}
+
+/** An arrow without text of its own, changed, with its text between pipes after it. */
+function plainWith(rest: string, plain: RegExpMatchArray, change: ArrowChange): string {
   const [all, start = "", body = "~", mark = ""] = plain,
-    was = body.startsWith("~")
-      ? "invisible"
-      : body.startsWith("=")
-        ? "thick"
-        : body.includes(".")
-          ? "dotted"
-          : "solid",
     line =
-      change.stroke && change.stroke !== was
+      change.stroke && change.stroke !== plainStroke(body)
         ? operator(start, change.stroke, /[>ox]/.test(mark) ? mark : "")
-        : all,
-    text =
-      change.label === undefined
-        ? rest.slice(all.length)
-        : change.label.trim()
-          ? pipeText(change.label)
-          : "";
-  return named + line + text;
+        : all;
+  return line + pipeChange(rest.slice(all.length), change.label);
+}
+
+/** The text between pipes after an arrow: the old one, or another, or none for an empty label. */
+function pipeChange(old: string, label: string | undefined): string {
+  if (label === undefined) return old;
+  return label.trim() ? pipeText(label) : "";
 }
 
 const same = (a: Ref[], b: Ref[]) =>
@@ -432,83 +517,120 @@ function recompose(
   cut: Set<string>,
   arrows: Map<string, string>,
 ): { texts: string[]; loose: Ref[] } | undefined {
-  const { groups, text } = statement;
-  if (
-    !groups.flat().some((ref) => gone.has(ref.id)) &&
-    !statement.edges.flat().some((edge) => cut.has(edge.id) || arrows.has(edge.id))
-  )
-    return undefined;
-  interface Part {
-    from: Ref[];
-    to: Ref[];
-    arrow: string;
-  }
-  // Each arrow as the parts that are left of it: sources with the same targets under one arrow.
-  const parts = statement.arrows.map((token, index) => {
-    const bySource: Part[][] = [];
-    let count = 0;
-    for (const from of groups[index]) {
-      const own: Part[] = [];
-      for (const to of groups[index + 1]) {
-        const edge = statement.edges[index][count++];
-        if (gone.has(from.id) || gone.has(to.id) || cut.has(edge.id)) continue;
-        const arrow = arrows.get(edge.id) ?? token.text,
-          last = own.at(-1);
-        if (last?.arrow === arrow) last.to.push(to);
-        else own.push({ from: [from], to: [to], arrow });
-      }
-      const before = bySource.at(-1);
-      if (
-        own.length === 1 &&
-        before?.length === 1 &&
-        before[0].arrow === own[0].arrow &&
-        same(before[0].to, own[0].to)
-      )
-        before[0].from.push(from);
-      else if (own.length) bySource.push(own);
-    }
-    return bySource.flat();
-  });
-  const texts: string[] = [],
-    written = new Set<Ref>();
-  // A group as it was written when all of it stays; a node carries its shape where it is written first.
-  const groupText = (refs: Ref[], index: number) => {
-    const whole = groups[index];
-    if (same(refs, whole) && !refs.some((ref) => written.has(ref))) {
-      for (const ref of refs) written.add(ref);
-      return text.slice(whole[0].start, whole.at(-1)!.end);
-    }
-    return refs
-      .map((ref) => (written.has(ref) ? ref.id : (written.add(ref), ref.text)))
-      .join(" & ");
-  };
-  let run = "",
-    tail: Ref[] | undefined;
-  parts.forEach((list, index) => {
-    for (const part of list) {
-      // A part goes on from the one before it when it starts with the nodes that one ends with.
-      if (!tail || !same(tail, part.from)) {
-        if (run) texts.push(run);
-        run = groupText(part.from, index);
-      }
-      const token = statement.arrows[index];
-      run +=
-        (text.slice(groups[index].at(-1)!.end, token.start) || " ") +
-        part.arrow +
-        text.slice(token.end, groups[index + 1][0].start) +
-        groupText(part.to, index + 1);
-      tail = part.to;
-    }
-    if (!list.length) tail = undefined;
-  });
-  if (run) texts.push(run);
-  const loose: Ref[] = [];
-  for (const ref of groups.flat()) {
+  const keep: Keep = { gone, cut, arrows };
+  if (!touches(statement, keep)) return undefined;
+  const parts = statement.arrows.map((_, index) => partsOfArrow(statement, index, keep)),
+    { texts, written } = writeParts(statement, parts),
+    loose: Ref[] = [];
+  for (const ref of statement.groups.flat()) {
     if (written.has(ref) || gone.has(ref.id)) continue;
     if (ref.shape || ref.braces) texts.push(ref.text);
     else loose.push(ref);
   }
   return { texts, loose };
+}
+
+/** What a chain is written anew without: nodes and edges that go, and edges under other arrows. */
+interface Keep {
+  gone: Set<string>;
+  cut: Set<string>;
+  arrows: Map<string, string>;
+}
+
+/** Whether a change touches a chain: one of its nodes goes, or one of its edges goes or changes. */
+const touches = (statement: Statement, { gone, cut, arrows }: Keep) =>
+  statement.groups.flat().some((ref) => gone.has(ref.id)) ||
+  statement.edges.flat().some((edge) => cut.has(edge.id) || arrows.has(edge.id));
+
+/** A part of what is left of an arrow: sources with the same targets under one arrow. */
+interface Part {
+  from: Ref[];
+  to: Ref[];
+  arrow: string;
+}
+
+/** What is left of one arrow of a chain, as parts. */
+function partsOfArrow(statement: Statement, index: number, keep: Keep): Part[] {
+  const { groups } = statement,
+    token = statement.arrows[index].text,
+    bySource: Part[][] = [];
+  let count = 0;
+  for (const from of groups[index]) {
+    const own: Part[] = [];
+    for (const to of groups[index + 1]) {
+      const edge = statement.edges[index][count++];
+      if (keep.gone.has(from.id) || keep.gone.has(to.id) || keep.cut.has(edge.id)) continue;
+      addTarget(own, to, from, keep.arrows.get(edge.id) ?? token);
+    }
+    addSource(bySource, own, from);
+  }
+  return bySource.flat();
+}
+
+/** Adds a target to the parts of a source: under the arrow before it when that is the same. */
+function addTarget(own: Part[], to: Ref, from: Ref, arrow: string) {
+  const last = own.at(-1);
+  if (last?.arrow === arrow) last.to.push(to);
+  else own.push({ from: [from], to: [to], arrow });
+}
+
+/** Adds the parts of a source: to the source before it when both have one part, the same. */
+function addSource(bySource: Part[][], own: Part[], from: Ref) {
+  const before = bySource.at(-1);
+  if (
+    own.length === 1 &&
+    before?.length === 1 &&
+    before[0].arrow === own[0].arrow &&
+    same(before[0].to, own[0].to)
+  )
+    before[0].from.push(from);
+  else if (own.length) bySource.push(own);
+}
+
+/**
+ * The statements the parts of a chain make, and the nodes written in them. A part goes on from
+ * the one before it when it starts with the nodes that one ends with.
+ */
+function writeParts(statement: Statement, parts: Part[][]) {
+  const texts: string[] = [],
+    written = new Set<Ref>();
+  let run = "",
+    tail: Ref[] | undefined;
+  parts.forEach((list, index) => {
+    for (const part of list) {
+      if (!tail || !same(tail, part.from)) {
+        if (run) texts.push(run);
+        run = groupText(statement, written, part.from, index);
+      }
+      run += arrowRun(statement, written, part, index);
+      tail = part.to;
+    }
+    if (!list.length) tail = undefined;
+  });
+  if (run) texts.push(run);
+  return { texts, written };
+}
+
+/** A part's arrow with the blanks around it as the chain had them, and its targets. */
+function arrowRun(statement: Statement, written: Set<Ref>, part: Part, index: number): string {
+  const { text, groups } = statement,
+    token = statement.arrows[index];
+  return (
+    (text.slice(groups[index].at(-1)!.end, token.start) || " ") +
+    part.arrow +
+    text.slice(token.end, groups[index + 1][0].start) +
+    groupText(statement, written, part.to, index + 1)
+  );
+}
+
+/** A group as it was written when all of it stays; a node carries its shape where it is written first. */
+function groupText(statement: Statement, written: Set<Ref>, refs: Ref[], index: number): string {
+  const whole = statement.groups[index];
+  if (same(refs, whole) && !refs.some((ref) => written.has(ref))) {
+    for (const ref of refs) written.add(ref);
+    return statement.text.slice(whole[0].start, whole.at(-1)!.end);
+  }
+  return refs.map((ref) => (written.has(ref) ? ref.id : (written.add(ref), ref.text))).join(" & ");
 }
 
 /**
@@ -554,23 +676,39 @@ function rebuildKeeping(
   } catch {
     // Without a reading of the result every node is written out.
   }
-  const places = new Map<string, { statement: Statement; ref: Ref }[]>();
-  for (const [statement, refs] of loose)
-    for (const ref of refs)
-      if (model.chart.nodes.has(ref.id))
-        places.set(ref.id, [...(places.get(ref.id) ?? []), { statement, ref }]);
   const kept = new Map(changes);
   let added = false;
-  for (const [id, found] of places) {
-    const node = model.chart.nodes.get(id)!,
-      now = after?.nodes.get(id),
-      inside = found.find((place) => place.statement.scope === node.parent);
-    const place = !now ? (inside ?? found[0]) : now.parent !== node.parent ? inside : undefined;
+  for (const [id, found] of loosePlaces(model, loose)) {
+    const place = keepingPlace(model.chart.nodes.get(id)!, after?.nodes.get(id), found);
     if (!place) continue;
     kept.set(place.statement, [...kept.get(place.statement)!, place.ref.text]);
     added = true;
   }
   return added ? rebuild(model, kept, drop) : plain;
+}
+
+/** Where a loose node stood, by its id: each statement it was written in, with how. */
+function loosePlaces(model: Model, loose: Map<Statement, Ref[]>) {
+  const places = new Map<string, { statement: Statement; ref: Ref }[]>();
+  for (const [statement, refs] of loose)
+    for (const ref of refs)
+      if (model.chart.nodes.has(ref.id))
+        places.set(ref.id, [...(places.get(ref.id) ?? []), { statement, ref }]);
+  return places;
+}
+
+/**
+ * Where a node is written to keep it: where it stood in its subgraph, or anywhere it stood when it
+ * is gone; nothing when it stands where it stood.
+ */
+function keepingPlace(
+  node: { parent: string | null },
+  now: { parent: string | null } | undefined,
+  found: { statement: Statement; ref: Ref }[],
+) {
+  const inside = found.find((place) => place.statement.scope === node.parent);
+  if (!now) return inside ?? found[0];
+  return now.parent !== node.parent ? inside : undefined;
 }
 
 /**
@@ -584,23 +722,32 @@ function restyle(
   edge: (index: number) => number | null,
 ): string | null {
   const list = text.match(/^(style|class)(\s+)(\S+)([\s\S]*)$/);
-  if (list) {
-    const ids = list[3].split(","),
-      kept = ids.filter((id) => !gone.has(id));
-    if (kept.length === ids.length) return text;
-    return kept.length ? list[1] + list[2] + kept.join(",") + list[4] : null;
-  }
+  if (list) return restyleList(text, list, gone);
   const click = text.match(/^click\s+(\S+)/);
   if (click) return gone.has(click[1]) ? null : text;
   const link = text.match(/^(linkStyle\s+)(\d+(?:\s*,\s*\d+)*)([\s\S]*)$/);
-  if (link) {
-    const before = link[2].split(",").map((item) => Number(item.trim())),
-      now = before.map(edge).filter((item) => item !== null);
-    if (now.length === before.length && now.every((item, index) => item === before[index]))
-      return text;
-    return now.length ? link[1] + now.join(",") + link[3] : null;
-  }
-  return text;
+  return link ? restyleLinks(text, link, edge) : text;
+}
+
+/** A `style` or `class` statement without the ids that go; null when none is left. */
+function restyleList(text: string, list: RegExpMatchArray, gone: Set<string>): string | null {
+  const ids = list[3].split(","),
+    kept = ids.filter((id) => !gone.has(id));
+  if (kept.length === ids.length) return text;
+  return kept.length ? list[1] + list[2] + kept.join(",") + list[4] : null;
+}
+
+/** A `linkStyle` statement with its edges counted anew; null when none is left. */
+function restyleLinks(
+  text: string,
+  link: RegExpMatchArray,
+  edge: (index: number) => number | null,
+): string | null {
+  const before = link[2].split(",").map((item) => Number(item.trim())),
+    now = before.map(edge).filter((item) => item !== null);
+  if (now.length === before.length && now.every((item, index) => item === before[index]))
+    return text;
+  return now.length ? link[1] + now.join(",") + link[3] : null;
 }
 
 const parses = (source: string) => {
@@ -613,12 +760,8 @@ const parses = (source: string) => {
 };
 
 /** An id no node or subgraph has yet. */
-function freshId(chart: Flowchart, base: string): string {
-  for (let count = 1; ; count++) {
-    const id = `${base}${count}`;
-    if (!chart.nodes.has(id) && !chart.subgraphs.has(id)) return id;
-  }
-}
+const freshId = (chart: Flowchart, base: string) =>
+  numberedId((id) => chart.nodes.has(id) || chart.subgraphs.has(id), base);
 
 /**
  * Where a statement is added, and with which indent: inside a subgraph before its `end`, else at
@@ -626,14 +769,32 @@ function freshId(chart: Flowchart, base: string): string {
  * that closes either.
  */
 function insertAt(model: Model, parent: string | null): { at: number; indent: string } {
-  const { lines, statements, byLine } = model,
-    group = parent
+  const { lines } = model,
+    span = spanOf(model, parent),
+    { first, last, styled } = scanSpan(model, span.from, span.to);
+  let at = span.to;
+  if (styled) at = last < 0 ? span.from : last + 1;
+  else if (!span.group) while (at > 0 && !lines[at - 1].trim()) at--;
+  if (first >= 0) return { at, indent: indentOf(lines[first]) };
+  return { at, indent: span.group ? `${indentOf(lines[span.group.line])}  ` : "  " };
+}
+
+/**
+ * The lines a statement is added among: those inside a subgraph whose `subgraph` and `end` stand on
+ * lines of their own, with the subgraph, or else those after the header.
+ */
+function spanOf({ lines, statements, byLine, header }: Model, parent: string | null) {
+  const group = parent
       ? statements.find((item) => item.kind === "subgraph" && item.id === parent)
       : undefined,
     end = group?.close === undefined ? undefined : statements[group.close];
-  const inside = group && end && end.line > group.line && byLine.get(end.line)![0] === end;
-  const from = inside ? group.line + 1 : model.header + 1,
-    to = inside ? end.line : lines.length;
+  if (group && end && end.line > group.line && byLine.get(end.line)![0] === end)
+    return { group, from: group.line + 1, to: end.line };
+  return { group: undefined, from: header + 1, to: lines.length };
+}
+
+/** The first and the last line with statements among some lines, and whether styling alone stands after the last. */
+function scanSpan({ byLine }: Model, from: number, to: number) {
   let last = -1,
     first = -1,
     styled = false;
@@ -641,23 +802,10 @@ function insertAt(model: Model, parent: string | null): { at: number; indent: st
     const own = byLine.get(index);
     if (!own) continue;
     if (first < 0) first = index;
-    if (own.every((statement) => statement.kind === "styling")) styled = true;
-    else {
-      last = index;
-      styled = false;
-    }
+    styled = own.every((statement) => statement.kind === "styling");
+    if (!styled) last = index;
   }
-  let at = to;
-  if (styled) at = last < 0 ? from : last + 1;
-  else if (!inside) while (at > 0 && !lines[at - 1].trim()) at--;
-  const indent = inside
-    ? first >= 0
-      ? indentOf(lines[first])
-      : `${indentOf(lines[group.line])}  `
-    : first >= 0
-      ? indentOf(lines[first])
-      : "  ";
-  return { at, indent };
+  return { first, last, styled };
 }
 
 /**
@@ -672,16 +820,29 @@ function nodeText(
   name: string | undefined,
   alone = false,
 ): string {
-  const label = name?.trim() ? labelText(name) : "";
-  if (kind === "decision") return `${id}{${label || " "}}`;
-  if (kind === "start" || kind === "end") {
-    if (alone) {
-      const text = name?.trim() ? `, label: "${escapeLabel(name).replace(/\}/g, "#125;")}"` : "";
-      return `${id}@{ shape: ${kind === "start" ? "start" : "stop"}${text} }`;
-    }
-    return kind === "start" ? `${id}((${label || "Start"}))` : `${id}(((${label || "End"})))`;
-  }
-  return chart.kind === "swimlane" ? `${id}(${label || "Step"})` : `${id}[${label || "Step"}]`;
+  if ((kind === "start" || kind === "end") && alone) return symbolText(kind, id, name);
+  const label = name?.trim() ? labelText(name) : "",
+    shape = SHAPES[kind] ?? (chart.kind === "swimlane" ? actionText : stepText);
+  return shape(id, label);
+}
+
+/** A step as a rectangle. */
+const stepText = (id: string, label: string) => `${id}[${label || "Step"}]`;
+
+/** A step of a swimlane as the rounded action. */
+const actionText = (id: string, label: string) => `${id}(${label || "Step"})`;
+
+/** The shapes of the new nodes that are no step: a decision a diamond, a start and an end the circles a flow makes the small symbols of. */
+const SHAPES: Partial<Record<FlowPiece, (id: string, label: string) => string>> = {
+  decision: (id, label) => `${id}{${label || " "}}`,
+  start: (id, label) => `${id}((${label || "Start"}))`,
+  end: (id, label) => `${id}(((${label || "End"})))`,
+};
+
+/** A start or an end as its symbol, `end1@{ shape: stop }`, with its name as the label entry. */
+function symbolText(kind: "start" | "end", id: string, name: string | undefined): string {
+  const text = name?.trim() ? `, label: "${escapeLabel(name).replace(/\}/g, "#125;")}"` : "";
+  return `${id}@{ shape: ${kind === "start" ? "start" : "stop"}${text} }`;
 }
 
 /**
@@ -702,27 +863,47 @@ export function addFlowPiece(
     lines = [...model.lines],
     group = piece.kind === "group" || piece.kind === "lane",
     lane = group && chart.kind === "swimlane",
-    given = piece.parent && chart.subgraphs.has(piece.parent) ? piece.parent : null,
-    loose = [...chart.nodes.values()].some((node) => !node.parent);
-  const parent = lane
-    ? null
-    : (given ??
-      (chart.kind === "swimlane" && !loose ? ([...chart.subgraphs.keys()][0] ?? null) : null));
-  const id = freshId(chart, group ? (lane ? "lane" : "group") : piece.kind),
-    label = piece.label?.trim() ? labelText(piece.label) : "",
-    place = insertAt(model, parent);
-  if (lane) {
-    // Beside the other lanes: after the `end` of the last one.
-    const ends = model.statements
-      .filter((item) => item.kind === "subgraph" && item.close !== undefined)
-      .map((item) => model.statements[item.close!].line);
-    if (ends.length) place.at = Math.max(...ends) + 1;
-  }
+    id = freshId(chart, group ? (lane ? "lane" : "group") : piece.kind),
+    place = piecePlace(model, lane, piece.parent);
   const text = group
-    ? [`subgraph ${id} [${label || (lane ? "Lane" : "Group")}]`, "end"]
+    ? subgraphText(id, piece.label, lane)
     : [nodeText(chart, piece.kind, id, piece.label, true)];
   lines.splice(place.at, 0, ...text.map((line) => place.indent + line));
   return { source: lines.join("\n"), id };
+}
+
+/** Where a new piece is added: a lane beside the other lanes, after the `end` of the last one; any other piece in its subgraph. */
+function piecePlace(model: Model, lane: boolean, parent: string | null | undefined) {
+  if (!lane) return insertAt(model, homeOf(model.chart, parent));
+  const place = insertAt(model, null);
+  return { ...place, at: afterLanes(model) ?? place.at };
+}
+
+/** A new subgraph or lane as it is written, with its `end`. */
+function subgraphText(id: string, name: string | undefined, lane: boolean): string[] {
+  const label = name?.trim() ? labelText(name) : "";
+  return [`subgraph ${id} [${label || (lane ? "Lane" : "Group")}]`, "end"];
+}
+
+/**
+ * The subgraph a new node goes into: the one given, else in a swimlane whose nodes all stand in
+ * lanes the first lane, else none.
+ */
+function homeOf(chart: Flowchart, parent: string | null | undefined): string | null {
+  if (parent && chart.subgraphs.has(parent)) return parent;
+  if (chart.kind !== "swimlane" || hasLoose(chart)) return null;
+  return [...chart.subgraphs.keys()][0] ?? null;
+}
+
+/** Whether a chart has a node outside every subgraph. */
+const hasLoose = (chart: Flowchart) => [...chart.nodes.values()].some((node) => !node.parent);
+
+/** The line after the `end` of the last subgraph, if there is one. */
+function afterLanes({ statements }: Model): number | undefined {
+  const ends = statements
+    .filter((item) => item.kind === "subgraph" && item.close !== undefined)
+    .map((item) => statements[item.close!].line);
+  return ends.length ? Math.max(...ends) + 1 : undefined;
 }
 
 /** The subgraphs around a node or subgraph, the nearest first. */
@@ -762,31 +943,11 @@ export function connectFlow(
   if (!model || !stroke) return source;
   const { chart } = model,
     text = label?.trim() || undefined;
-  if (chart.kind === "swimlane" && (chart.subgraphs.has(from) || chart.subgraphs.has(to)))
-    return source;
-  if (
-    chart.edges.some(
-      (edge) =>
-        edge.source === from &&
-        edge.target === to &&
-        edge.stroke === stroke &&
-        (!text || edge.label === shownText(escapeLabel(text))),
-    )
-  )
-    return source;
-  const shared = around(chart, to),
-    { at, indent } = insertAt(model, around(chart, from).find((id) => shared.includes(id)) ?? null);
+  if (joinsLane(chart, from, to) || joins(chart, from, to, stroke, text)) return source;
+  const { at, indent } = insertAt(model, sharedGroup(chart, from, to));
   // The edges after the new one count one further.
   const before = chart.edges.filter((edge) => edge.line <= at).length,
-    changes = new Map<Statement, string[]>();
-  for (const statement of model.statements) {
-    if (statement.kind !== "styling") continue;
-    const styled = restyle(statement.text, new Set(), (index) =>
-      index >= before ? index + 1 : index,
-    );
-    if (styled !== null && styled !== statement.text) changes.set(statement, [styled]);
-  }
-  const lines = linesOf(rebuild(model, changes));
+    lines = linesOf(recount(model, (index) => (index >= before ? index + 1 : index)));
   lines.splice(
     at,
     0,
@@ -794,6 +955,51 @@ export function connectFlow(
   );
   return lines.join("\n");
 }
+
+/** Whether one of two parts is a lane of a swimlane, which no flow joins. */
+const joinsLane = (chart: Flowchart, from: string, to: string) =>
+  chart.kind === "swimlane" && (chart.subgraphs.has(from) || chart.subgraphs.has(to));
+
+/** The nearest subgraph that holds two parts, if any. */
+function sharedGroup(chart: Flowchart, from: string, to: string): string | null {
+  const shared = around(chart, to);
+  return around(chart, from).find((id) => shared.includes(id)) ?? null;
+}
+
+/** Whether an edge of a stroke joins two nodes in that direction already, with the label when one is given. */
+const joins = (
+  chart: Flowchart,
+  from: string,
+  to: string,
+  stroke: FlowEdge["stroke"],
+  text: string | undefined,
+) =>
+  chart.edges.some(
+    (edge) =>
+      edge.source === from &&
+      edge.target === to &&
+      edge.stroke === stroke &&
+      (!text || edge.label === shownText(escapeLabel(text))),
+  );
+
+/** The changes to the styling statements of a model that count the edges anew, and drop what styles parts that go. */
+function restyled(
+  model: Model,
+  edge: (index: number) => number | null,
+  gone = new Set<string>(),
+): Map<Statement, string[]> {
+  const changes = new Map<Statement, string[]>();
+  for (const statement of model.statements) {
+    if (statement.kind !== "styling") continue;
+    const styled = restyle(statement.text, gone, edge);
+    if (styled !== statement.text) changes.set(statement, styled === null ? [] : [styled]);
+  }
+  return changes;
+}
+
+/** A source whose `linkStyle` statements count its edges anew. */
+const recount = (model: Model, edge: (index: number) => number | null) =>
+  rebuild(model, restyled(model, edge));
 
 /** A statement of a model with one stretch of it written anew. */
 const patched = (statement: Statement, start: number, end: number, text: string) =>
@@ -808,58 +1014,59 @@ const patched = (statement: Statement, start: number, end: number, text: string)
 export function renameFlow(source: string, id: string, label: string): string {
   const model = readModel(source);
   if (!model) return source;
-  const { chart, statements } = model,
-    text = labelText(label),
+  const group = openingOf(model.statements, id);
+  if (group)
+    return label.trim()
+      ? rebuild(model, new Map([[group, [headingOf(group, id, label)]]]))
+      : source;
+  const whole = model.chart.nodes.has(id) ? renamedNode(model, id, label) : undefined;
+  return whole ? rebuild(model, new Map([[whole[0], [whole[1]]]])) : source;
+}
+
+/**
+ * The statement that names a node, with another name: where it has a shape, else in its `@{ }`,
+ * else in brackets where it first stands; undefined where nothing changes.
+ */
+function renamedNode(model: Model, id: string, label: string): [Statement, string] | undefined {
+  const mentions = mentionsOf(model, id),
+    shaped = mentions.find(({ ref }) => ref.shape),
+    braced = mentions.find(({ ref }) => ref.braces),
+    [first] = mentions;
+  if (shaped) return [shaped.statement, reshaped(shaped.statement, shaped.ref, label)];
+  if (braced) return rebraced(braced.statement, braced.ref, label);
+  if (!first || !label.trim()) return undefined;
+  const { statement, ref } = first;
+  return [statement, patched(statement, ref.idEnd, ref.idEnd, `[${labelText(label)}]`)];
+}
+
+/** The `subgraph` line of a subgraph with another name: beside its id in brackets, or in quotes. */
+function headingOf(group: Statement, id: string, label: string): string {
+  return group.form === "bracket" || (group.form === "plain" && /^\S+$/.test(id))
+    ? `subgraph ${id} [${labelText(label)}]`
+    : `subgraph "${escapeLabel(label)}"`;
+}
+
+/**
+ * A statement with another name between the delimiters of a node's shape. Without a name a
+ * rectangle goes back to its bare id, and any other shape keeps its delimiters around a blank.
+ */
+function reshaped(statement: Statement, ref: Ref, label: string): string {
+  const shape = ref.shape!,
     empty = !label.trim();
-  const group = statements.find((item) => item.kind === "subgraph" && item.id === id);
-  if (group) {
-    if (empty) return source;
-    const whole =
-      group.form === "bracket" || (group.form === "plain" && /^\S+$/.test(id))
-        ? `subgraph ${id} [${text}]`
-        : `subgraph "${escapeLabel(label)}"`;
-    return rebuild(model, new Map([[group, [whole]]]));
-  }
-  if (!chart.nodes.has(id)) return source;
-  const mentions = statements.flatMap((statement) =>
-    statement.groups.flat().flatMap((ref) => (ref.id === id ? [{ statement, ref }] : [])),
-  );
-  const shaped = mentions.find(({ ref }) => ref.shape),
-    braced = mentions.find(({ ref }) => ref.braces);
-  if (shaped) {
-    const { statement, ref } = shaped,
-      shape = ref.shape!;
-    const whole =
-      empty && shape.open === "["
-        ? patched(statement, ref.idEnd, shape.after, "")
-        : patched(statement, shape.start, shape.end, empty ? " " : text);
-    return rebuild(model, new Map([[statement, [whole]]]));
-  }
-  if (braced) {
-    const { statement, ref } = braced,
-      braces = ref.braces!,
-      inner = `"${escapeLabel(label).replace(/\}/g, "#125;")}"`;
-    if (braces.label)
-      return rebuild(
-        model,
-        new Map([[statement, [patched(statement, braces.label.start, braces.label.end, inner)]]]),
-      );
-    if (empty) return source;
-    const body = statement.text.slice(braces.start + 2, braces.end - 1).trimEnd(),
-      entry = `${body}${body.trim() ? "," : ""} label: ${inner} `;
-    return rebuild(
-      model,
-      new Map([[statement, [patched(statement, braces.start + 2, braces.end - 1, entry)]]]),
-    );
-  }
-  const [first] = mentions;
-  if (!first || empty) return source;
-  return rebuild(
-    model,
-    new Map([
-      [first.statement, [patched(first.statement, first.ref.idEnd, first.ref.idEnd, `[${text}]`)]],
-    ]),
-  );
+  if (empty && shape.open === "[") return patched(statement, ref.idEnd, shape.after, "");
+  return patched(statement, shape.start, shape.end, empty ? " " : labelText(label));
+}
+
+/** A statement with another name as the `label` entry of a node's `@{ }`; undefined for an empty name where it has none. */
+function rebraced(statement: Statement, ref: Ref, label: string): [Statement, string] | undefined {
+  const braces = ref.braces!,
+    inner = `"${escapeLabel(label).replace(/\}/g, "#125;")}"`;
+  if (braces.label)
+    return [statement, patched(statement, braces.label.start, braces.label.end, inner)];
+  if (!label.trim()) return undefined;
+  const body = statement.text.slice(braces.start + 2, braces.end - 1).trimEnd(),
+    entry = `${body}${body.trim() ? "," : ""} label: ${inner} `;
+  return [statement, patched(statement, braces.start + 2, braces.end - 1, entry)];
 }
 
 /** An id made of the words of a name (`Pack parcel`: `packParcel`); null when the name gives none. */
@@ -892,33 +1099,37 @@ function reidentify(source: string, id: string, next: string, heading?: string):
   if (!model) return source;
   const changes = new Map<Statement, string[]>();
   for (const statement of model.statements) {
-    if (statement.kind === "chain") {
-      let text = statement.text;
-      // From the right, so the places before keep their columns.
-      for (const ref of statement.groups.flat().toReversed())
-        if (ref.id === id) text = text.slice(0, ref.start) + next + text.slice(ref.idEnd);
-      if (text !== statement.text) changes.set(statement, [text]);
-    } else if (statement.kind === "subgraph" && statement.id === id) {
-      const bracket = statement.text.match(/^subgraph\s+\S+?(\s*\[.*\])$/);
-      changes.set(statement, [heading ?? `subgraph ${next}${bracket ? bracket[1] : ""}`]);
-    } else if (statement.kind === "styling") {
-      const list = statement.text.match(/^(style|class)(\s+)(\S+)([\s\S]*)$/),
-        click = statement.text.match(/^(click\s+)(\S+)([\s\S]*)$/);
-      const text = list
-        ? list[1] +
-          list[2] +
-          list[3]
-            .split(",")
-            .map((item) => (item === id ? next : item))
-            .join(",") +
-          list[4]
-        : click?.[2] === id
-          ? click[1] + next + click[3]
-          : statement.text;
-      if (text !== statement.text) changes.set(statement, [text]);
-    }
+    const text = withId(statement, id, next, heading);
+    if (text !== statement.text) changes.set(statement, [text]);
   }
   return rebuild(model, changes);
+}
+
+/** A statement with a node or subgraph under another id, wherever it names it. */
+function withId(statement: Statement, id: string, next: string, heading?: string): string {
+  if (statement.kind === "chain") {
+    let text = statement.text;
+    // From the right, so the places before keep their columns.
+    for (const ref of statement.groups.flat().toReversed())
+      if (ref.id === id) text = text.slice(0, ref.start) + next + text.slice(ref.idEnd);
+    return text;
+  }
+  if (statement.kind === "subgraph" && statement.id === id) {
+    const bracket = statement.text.match(/^subgraph\s+\S+?(\s*\[.*\])$/);
+    return heading ?? `subgraph ${next}${bracket ? bracket[1] : ""}`;
+  }
+  return statement.kind === "styling" ? styledWithId(statement.text, id, next) : statement.text;
+}
+
+/** A `style`, `class` or `click` statement with an id written as another. */
+function styledWithId(text: string, id: string, next: string): string {
+  const list = text.match(/^(style|class)(\s+)(\S+)([\s\S]*)$/),
+    click = text.match(/^(click\s+)(\S+)([\s\S]*)$/);
+  if (list) {
+    const ids = list[3].split(",").map((item) => (item === id ? next : item));
+    return list[1] + list[2] + ids.join(",") + list[4];
+  }
+  return click?.[2] === id ? click[1] + next + click[3] : text;
 }
 
 /**
@@ -936,31 +1147,33 @@ export function retitleFlow(
   const named = renameFlow(source, id, name),
     chart = parseFlowchart(source);
   if (!name.trim() || !generated(chart, id)) return { source: named, id };
-  const free = (candidate: string | null) =>
-    candidate !== null &&
-    !RESERVED.has(candidate) &&
-    !chart.nodes.has(candidate) &&
-    !chart.subgraphs.has(candidate);
   // A subgraph named with one word is that word, as id and as name.
   const word = chart.subgraphs.has(id) && /^[A-Za-z]\w*$/.test(name.trim()) ? name.trim() : null,
-    next = free(word) ? word : idOf(name);
-  if (!free(next)) return { source: named, id };
-  const moved = reidentify(named, id, next!, next === word ? `subgraph ${next}` : undefined);
+    next = isFree(chart, word) ? word : idOf(name);
+  if (!isFree(chart, next)) return { source: named, id };
+  const moved = reidentify(named, id, next, next === word ? `subgraph ${next}` : undefined);
+  return holds(moved, next) ? { source: moved, id: next } : { source: named, id };
+}
+
+/** Whether a text is an id no node or subgraph has, and no keyword. */
+const isFree = (chart: Flowchart, candidate: string | null): candidate is string =>
+  candidate !== null &&
+  !RESERVED.has(candidate) &&
+  !chart.nodes.has(candidate) &&
+  !chart.subgraphs.has(candidate);
+
+/** Whether a source reads with a node or subgraph of an id; the name gave no id the source can hold where not. */
+function holds(source: string, id: string): boolean {
   try {
-    const after = parseFlowchart(moved);
-    if (after.nodes.has(next!) || after.subgraphs.has(next!)) return { source: moved, id: next! };
+    const after = parseFlowchart(source);
+    return after.nodes.has(id) || after.subgraphs.has(id);
   } catch {
-    // The name gives no id the source can hold: the part keeps its own.
+    return false;
   }
-  return { source: named, id };
 }
 
 /** The source with one edge under another arrow, written in place where the edge has an arrow of its own. */
-function rearrow(
-  source: string,
-  edge: string,
-  change: { label?: string; stroke?: FlowEdge["stroke"] },
-): string {
+function rearrow(source: string, edge: string, change: ArrowChange): string {
   const model = readModel(source);
   if (!model) return source;
   for (const statement of model.statements)
@@ -1000,50 +1213,63 @@ export function restrokeFlow(source: string, edge: string, kind: string): string
 export function removeFlow(source: string, ids: Iterable<string>): string {
   const model = readModel(source);
   if (!model) return source;
-  const { chart, statements } = model,
-    named = new Set(ids);
-  const gone = new Set<string>(),
-    changes = new Map<Statement, string[]>(),
-    drop = new Set<number>();
-  const take = (id: string) => {
-    if (!chart.subgraphs.has(id) || gone.has(id)) return;
-    gone.add(id);
-    for (const node of chart.nodes.values()) if (node.parent === id) gone.add(node.id);
-    for (const other of chart.subgraphs.values()) if (other.parent === id) take(other.id);
-    const opening = statements.find((item) => item.kind === "subgraph" && item.id === id);
-    if (opening?.close === undefined) return;
-    const end = statements[opening.close];
-    // Its own statements go: the opening, the `end`, and what is said of it in between.
-    for (let index = opening.index; index <= end.index; index++)
-      if (statements[index].kind !== "chain") changes.set(statements[index], []);
-    for (let line = opening.line + 1; line < end.line; line++)
-      if (!model.byLine.has(line) && !LEVEL.test(model.lines[line].trim())) drop.add(line);
-  };
+  const { chart } = model,
+    named = new Set(ids),
+    removal: FlowRemoval = { gone: new Set(), changes: new Map(), drop: new Set() };
   for (const id of named) {
-    if (chart.nodes.has(id)) gone.add(id);
-    else take(id);
+    if (chart.nodes.has(id)) removal.gone.add(id);
+    else takeSubgraph(model, id, removal);
   }
-  const cut = new Set(chart.edges.filter((edge) => named.has(edge.id)).map((edge) => edge.id));
-  // The number of each edge that stays, among those that stay.
+  const { changes, gone } = removal,
+    cut = new Set(chart.edges.filter((edge) => named.has(edge.id)).map((edge) => edge.id)),
+    numbers = survivors(chart, cut, gone),
+    loose = recomposeAll(model, gone, cut, changes);
+  for (const [statement, texts] of restyled(model, (index) => numbers.get(index) ?? null, gone))
+    if (!changes.has(statement)) changes.set(statement, texts);
+  return rebuildKeeping(model, changes, loose, removal.drop);
+}
+
+/** What a removal takes: the nodes and subgraphs that go, the statements written anew, the lines dropped. */
+interface FlowRemoval {
+  gone: Set<string>;
+  changes: Map<Statement, string[]>;
+  drop: Set<number>;
+}
+
+/**
+ * Adds a subgraph to a removal with what it holds. Its own statements go: the opening, the `end`,
+ * and what is said of it in between, comments among them.
+ */
+function takeSubgraph(model: Model, id: string, removal: FlowRemoval) {
+  const { chart } = model,
+    { gone } = removal;
+  if (!chart.subgraphs.has(id) || gone.has(id)) return;
+  gone.add(id);
+  for (const node of chart.nodes.values()) if (node.parent === id) gone.add(node.id);
+  for (const other of chart.subgraphs.values())
+    if (other.parent === id) takeSubgraph(model, other.id, removal);
+  const opening = openingOf(model.statements, id);
+  if (opening?.close !== undefined) dropOwn(model, opening, opening.close, removal);
+}
+
+/** Drops a subgraph's own statements: the opening, the `end`, and what is said of it in between, comments among them. */
+function dropOwn(model: Model, opening: Statement, close: number, removal: FlowRemoval) {
+  const { statements } = model,
+    end = statements[close];
+  for (let index = opening.index; index <= end.index; index++)
+    if (statements[index].kind !== "chain") removal.changes.set(statements[index], []);
+  for (let line = opening.line + 1; line < end.line; line++)
+    if (!model.byLine.has(line) && !LEVEL.test(model.lines[line].trim())) removal.drop.add(line);
+}
+
+/** The number of each edge that stays, among those that stay, by its number before. */
+function survivors(chart: Flowchart, cut: Set<string>, gone: Set<string>) {
   const numbers = new Map<number, number>();
   chart.edges.forEach((edge, index) => {
     if (!cut.has(edge.id) && !gone.has(edge.source) && !gone.has(edge.target))
       numbers.set(index, numbers.size);
   });
-  const loose = new Map<Statement, Ref[]>();
-  for (const statement of statements) {
-    if (changes.has(statement)) continue;
-    if (statement.kind === "chain") {
-      const made = recompose(statement, gone, cut, new Map());
-      if (!made) continue;
-      changes.set(statement, made.texts);
-      if (made.loose.length) loose.set(statement, made.loose);
-    } else if (statement.kind === "styling") {
-      const styled = restyle(statement.text, gone, (index) => numbers.get(index) ?? null);
-      if (styled !== statement.text) changes.set(statement, styled === null ? [] : [styled]);
-    }
-  }
-  return rebuildKeeping(model, changes, loose, drop);
+  return numbers;
 }
 
 /** What an edge is apart from where it stands: its ends, its label, its stroke and its end marks. */
@@ -1061,25 +1287,24 @@ function relinked(result: string, before: (string | null)[]): string {
   const model = readModel(result);
   if (!model?.statements.some((item) => item.kind === "styling" && /^linkStyle\s/.test(item.text)))
     return result;
+  const now = matched(model.chart, before);
+  return recount(model, (index) => now[index] ?? null);
+}
+
+/** Each edge as it was, matched with the next edge of a chart that is the same: its number there, or null. */
+function matched(chart: Flowchart, before: (string | null)[]): (number | null)[] {
   const places = new Map<string, number[]>();
-  model.chart.edges.forEach((edge, index) => {
+  chart.edges.forEach((edge, index) => {
     const key = signature(edge);
     places.set(key, [...(places.get(key) ?? []), index]);
   });
-  const taken = new Map<string, number>(),
-    now = before.map((key) => {
-      if (key === null) return null;
-      const count = taken.get(key) ?? 0;
-      taken.set(key, count + 1);
-      return places.get(key)?.[count] ?? null;
-    }),
-    changes = new Map<Statement, string[]>();
-  for (const statement of model.statements) {
-    if (statement.kind !== "styling") continue;
-    const styled = restyle(statement.text, new Set(), (index) => now[index] ?? null);
-    if (styled !== statement.text) changes.set(statement, styled === null ? [] : [styled]);
-  }
-  return rebuild(model, changes);
+  const taken = new Map<string, number>();
+  return before.map((key) => {
+    if (key === null) return null;
+    const count = taken.get(key) ?? 0;
+    taken.set(key, count + 1);
+    return places.get(key)?.[count] ?? null;
+  });
 }
 
 /** Where each node and subgraph of a chart stands: the subgraph that holds it. */
@@ -1177,43 +1402,60 @@ function rewired(
   const { statement, arrow } = wire,
     made = recompose(statement, new Set(), new Set([wire.edge.id]), new Map());
   if (!made) return model.lines.join("\n");
-  const texts = [...made.texts];
-  let loose = made.loose;
-  const end = (ref: Ref) => {
-    loose = loose.filter((item) => item.id !== ref.id);
-    const alone = ref.shape || ref.braces ? texts.indexOf(ref.text) : -1;
-    if (alone < 0) return ref.id;
-    texts.splice(alone, 1);
-    return ref.text;
-  };
-  const token = statement.arrows[arrow],
-    ends = [end(wire.from), end(wire.to)];
-  // After the statements that hold the edges before it.
-  let slot = 0,
-    count = 0;
-  while (slot < texts.length && count < wire.order) count += edgeCount(texts[slot++]);
-  // A node carries its shape where it is written first: here, when the rest follows.
+  const texts = [...made.texts],
+    ends = [endText(texts, wire.from), endText(texts, wire.to)],
+    loose = made.loose.filter((item) => item.id !== wire.from.id && item.id !== wire.to.id);
+  const slot = slotOf(texts, wire.order);
   [wire.from, wire.to].forEach((ref, index) => {
-    if (ends[index] !== ref.id || ref.text === ref.id) return;
-    for (let later = slot; later < texts.length; later++) {
-      const at = texts[later].indexOf(ref.text);
-      if (at < 0 || (at > 0 && !/[\s&>|.=ox-]/.test(texts[later][at - 1]))) continue;
-      texts[later] = texts[later].slice(0, at) + ref.id + texts[later].slice(at + ref.text.length);
-      ends[index] = ref.text;
-      return;
-    }
+    if (ends[index] === ref.id && carryShape(texts, slot, ref)) ends[index] = ref.text;
   });
-  const text = write(ends[0], ends[1], {
-    before: statement.text.slice(statement.groups[arrow].at(-1)!.end, token.start) || " ",
-    text: token.text,
-    after: statement.text.slice(token.end, statement.groups[arrow + 1][0].start) || " ",
-  });
+  const token = statement.arrows[arrow],
+    text = write(ends[0], ends[1], {
+      before: statement.text.slice(statement.groups[arrow].at(-1)!.end, token.start) || " ",
+      text: token.text,
+      after: statement.text.slice(token.end, statement.groups[arrow + 1][0].start) || " ",
+    });
   texts.splice(slot, 0, text);
   return rebuildKeeping(
     model,
     new Map([[statement, texts]]),
     loose.length ? new Map([[statement, loose]]) : new Map(),
   );
+}
+
+/** Where an edge goes among the statements of its chain: after those that hold the edges before it. */
+function slotOf(texts: string[], order: number): number {
+  let slot = 0,
+    count = 0;
+  while (slot < texts.length && count < order) count += edgeCount(texts[slot++]);
+  return slot;
+}
+
+/**
+ * An end of an edge as it is to be written: with its shape where the statements no longer hold
+ * the node elsewhere, that is, where it stood alone, which it then no longer does.
+ */
+function endText(texts: string[], ref: Ref): string {
+  const alone = ref.shape || ref.braces ? texts.indexOf(ref.text) : -1;
+  if (alone < 0) return ref.id;
+  texts.splice(alone, 1);
+  return ref.text;
+}
+
+/**
+ * Takes the shape of a node off its first mention in the statements from a slot on, so that the
+ * edge written at the slot carries it: a node carries its shape where it is written first. False
+ * where no statement there mentions it so.
+ */
+function carryShape(texts: string[], slot: number, ref: Ref): boolean {
+  if (ref.text === ref.id) return false;
+  for (let later = slot; later < texts.length; later++) {
+    const at = texts[later].indexOf(ref.text);
+    if (at < 0 || (at > 0 && !/[\s&>|.=ox-]/.test(texts[later][at - 1]))) continue;
+    texts[later] = texts[later].slice(0, at) + ref.id + texts[later].slice(at + ref.text.length);
+    return true;
+  }
+  return false;
 }
 
 /**
@@ -1269,44 +1511,75 @@ export function insertFlowOnEdge(
     none = { source, id: "" };
   if (!model || !wire || piece.kind === "group" || piece.kind === "lane") return none;
   const { chart } = model,
-    { statement } = wire,
     id = freshId(chart, piece.kind),
-    text = nodeText(chart, piece.kind, id, piece.label),
+    result = withNodeOn(model, wire, nodeText(chart, piece.kind, id, piece.label)),
+    after = readsWithOneMore(result, chart, id),
+    placed = after && placedInLane(result, chart, after, id, wire.edge);
+  if (!placed) return none;
+  return { source: relinked(placed, halvedSignatures(chart, wire.edge, id)), id };
+}
+
+/** The edges of a chart as they were, the edge a node was put on as its first half, which ends at the node with a head. */
+function halvedSignatures(chart: Flowchart, edge: FlowEdge, id: string): string[] {
+  const first: FlowEdge = { ...edge, target: id, end: edge.end && "arrow" };
+  return chart.edges.map((item) => signature(item === edge ? first : item));
+}
+
+/**
+ * The source with a node put into a flow: the label of the edge stays on its first half, which
+ * gets an arrow head; the second half is an arrow of the same stroke that ends as the edge ended.
+ * Within its chain where the arrow makes that one edge, else on a line of its own.
+ */
+function withNodeOn(model: Model, wire: Wire, text: string): string {
+  const { statement } = wire,
     mark = { arrow: ">", circle: "o", cross: "x" }[wire.edge.end ?? "arrow"],
     second = operator("", wire.edge.stroke, wire.edge.end ? mark : ""),
     token = statement.arrows[wire.arrow],
     half = `${headed(token.text)} ${text} ${second}`;
-  const result =
-    statement.edges[wire.arrow].length === 1
-      ? rebuild(model, new Map([[statement, [patched(statement, token.start, token.end, half)]]]))
-      : rewired(
-          model,
-          wire,
-          (from, to, arrow) => `${from}${arrow.before}${half}${arrow.after}${to}`,
-        );
-  let after: Flowchart;
-  try {
-    after = parseFlowchart(result);
-  } catch {
-    return none;
-  }
-  const made = after.nodes.get(id);
-  if (!made || after.edges.length !== chart.edges.length + 1) return none;
-  const loose = [...chart.nodes.values()].some((node) => !node.parent),
-    lane =
-      chart.kind === "swimlane" && !made.parent && !loose
-        ? (chart.nodes.get(wire.edge.source)?.parent ?? chart.nodes.get(wire.edge.target)?.parent)
-        : null,
+  if (statement.edges[wire.arrow].length === 1)
+    return rebuild(
+      model,
+      new Map([[statement, [patched(statement, token.start, token.end, half)]]]),
+    );
+  return rewired(
+    model,
+    wire,
+    (from, to, arrow) => `${from}${arrow.before}${half}${arrow.after}${to}`,
+  );
+}
+
+/** A source with a new node in the lane of its flow where it belongs in one; undefined where that loses something. */
+function placedInLane(
+  result: string,
+  chart: Flowchart,
+  after: Flowchart,
+  id: string,
+  edge: FlowEdge,
+): string | undefined {
+  const made = after.nodes.get(id)!,
+    lane = laneOfFlow(chart, made, edge),
     placed = lane ? moveFlowInto(result, id, lane) : result;
-  if (!keeps(placed, after, new Map([[id, lane ?? made.parent]]))) return none;
-  const first: FlowEdge = { ...wire.edge, target: id, end: wire.edge.end && "arrow" };
-  return {
-    source: relinked(
-      placed,
-      chart.edges.map((item) => signature(item === wire.edge ? first : item)),
-    ),
-    id,
-  };
+  return keeps(placed, after, new Map([[id, lane ?? made.parent]])) ? placed : undefined;
+}
+
+/** A source as its chart, where it has a new node and one edge more than a chart had. */
+function readsWithOneMore(result: string, chart: Flowchart, id: string): Flowchart | undefined {
+  try {
+    const after = parseFlowchart(result);
+    return after.nodes.has(id) && after.edges.length === chart.edges.length + 1 ? after : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** The lane a node put into a flow stands in: in a swimlane whose nodes all stand in lanes, that of the flow; else none. */
+function laneOfFlow(
+  chart: Flowchart,
+  made: { parent: string | null },
+  edge: FlowEdge,
+): string | null | undefined {
+  if (chart.kind !== "swimlane" || made.parent || hasLoose(chart)) return null;
+  return chart.nodes.get(edge.source)?.parent ?? chart.nodes.get(edge.target)?.parent;
 }
 
 /**
@@ -1351,9 +1624,24 @@ export function attachFlow(
   const { chart } = model,
     anchor = chart.nodes.get(at) ?? (chart.kind === "flowchart" ? chart.subgraphs.get(at) : null);
   if (!anchor) return none;
-  const id = freshId(chart, piece.kind),
+  return (
+    attachInOne(model, piece, at, anchor.parent) ??
+    attachByJoining(source, piece, at, anchor.parent) ??
+    none
+  );
+}
+
+/** Adds a node joined to another in one statement in the subgraph of that one; undefined where that does not put it there. */
+function attachInOne(
+  model: Model,
+  piece: { kind: FlowPiece; label?: string },
+  at: string,
+  parent: string | null,
+) {
+  const { chart } = model,
+    id = freshId(chart, piece.kind),
     text = nodeText(chart, piece.kind, id, piece.label),
-    place = insertAt(model, anchor.parent),
+    place = insertAt(model, parent),
     lines = [...model.lines];
   lines.splice(
     place.at,
@@ -1361,20 +1649,27 @@ export function attachFlow(
     place.indent + (piece.kind === "start" ? `${text} --> ${at}` : `${at} --> ${text}`),
   );
   const result = lines.join("\n");
-  if (keeps(result, chart, new Map([[id, anchor.parent]]), 1)) {
-    const edge = parseFlowchart(result).edges.find(
-      (item) => item.line === place.at + 1 && (item.source === id || item.target === id),
-    );
-    if (edge) return { source: relinked(result, chart.edges.map(signature)), id, edge: edge.id };
-  }
-  // Where one statement cannot put the node beside the other: declared there, then joined.
-  const added = addFlowPiece(source, { ...piece, parent: anchor.parent });
-  if (!added.id) return none;
+  if (!keeps(result, chart, new Map([[id, parent]]), 1)) return undefined;
+  const edge = parseFlowchart(result).edges.find(
+    (item) => item.line === place.at + 1 && (item.source === id || item.target === id),
+  );
+  return edge && { source: relinked(result, chart.edges.map(signature)), id, edge: edge.id };
+}
+
+/** Adds a node in the subgraph of another, declared there and then joined to it; undefined where it is not joined. */
+function attachByJoining(
+  source: string,
+  piece: { kind: FlowPiece; label?: string },
+  at: string,
+  parent: string | null,
+) {
+  const added = addFlowPiece(source, { ...piece, parent });
+  if (!added.id) return undefined;
   const joined =
     piece.kind === "start"
       ? joinFlow(added.source, added.id, at)
       : joinFlow(added.source, at, added.id);
-  return joined.edge ? { ...joined, id: added.id } : none;
+  return joined.edge ? { ...joined, id: added.id } : undefined;
 }
 
 /**
@@ -1410,50 +1705,77 @@ const canBeId = (id: string) =>
 export function renameFlowId(source: string, id: string, newId: string): string {
   const model = readModel(source),
     next = newId.trim();
-  if (!model) return source;
-  const { chart } = model,
-    group = model.statements.find((item) => item.kind === "subgraph" && item.id === id);
-  if (
-    (!chart.nodes.has(id) && !group) ||
-    !canBeId(next) ||
-    chart.nodes.has(next) ||
-    chart.subgraphs.has(next)
-  )
-    return source;
-  let heading: string | undefined;
-  if (group) {
-    const { label } = chart.subgraphs.get(id)!;
-    if (group.form === "bare") return source;
-    // A subgraph whose name is its id is written by the id alone.
-    if (label === next) heading = `subgraph ${next}`;
-    else if (group.form !== "bracket") heading = `subgraph ${next} [${labelText(label)}]`;
-  }
+  if (!model || !canReid(model, id, next)) return source;
+  const heading = reidHeading(model, id, next);
+  if (heading === null) return source;
   const result = reidentify(source, id, next, heading);
+  return reidentified(result, model, id, next) ? result : source;
+}
+
+/** Whether a node or a subgraph can go by a new id: one the parser reads, that nothing has. */
+function canReid({ chart, statements }: Model, id: string, next: string): boolean {
+  if (!chart.nodes.has(id) && !openingOf(statements, id)) return false;
+  return canBeId(next) && !chart.nodes.has(next) && !chart.subgraphs.has(next);
+}
+
+/**
+ * The `subgraph` line a subgraph under a new id opens with: by the id alone where its name is the
+ * id, else with its name in brackets beside it; undefined where its line stays as it is, and null
+ * for a subgraph without a name.
+ */
+function reidHeading({ chart, statements }: Model, id: string, next: string) {
+  const group = openingOf(statements, id);
+  if (!group) return undefined;
+  if (group.form === "bare") return null;
+  const { label } = chart.subgraphs.get(id)!;
+  if (label === next) return `subgraph ${next}`;
+  return group.form === "bracket" ? undefined : `subgraph ${next} [${labelText(label)}]`;
+}
+
+/**
+ * Whether a source reads as a model's chart with one id written as another: the part shows the
+ * name it showed (a node shown by its id the new id), and every part and edge is as it was.
+ */
+function reidentified(result: string, model: Model, id: string, next: string): boolean {
+  const { chart } = model,
+    named = (item: string) => (item === id ? next : item),
+    shown = shownAs(model, id, next);
   try {
     const after = parseFlowchart(result),
-      was = chart.nodes.get(id) ?? chart.subgraphs.get(id)!,
       now = after.nodes.get(next) ?? after.subgraphs.get(next);
-    const named = (item: string) => (item === id ? next : item);
-    return now &&
-      now.label ===
-        (chart.nodes.has(id) && was.label === id && !declared(model, id) ? next : was.label) &&
-      after.nodes.size === chart.nodes.size &&
-      after.subgraphs.size === chart.subgraphs.size &&
-      [...parentsOf(chart)].every(
-        ([item, parent]) => parentsOf(after).get(named(item)) === (parent && named(parent)),
-      ) &&
-      after.edges.map(signature).join("\n") ===
-        chart.edges
-          .map((edge) =>
-            signature({ ...edge, source: named(edge.source), target: named(edge.target) }),
-          )
-          .join("\n")
-      ? result
-      : source;
+    return (
+      now?.label === shown && samePlaces(after, chart, named) && sameFlows(after, chart, named)
+    );
   } catch {
-    return source;
+    return false;
   }
 }
+
+/** The name a part shows under a new id: a node shown by its id shows the new one. */
+function shownAs(model: Model, id: string, next: string): string {
+  const { chart } = model,
+    was = chart.nodes.get(id) ?? chart.subgraphs.get(id)!;
+  return chart.nodes.has(id) && was.label === id && !declared(model, id) ? next : was.label;
+}
+
+/** Whether a chart has the parts another had, each in the subgraph it was in, under the ids `named` gives. */
+function samePlaces(after: Flowchart, chart: Flowchart, named: (id: string) => string): boolean {
+  const now = parentsOf(after);
+  return (
+    after.nodes.size === chart.nodes.size &&
+    after.subgraphs.size === chart.subgraphs.size &&
+    [...parentsOf(chart)].every(
+      ([item, parent]) => now.get(named(item)) === (parent && named(parent)),
+    )
+  );
+}
+
+/** Whether a chart has the edges another had, in their order, between the ids `named` gives. */
+const sameFlows = (after: Flowchart, chart: Flowchart, named: (id: string) => string) =>
+  after.edges.map(signature).join("\n") ===
+  chart.edges
+    .map((edge) => signature({ ...edge, source: named(edge.source), target: named(edge.target) }))
+    .join("\n");
 
 /** Every place a node is mentioned at, in the order of the source. */
 const mentionsOf = (model: Model, id: string) =>
@@ -1472,14 +1794,12 @@ const declared = (model: Model, id: string) =>
  */
 function generated(chart: Flowchart, id: string): boolean {
   if (GENERATED.test(id)) return true;
-  const node = chart.nodes.get(id),
-    numbered = id.match(/^(.*?)(\d+)$/);
-  if (!node || !numbered || Number(numbered[2]) < 2) return false;
-  return [...chart.nodes.values()].some(
-    (other) =>
-      other.id !== id &&
-      other.id.replace(/\d+$/, "") === numbered[1] &&
-      (node.label === other.label || node.label === other.id),
+  const node = chart.nodes.get(id);
+  return (
+    !!node &&
+    originalsOf(id, chart.nodes.values()).some(
+      (other) => node.label === other.label || node.label === other.id,
+    )
   );
 }
 
@@ -1507,24 +1827,25 @@ export function duplicateFlowNode(source: string, id: string): { source: string;
     none = { source, id: "" };
   if (!model || !node) return none;
   const { chart } = model,
-    mentions = mentionsOf(model, id),
-    { ref } = mentions.find((item) => item.ref.shape || item.ref.braces) ?? mentions[0],
-    base = id.replace(/\d+$/, "") || id;
-  let copy = "";
-  for (let count = 2; !copy; count++)
-    if (!chart.nodes.has(`${base}${count}`) && !chart.subgraphs.has(`${base}${count}`))
-      copy = `${base}${count}`;
+    copy = numberedId(
+      (item) => chart.nodes.has(item) || chart.subgraphs.has(item),
+      id.replace(/\d+$/, "") || id,
+      2,
+    );
   if (!canBeId(copy)) return none;
-  // A node written by its id alone shows that id: the copy shows it too.
-  const text =
-      ref.shape || ref.braces
-        ? copy + ref.text.slice(id.length)
-        : `${copy}[${labelText(node.label)}]${ref.text.slice(id.length)}`,
-    place = insertAt(model, node.parent),
+  const place = insertAt(model, node.parent),
     lines = [...model.lines];
-  lines.splice(place.at, 0, place.indent + text);
+  lines.splice(place.at, 0, place.indent + copyText(model, id, copy, node.label));
   const result = lines.join("\n");
   return keeps(result, chart, new Map([[copy, node.parent]])) ? { source: result, id: copy } : none;
+}
+
+/** A copy of a node as it is declared; a node written by its id alone shows that id, and the copy shows it too. */
+function copyText(model: Model, id: string, copy: string, label: string): string {
+  const mentions = mentionsOf(model, id),
+    { ref } = mentions.find((item) => item.ref.shape || item.ref.braces) ?? mentions[0];
+  if (ref.shape || ref.braces) return copy + ref.text.slice(id.length);
+  return `${copy}[${labelText(label)}]${ref.text.slice(id.length)}`;
 }
 
 /** One step of indentation, as the source indents. */
@@ -1545,145 +1866,224 @@ const stepOf = (model: Model) =>
  */
 export function moveFlowInto(source: string, id: string, group: string | null): string {
   const model = readModel(source);
-  if (!model) return source;
-  const { chart, statements } = model,
-    node = chart.nodes.get(id);
-  if (!node || node.parent === group || (group !== null && !chart.subgraphs.has(group)))
-    return source;
-  if (
-    group === null &&
-    chart.kind === "swimlane" &&
-    ![...chart.nodes.values()].some((other) => !other.parent)
-  )
-    return source;
-  const opening = (scope: string) =>
-      statements.find((item) => item.kind === "subgraph" && item.id === scope),
-    target = group === null ? undefined : opening(group);
-  if (group !== null && target?.close === undefined) return source;
-  const mentions = mentionsOf(model, id),
-    shaped = mentions.filter(({ ref }) => ref.shape || ref.braces),
-    alone = (statement: Statement) => !statement.arrows.length && statement.groups[0].length === 1,
+  if (!model || !canMoveInto(model, id, group)) return source;
+  const move = startMove(model, id, group);
+  for (const statement of new Set(move.mentions.map((mention) => mention.statement)))
+    if (statement.scope !== group) moveOutOf(move, statement);
+  const result = finishMove(move);
+  if (result === undefined || !movedOnly(result, model.chart, id, group)) return source;
+  return relinked(result, model.chart.edges.map(signature));
+}
+
+/**
+ * The source once the statements a move changes are written anew: with the flows behind the
+ * subgraphs they leave, and with a line of the node's own where it moves when it needs one.
+ */
+function finishMove(move: FlowMove): string | undefined {
+  const { group } = move,
+    lined = needsLine(move);
+  if (lined) settleLine(move);
+  const behind = placeBehind(rebuildKeeping(move.model, move.changes, move.loose), move.pulled);
+  return behind !== undefined && group !== null && lined
+    ? heldIn(behind, group, move.text)
+    : behind;
+}
+
+/**
+ * Readies the line of the node's own: into a subgraph it carries the shape of the node's one
+ * declaration; out of every subgraph it stands behind the subgraph the node leaves.
+ */
+function settleLine(move: FlowMove) {
+  if (move.group !== null) {
+    if (!move.displaced) stripDeclaration(move);
+  } else if (move.first)
+    move.pulled.set(move.first, [move.text, ...(move.pulled.get(move.first) ?? [])]);
+}
+
+/**
+ * Whether a node can move into a subgraph, or out of every one with null: it stands elsewhere, the
+ * subgraph is there, and a swimlane has another node outside the lanes for null.
+ */
+function canMoveInto({ chart, statements }: Model, id: string, group: string | null): boolean {
+  const node = chart.nodes.get(id);
+  if (!node || node.parent === group) return false;
+  if (group === null) return chart.kind !== "swimlane" || hasLoose(chart);
+  return openingOf(statements, group)?.close !== undefined;
+}
+
+/** The statement that opens a subgraph. */
+const openingOf = (statements: Statement[], scope: string) =>
+  statements.find((item) => item.kind === "subgraph" && item.id === scope);
+
+/** A node on its way into a subgraph, or out of every one, as `moveFlowInto` works it out. */
+interface FlowMove {
+  model: Model;
+  id: string;
+  group: string | null;
+  mentions: { statement: Statement; ref: Ref }[];
+  /** The mentions that write the node with its shape. */
+  shaped: { statement: Statement; ref: Ref }[];
+  /** The mention of the node inside the subgraph it moves to. */
+  there?: { statement: Statement; ref: Ref };
+  /** The line from which on the node is held by the subgraph it moves to. */
+  anchor: number;
+  changes: Map<Statement, string[]>;
+  loose: Map<Statement, Ref[]>;
+  /** The flows written anew behind each subgraph, by its id. */
+  pulled: Map<string, string[]>;
+  /** The node as its line is written: its id, or its declaration once that leaves its place. */
+  text: string;
+  /** Whether the one declaration of the node left the statement it stood in. */
+  displaced: boolean;
+  /** Whether a flow written anew carries that declaration. */
+  carried: boolean;
+  /** The subgraph behind which the node is written first. */
+  first?: string;
+}
+
+/** A move of a node, before any statement is changed. */
+function startMove(model: Model, id: string, group: string | null): FlowMove {
+  const { statements } = model,
+    mentions = mentionsOf(model, id),
     there = mentions.find(({ statement }) => group !== null && statement.scope === group),
-    // The line from which on the node is held by the subgraph it moves to.
-    anchor = there ? there.statement.line : target ? statements[target.close!].line : Infinity;
-  /** The subgraph around a scope behind whose `end` a statement holds the node no longer. */
-  const outer = (scope: string): string => {
-    const parent = opening(scope)?.scope ?? null;
-    return parent === null || parent === group ? scope : outer(parent);
+    target = group === null ? undefined : openingOf(statements, group);
+  return {
+    model,
+    id,
+    group,
+    mentions,
+    shaped: mentions.filter(({ ref }) => ref.shape || ref.braces),
+    there,
+    anchor: there ? there.statement.line : target ? statements[target.close!].line : Infinity,
+    changes: new Map(),
+    loose: new Map(),
+    pulled: new Map(),
+    text: id,
+    displaced: false,
+    carried: false,
   };
-  const changes = new Map<Statement, string[]>(),
-    loose = new Map<Statement, Ref[]>(),
-    pulled = new Map<string, string[]>(),
-    seen = new Set<Statement>();
-  let text = id,
-    displaced = false,
-    carried = false,
-    first: string | undefined;
-  // The one declaration of the node goes with a statement that no longer holds the node.
-  const leaves = (statement: Statement) => {
-    if (shaped.length !== 1 || shaped[0].statement !== statement) return;
-    text = shaped[0].ref.text;
-    displaced = true;
-  };
-  for (const { statement } of mentions) {
-    if (seen.has(statement)) continue;
-    seen.add(statement);
-    const scope = statement.scope;
-    if (scope === group) continue;
-    if (alone(statement)) {
-      // A line of its own outside the subgraph: the node leaves it.
-      if (group === null || scope !== null || !there) {
-        changes.set(statement, []);
-        leaves(statement);
-        if (scope !== null) first ??= outer(scope);
+}
+
+/** The subgraph around a scope behind whose `end` a statement holds the node no longer. */
+function outerOf(move: FlowMove, scope: string): string {
+  const parent = openingOf(move.model.statements, scope)?.scope ?? null;
+  return parent === null || parent === move.group ? scope : outerOf(move, parent);
+}
+
+/** Whether a subgraph stands right inside the one the node moves to. */
+const landsIn = (move: FlowMove, place: string) =>
+  (openingOf(move.model.statements, place)?.scope ?? null) === move.group;
+
+/** The one declaration of the node goes with a statement that no longer holds the node. */
+function leaves(move: FlowMove, statement: Statement) {
+  if (move.shaped.length !== 1 || move.shaped[0].statement !== statement) return;
+  move.text = move.shaped[0].ref.text;
+  move.displaced = true;
+}
+
+/** Changes a statement outside the subgraph the node moves to that mentions the node. */
+function moveOutOf(move: FlowMove, statement: Statement) {
+  const { scope } = statement;
+  if (!statement.arrows.length && statement.groups[0].length === 1) {
+    // A line of its own outside the subgraph: the node leaves it.
+    if (move.group !== null && scope === null && move.there) return;
+    move.changes.set(statement, []);
+    leaves(move, statement);
+    if (scope !== null) move.first ??= outerOf(move, scope);
+    return;
+  }
+  if (scope !== null && statement.line < move.anchor) pullFlows(move, statement, scope);
+}
+
+/**
+ * Takes the node out of a chain inside another subgraph before the line that holds it where it
+ * moves, and writes its flows there anew behind that subgraph: chains as far as they went on.
+ */
+function pullFlows(move: FlowMove, statement: Statement, scope: string) {
+  const made = recompose(statement, new Set([move.id]), new Set(), new Map());
+  if (!made) return;
+  move.changes.set(statement, made.texts);
+  if (made.loose.length) move.loose.set(statement, made.loose);
+  leaves(move, statement);
+  const place = outerOf(move, scope),
+    out = move.pulled.get(place) ?? [];
+  move.first ??= place;
+  out.push(...flowsOf(move, statement, landsIn(move, place)));
+  move.pulled.set(place, out);
+}
+
+/** The flows of the node in a chain, each chain as far as it goes on; the first carries its declaration where it lands. */
+function flowsOf(move: FlowMove, statement: Statement, lands: boolean): string[] {
+  const out: string[] = [];
+  let tail: string | undefined;
+  statement.arrows.forEach((token, index) => {
+    for (const from of statement.groups[index])
+      for (const to of statement.groups[index + 1]) {
+        if (from.id !== move.id && to.id !== move.id) continue;
+        const target = carriedName(move, to, lands);
+        if (tail === from.id && out.length) out[out.length - 1] += ` ${token.text} ${target}`;
+        else out.push(`${carriedName(move, from, lands)} ${token.text} ${target}`);
+        tail = to.id;
       }
-      continue;
-    }
-    if (scope === null || statement.line >= anchor) continue;
-    const made = recompose(statement, new Set([id]), new Set(), new Map());
-    if (!made) continue;
-    changes.set(statement, made.texts);
-    if (made.loose.length) loose.set(statement, made.loose);
-    leaves(statement);
-    // Its flows there, written anew behind the subgraph: chains as far as they went on.
-    const place = outer(scope),
-      lands = (opening(place)?.scope ?? null) === group,
-      out = pulled.get(place) ?? [];
-    first ??= place;
-    let tail: string | undefined;
-    const name = (ref: Ref) => {
-      if (ref.id !== id || !displaced || carried || !lands) return ref.id;
-      carried = true;
-      return text;
-    };
-    statement.arrows.forEach((token, index) => {
-      for (const from of statement.groups[index])
-        for (const to of statement.groups[index + 1]) {
-          if (from.id !== id && to.id !== id) continue;
-          if (tail === from.id && out.length) out[out.length - 1] += ` ${token.text} ${name(to)}`;
-          else out.push(`${name(from)} ${token.text} ${name(to)}`);
-          tail = to.id;
-        }
-    });
-    pulled.set(place, out);
-  }
-  // Its one declaration in a flow that stays: the shape moves to the line the subgraph gets.
-  const landed = [...pulled.keys()].some((place) => (opening(place)?.scope ?? null) === group),
-    rooted = mentions.some(({ statement }) => statement.scope === null),
-    lined =
-      group === null
-        ? (displaced && !carried) || (!rooted && !pulled.size)
-        : (displaced && !carried) || (!there && !landed);
-  if (
-    group !== null &&
-    lined &&
-    !displaced &&
-    shaped.length === 1 &&
-    shaped[0].statement.scope !== group
-  ) {
-    const { statement, ref } = shaped[0];
-    if (!changes.has(statement)) {
-      text = ref.text;
-      changes.set(statement, [
-        patched(statement, ref.idEnd, ref.braces?.end ?? ref.shape!.after, ""),
-      ]);
-    }
-  }
-  // Out of every subgraph, the line of the node stands behind the subgraph it leaves.
-  if (group === null && lined && first) pulled.set(first, [text, ...(pulled.get(first) ?? [])]);
-  let result = rebuildKeeping(model, changes, loose);
-  // Behind the subgraphs, the last first, so that the lines above stay where they are.
+  });
+  return out;
+}
+
+/** A node of a flow written anew: by its id, or the moving node by its declaration, once, where the flow lands. */
+function carriedName(move: FlowMove, ref: Ref, lands: boolean): string {
+  if (ref.id !== move.id || !move.displaced || move.carried || !lands) return ref.id;
+  move.carried = true;
+  return move.text;
+}
+
+/** Whether the node needs a line of its own where it moves: no statement there holds it otherwise. */
+function needsLine(move: FlowMove): boolean {
+  if (move.displaced && !move.carried) return true;
+  if (move.group === null)
+    return !move.mentions.some(({ statement }) => statement.scope === null) && !move.pulled.size;
+  return !move.there && ![...move.pulled.keys()].some((place) => landsIn(move, place));
+}
+
+/** Its one declaration in a flow that stays: the shape moves to the line the subgraph gets. */
+function stripDeclaration(move: FlowMove) {
+  if (move.shaped.length !== 1 || move.shaped[0].statement.scope === move.group) return;
+  const { statement, ref } = move.shaped[0];
+  if (move.changes.has(statement)) return;
+  move.text = ref.text;
+  move.changes.set(statement, [
+    patched(statement, ref.idEnd, ref.braces?.end ?? ref.shape!.after, ""),
+  ]);
+}
+
+/** A source with flows written behind subgraphs, the last first, so that the lines above stay where they are. */
+function placeBehind(result: string, pulled: Map<string, string[]>): string | undefined {
   const after = readModel(result);
-  if (!after) return source;
+  if (!after) return undefined;
   const places = [...pulled]
-    .map(([place, texts]) => {
-      const open = after.statements.find((item) => item.kind === "subgraph" && item.id === place);
-      return { open, texts };
-    })
+    .map(([place, texts]) => ({ open: openingOf(after.statements, place), texts }))
     .filter((item) => item.texts.length);
-  if (places.some((item) => item.open?.close === undefined)) return source;
+  if (places.some((item) => item.open?.close === undefined)) return undefined;
   const lines = [...after.lines];
   for (const { open, texts } of places.toSorted((a, b) => b.open!.line - a.open!.line)) {
     const indent = indentOf(lines[open!.line]);
     lines.splice(after.statements[open!.close!].line + 1, 0, ...texts.map((item) => indent + item));
   }
-  result = lines.join("\n");
-  if (group !== null && lined) {
-    const now = readModel(result);
-    if (!now) return source;
-    const place = insertAt(now, group),
-      held = [...now.lines];
-    held.splice(place.at, 0, place.indent + text);
-    result = held.join("\n");
-  }
-  try {
-    if (!keeps(result, chart, new Map([[id, group]])) || !sameEdges(parseFlowchart(result), chart))
-      return source;
-  } catch {
-    return source;
-  }
-  return relinked(result, chart.edges.map(signature));
+  return lines.join("\n");
 }
+
+/** A source with a line for a node in a subgraph. */
+function heldIn(result: string, group: string, text: string): string | undefined {
+  const now = readModel(result);
+  if (!now) return undefined;
+  const place = insertAt(now, group),
+    lines = [...now.lines];
+  lines.splice(place.at, 0, place.indent + text);
+  return lines.join("\n");
+}
+
+/** Whether a source reads as a chart did with one node in another subgraph, and the same edges. */
+const movedOnly = (result: string, chart: Flowchart, id: string, group: string | null) =>
+  keptAs(result, chart, new Map([[id, group]]));
 
 /**
  * Takes a subgraph or lane away and keeps what it holds: its `subgraph` and `end` lines and its
@@ -1694,67 +2094,108 @@ export function moveFlowInto(source: string, id: string, group: string | null): 
  */
 export function ungroupFlow(source: string, id: string): string {
   const first = readModel(source),
-    group = first?.chart.subgraphs.get(id),
-    open = first?.statements.find((item) => item.kind === "subgraph" && item.id === id);
-  if (!first || !group || open?.close === undefined) return source;
+    found = first && ungroupable(first, id);
+  if (!first || !found) return source;
   const { chart } = first,
-    held = [...chart.nodes.values()].filter((node) => node.parent === id),
-    end = first.statements[open.close];
-  if (chart.kind === "swimlane" && chart.subgraphs.size === 1 && held.length) return source;
-  if (first.byLine.get(open.line)!.length > 1 || first.byLine.get(end.line)!.length > 1)
-    return source;
+    { open, close, parent } = found,
+    lines = [...first.lines];
   // One step less of indentation between the two lines, then the lines themselves go.
-  const lines = [...first.lines],
-    outer = indentOf(lines[open.line]),
-    inside = lines.slice(open.line + 1, end.line).find((line) => line.trim()),
-    inner = inside ? indentOf(inside) : outer;
-  if (inner.length > outer.length && inner.startsWith(outer))
-    for (let index = open.line + 1; index < end.line; index++)
-      if (lines[index].startsWith(inner)) lines[index] = outer + lines[index].slice(inner.length);
-  const model = readModel(lines.join("\n"));
-  if (!model) return source;
-  const changes = new Map<Statement, string[]>(),
-    loose = new Map<Statement, Ref[]>(),
-    gone = new Set([id]);
-  for (const statement of model.statements) {
-    if (
-      (statement.kind === "subgraph" && statement.id === id) ||
-      statement.index === open.close ||
-      (statement.kind === "direction" && statement.scope === id)
-    )
-      changes.set(statement, []);
-    else if (statement.kind === "chain") {
-      const made = recompose(statement, gone, new Set(), new Map());
-      if (!made) continue;
-      changes.set(statement, made.texts);
-      if (made.loose.length) loose.set(statement, made.loose);
-    } else if (statement.kind === "styling") {
-      const styled = restyle(statement.text, gone, (index) => index);
-      if (styled !== statement.text) changes.set(statement, styled === null ? [] : [styled]);
-    }
-  }
-  let result = rebuildKeeping(model, changes, loose);
-  // A node another subgraph mentions further down would go there: it stays where the subgraph stood.
-  try {
-    for (const node of held)
-      if (parseFlowchart(result).nodes.get(node.id)?.parent !== group.parent)
-        result = moveFlowInto(result, node.id, group.parent);
-    const after = parseFlowchart(result),
-      was = new Map(
-        [...parentsOf(chart)]
-          .filter(([item]) => item !== id)
-          .map(([item, parent]) => [item, parent === id ? group.parent : parent]),
-      ),
-      now = parentsOf(after);
-    if (now.size !== was.size || [...was].some(([item, parent]) => now.get(item) !== parent))
-      return source;
-  } catch {
-    return source;
-  }
+  dedent(lines, open.line, first.statements[close].line);
+  const model = readModel(lines.join("\n")),
+    result = model && keptInPlace(withoutSubgraph(model, id, close), chart, id, parent);
+  if (!result) return source;
   return relinked(
     result,
     chart.edges.map((edge) => (edge.source === id || edge.target === id ? null : signature(edge))),
   );
+}
+
+/** A subgraph that can be taken away: its opening statement, the index of its `end`, and the subgraph around it. */
+function ungroupable(model: Model, id: string) {
+  const group = model.chart.subgraphs.get(id),
+    open = openingOf(model.statements, id);
+  if (!group || open?.close === undefined || !canUngroup(model, id, open)) return undefined;
+  return { open, close: open.close, parent: group.parent };
+}
+
+/**
+ * Whether a subgraph can be taken away: its `subgraph` and `end` stand on lines of their own, and
+ * it is not the last lane of a swimlane while that holds nodes.
+ */
+function canUngroup({ chart, byLine, statements }: Model, id: string, open: Statement): boolean {
+  const held = [...chart.nodes.values()].some((node) => node.parent === id);
+  if (chart.kind === "swimlane" && chart.subgraphs.size === 1 && held) return false;
+  return (
+    byLine.get(open.line)!.length === 1 && byLine.get(statements[open.close!].line)!.length === 1
+  );
+}
+
+/**
+ * A source without a subgraph's `subgraph` and `end` lines and its `direction`, and without the
+ * flows to the subgraph itself and what styles it.
+ */
+function withoutSubgraph(model: Model, id: string, close: number): string {
+  const gone = new Set([id]),
+    changes = restyled(model, (index) => index, gone),
+    loose = recomposeAll(model, gone, new Set(), changes);
+  for (const statement of model.statements)
+    if (
+      (statement.kind === "subgraph" && statement.id === id) ||
+      statement.index === close ||
+      (statement.kind === "direction" && statement.scope === id)
+    )
+      changes.set(statement, []);
+  return rebuildKeeping(model, changes, loose);
+}
+
+/**
+ * A source whose nodes stand where they stood, those of a subgraph that went in the subgraph
+ * around it: a node another subgraph mentions further down would go there, so it moves back.
+ * Undefined where that cannot be.
+ */
+function keptInPlace(
+  result: string,
+  chart: Flowchart,
+  id: string,
+  parent: string | null,
+): string | undefined {
+  try {
+    for (const node of chart.nodes.values())
+      if (node.parent === id && parseFlowchart(result).nodes.get(node.id)?.parent !== parent)
+        result = moveFlowInto(result, node.id, parent);
+    const now = parentsOf(parseFlowchart(result)),
+      was = new Map(
+        [...parentsOf(chart)]
+          .filter(([item]) => item !== id)
+          .map(([item, at]) => [item, at === id ? parent : at]),
+      );
+    return now.size === was.size && [...was].every(([item, at]) => now.get(item) === at)
+      ? result
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Writes anew every chain a change touches, into `changes`; returns the nodes the new chains no
+ * longer mention, by statement.
+ */
+function recomposeAll(
+  model: Model,
+  gone: Set<string>,
+  cut: Set<string>,
+  changes: Map<Statement, string[]>,
+): Map<Statement, Ref[]> {
+  const loose = new Map<Statement, Ref[]>();
+  for (const statement of model.statements) {
+    if (changes.has(statement) || statement.kind !== "chain") continue;
+    const made = recompose(statement, gone, cut, new Map());
+    if (!made) continue;
+    changes.set(statement, made.texts);
+    if (made.loose.length) loose.set(statement, made.loose);
+  }
+  return loose;
 }
 
 /**
@@ -1771,82 +2212,110 @@ export function groupFlowNodes(
   label: string,
 ): { source: string; id: string } {
   const model = readModel(source),
-    none = { source, id: "" };
-  if (!model) return none;
+    nodes = model ? [...new Set(ids)].filter((id) => model.chart.nodes.has(id)) : [];
+  if (!model || !nodes.length) return { source, id: "" };
+  return wrapInPlace(model, nodes, label) ?? groupByMoving(source, nodes, label);
+}
+
+/**
+ * Wraps nodes that stand together in a flowchart where they stand, as `groupFlowNodes` says; null
+ * where they stand apart, in a swimlane, or the result would not keep the chart.
+ */
+function wrapInPlace(
+  model: Model,
+  nodes: string[],
+  label: string,
+): { source: string; id: string } | null {
   const { chart } = model,
-    nodes = [...new Set(ids)].filter((id) => chart.nodes.has(id)),
-    inside = new Set(nodes),
     parents = new Set(nodes.map((id) => chart.nodes.get(id)!.parent));
-  if (!nodes.length) return none;
-  const wrapped = (): { source: string; id: string } | null => {
-    if (chart.kind !== "flowchart" || parents.size !== 1) return null;
-    const [parent] = parents,
-      about = model.statements.filter(
-        (item) =>
-          item.kind === "chain" &&
-          item.scope === parent &&
-          item.groups.flat().some((ref) => inside.has(ref.id)),
-      ),
-      whole = about.filter((item) => item.groups.flat().every((ref) => inside.has(ref.id))),
-      // Outside every subgraph a flow holds no node in place, so the subgraph opens where the
-      // first statement it takes stood; inside one it opens before the first mention.
-      first = parent === null ? (whole[0] ?? about[0]) : about[0];
-    if (!first) return null;
-    const id = freshId(chart, "group"),
-      step = stepOf(model),
-      changes = new Map<Statement, string[]>(whole.map((item) => [item, []])),
-      held = new Set(whole.flatMap((item) => item.groups.flat().map((ref) => ref.id))),
-      strips = new Map<Statement, Ref[]>(),
-      own: string[] = [];
-    for (const node of nodes) {
-      if (held.has(node)) continue;
-      // Its one declaration in a flow that stays outside: the shape moves to its line in the subgraph.
-      const shaped = mentionsOf(model, node).filter(({ ref }) => ref.shape || ref.braces),
-        found = shaped.length === 1 && shaped[0].statement.scope === parent ? shaped[0] : null;
-      own.push(found ? found.ref.text : node);
-      if (found) strips.set(found.statement, [...(strips.get(found.statement) ?? []), found.ref]);
-    }
-    // From the right, so that the places before keep their columns.
-    for (const [statement, refs] of strips)
-      changes.set(statement, [
-        refs
-          .toSorted((a, b) => b.start - a.start)
-          .reduce(
-            (text, ref) =>
-              text.slice(0, ref.idEnd) + text.slice(ref.braces?.end ?? ref.shape!.after),
-            statement.text,
-          ),
-      ]);
-    const block = [
+  if (chart.kind !== "flowchart" || parents.size !== 1) return null;
+  const [parent] = parents,
+    { whole, first } = takenStatements(model, new Set(nodes), parent);
+  if (!first) return null;
+  const id = freshId(chart, "group"),
+    changes = new Map<Statement, string[]>(whole.map((item) => [item, []])),
+    held = new Set(whole.flatMap((item) => item.groups.flat().map((ref) => ref.id))),
+    own = ownLines(
+      model,
+      nodes.filter((node) => !held.has(node)),
+      parent,
+      changes,
+    ),
+    block = [
       `subgraph ${id} [${labelText(label) || "Group"}]`,
-      ...[...whole.map((item) => item.text), ...own].map((text) => step + text),
+      ...[...whole.map((item) => item.text), ...own].map((text) => stepOf(model) + text),
       "end",
     ];
-    changes.set(first, [...block, ...(changes.get(first) ?? [first.text])]);
-    const result = rebuild(model, changes);
-    try {
-      const after = parseFlowchart(result);
-      if (
-        !keeps(
-          result,
-          chart,
-          new Map([[id, parent], ...nodes.map((node): [string, string] => [node, id])]),
-        ) ||
-        !sameEdges(after, chart)
-      )
-        return null;
-    } catch {
-      return null;
-    }
-    return { source: relinked(result, chart.edges.map(signature)), id };
-  };
-  const made = wrapped();
-  if (made) return made;
+  changes.set(first, [...block, ...(changes.get(first) ?? [first.text])]);
+  const result = rebuild(model, changes),
+    moved = new Map([[id, parent], ...nodes.map((node): [string, string] => [node, id])]);
+  if (!keptAs(result, chart, moved)) return null;
+  return { source: relinked(result, chart.edges.map(signature)), id };
+}
+
+/**
+ * The chains a new subgraph takes, those about its nodes alone, and the statement it opens
+ * before. Outside every subgraph a flow holds no node in place, so the subgraph opens where the
+ * first statement it takes stood; inside one it opens before the first mention.
+ */
+function takenStatements(model: Model, inside: Set<string>, parent: string | null) {
+  const about = model.statements.filter(
+      (item) =>
+        item.kind === "chain" &&
+        item.scope === parent &&
+        item.groups.flat().some((ref) => inside.has(ref.id)),
+    ),
+    whole = about.filter((item) => item.groups.flat().every((ref) => inside.has(ref.id)));
+  return { whole, first: parent === null ? (whole[0] ?? about[0]) : about[0] };
+}
+
+/**
+ * The lines of a new subgraph for nodes no statement it takes mentions: a node by its id, or by
+ * its one declaration in a flow that stays outside, whose shape then moves to its line.
+ */
+function ownLines(
+  model: Model,
+  nodes: string[],
+  parent: string | null,
+  changes: Map<Statement, string[]>,
+): string[] {
+  const own: string[] = [],
+    strips = new Map<Statement, Ref[]>();
+  for (const node of nodes) {
+    const shaped = mentionsOf(model, node).filter(({ ref }) => ref.shape || ref.braces),
+      found = shaped.length === 1 && shaped[0].statement.scope === parent ? shaped[0] : null;
+    own.push(found ? found.ref.text : node);
+    if (found) strips.set(found.statement, [...(strips.get(found.statement) ?? []), found.ref]);
+  }
+  for (const [statement, refs] of strips) changes.set(statement, [withoutShapes(statement, refs)]);
+  return own;
+}
+
+/** A statement with nodes written by their ids alone, from the right so that the places before keep their columns. */
+const withoutShapes = (statement: Statement, refs: Ref[]) =>
+  refs
+    .toSorted((a, b) => b.start - a.start)
+    .reduce(
+      (text, ref) => text.slice(0, ref.idEnd) + text.slice(ref.braces?.end ?? ref.shape!.after),
+      statement.text,
+    );
+
+/** Whether a source reads as a chart did but for the parts moved, with the same edges. */
+function keptAs(result: string, chart: Flowchart, moved: Map<string, string | null>): boolean {
+  try {
+    return keeps(result, chart, moved) && sameEdges(parseFlowchart(result), chart);
+  } catch {
+    return false;
+  }
+}
+
+/** Groups nodes in a new subgraph or lane by moving each into it; nothing where one cannot move. */
+function groupByMoving(source: string, nodes: string[], label: string) {
   const added = addFlowPiece(source, { kind: "group", label, parent: null });
   let result = added.source;
   for (const node of nodes) {
     const moved = moveFlowInto(result, node, added.id);
-    if (moved === result) return none;
+    if (moved === result) return { source, id: "" };
     result = moved;
   }
   return { source: result, id: added.id };
@@ -1898,7 +2367,7 @@ export function activityRefusal(source: string, kind: string): string | undefine
  * lane without a name. A group added to a `swimlane-beta` source without lanes makes it a
  * flowchart again. A piece `activityRefusal` refuses is not added: the id is empty.
  */
-export function addActivityPiece(
+function addActivityPiece(
   source: string,
   piece: { kind: string; label?: string; parent?: string | null },
 ): { source: string; id: string } {
@@ -1928,7 +2397,7 @@ function unlaned(before: string, after: string): string {
  * Takes a subgraph away as `ungroupFlow` does. The last lane of a diagram with lanes goes too,
  * with what it holds kept: the diagram becomes a flowchart without lanes.
  */
-export function ungroupActivity(source: string, id: string): string {
+function ungroupActivity(source: string, id: string): string {
   const chart = parseFlowchart(source);
   if (!laned(chart) || chart.subgraphs.size > 1 || !chart.subgraphs.has(id))
     return ungroupFlow(source, id);
