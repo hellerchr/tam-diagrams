@@ -15,7 +15,7 @@ import {
   StringStream,
 } from "@codemirror/language";
 import { insertNewlineAndIndent } from "@codemirror/commands";
-import { countColumn, type EditorState, type Extension, Prec } from "@codemirror/state";
+import { countColumn, type EditorState, type Extension, Prec, type Text } from "@codemirror/state";
 import { type Command, EditorView } from "@codemirror/view";
 import { ELEMENT_KINDS } from "../src/tam.ts";
 import type { DiagramType } from "./types.ts";
@@ -71,10 +71,132 @@ const startState = (): SyntaxState => ({
   plan: [],
 });
 
+/**
+ * A step of a tokenizer: it reads a token and gives its tag, or null for a token without one. It
+ * gives undefined where the token is not its to read, and the next step tries.
+ */
+type Step = (stream: StringStream, state: SyntaxState) => string | null | undefined;
+
+/** What reading a token says of the rest of the line. */
+type Then = (state: SyntaxState, stream: StringStream) => void;
+
+/** A token a pattern reads: its tag, and what reading it says of the rest of the line. */
+function rule(pattern: RegExp | string, tag: string, then?: Then): Step {
+  return (stream, state) => {
+    if (!stream.match(pattern)) return undefined;
+    then?.(state, stream);
+    return tag;
+  };
+}
+
+/** The steps tried in turn: the first that reads the token reads it. */
+function anyOf(steps: Step[]): Step {
+  return (stream, state) => {
+    for (const step of steps) {
+      const tag = step(stream, state);
+      if (tag !== undefined) return tag;
+    }
+    return undefined;
+  };
+}
+
+/** The statements of a syntax: the steps tried in turn, and a sign that none reads passed over. */
+function statements(steps: Step[]): (stream: StringStream, state: SyntaxState) => string | null {
+  const read = anyOf(steps);
+  return (stream, state) => {
+    const tag = read(stream, state);
+    if (tag !== undefined) return tag;
+    stream.next();
+    return null;
+  };
+}
+
+/** A step taken only where the state allows it. */
+function when(holds: (state: SyntaxState) => boolean, step: Step): Step {
+  return (stream, state) => (holds(state) ? step(stream, state) : undefined);
+}
+
+/** A step taken only in a phase of the statement. */
+const inPhase = (phase: string, step: Step): Step => when((state) => state.phase === phase, step);
+
+/** A step taken only where an element, or a connection, comes next. */
+const wanting = (want: SyntaxState["want"], step: Step): Step =>
+  when((state) => state.want === want, step);
+
+/** A phase that lasts one token: the phase moves on, and the step reads that token if it can. */
+function turn(from: string, to: string, step: Step): Step {
+  return inPhase(from, (stream, state) => {
+    state.phase = to;
+    return step(stream, state);
+  });
+}
+
+/** The first token of a statement: the steps tried where the line starts. */
+function atStart(steps: Step[]): Step {
+  const read = anyOf(steps);
+  return (stream, state) => {
+    if (!state.start) return undefined;
+    state.start = false;
+    return read(stream, state);
+  };
+}
+
+/** The rest of the line as one token. */
+const toEnd =
+  (tag: string): Step =>
+  (stream) => {
+    stream.skipToEnd();
+    return tag;
+  };
+
+const toPhase =
+  (phase: string): Then =>
+  (state) => {
+    state.phase = phase;
+  };
+
+const wants =
+  (want: SyntaxState["want"]): Then =>
+  (state) => {
+    state.want = want;
+  };
+
+/** A block opens, by its keyword, and the statement goes on in a phase. */
+const enter =
+  (block: string, phase: string): Then =>
+  (state) => {
+    state.blocks.push(block);
+    state.phase = phase;
+  };
+
+const leave: Then = (state) => {
+  state.blocks.pop();
+};
+
+/** The brace that closes the body of a class or an entity. */
+const closeBody: Then = (state) => {
+  state.body = false;
+  state.blocks.pop();
+};
+
+/** A connection is read: an element comes next. */
+const connects: Then = (state) => {
+  state.want = "node";
+  state.arrow = true;
+};
+
+const QUOTED = /^"[^"]*"?/;
+
 const DIRECTION = /^(TB|TD|BT|LR|RL)\b/i;
 
-/** The statements that only style a picture: colored as a keyword and plain words. */
-const STYLING = /^(classDef|style|linkStyle|cssClass|click|callback|links?|properties|details)\b/;
+/** The statements of a few types that only style a picture: colored as a keyword and plain words. */
+const NODE_STYLING = /^(classDef|class|style|linkStyle|click|callback|links?)(?=\s)/;
+
+/** The end of a `%%{ }%%` directive. */
+const DIRECTIVE_END = /\}%%\s*$/;
+
+/** A note of a state machine without a text on its line: the note is the lines up to `end note`. */
+const NOTE_BLOCK = /^\s*note\s+(left|right)\s+of\s+[^:]+$/i;
 
 /** The lines of a frontmatter block: its fences, and keys with their values. */
 function frontmatter(stream: StringStream, state: SyntaxState, fence: boolean): string | null {
@@ -94,13 +216,122 @@ function frontmatter(stream: StringStream, state: SyntaxState, fence: boolean): 
   return "string";
 }
 
-/** The marks a Mermaid element may carry after its name: a class, a stereotype, metadata. */
-function mark(stream: StringStream): string | null {
-  if (stream.match(/^:::[\w,-]+/)) return "atom";
-  if (stream.match(/^<<[^>]*(>>)?/)) return "annotation";
-  if (stream.match(/^@\{[^}]*\}?/)) return "meta";
+/** The frontmatter block, where a source starts with one. */
+function frontLines(stream: StringStream, state: SyntaxState): string | null | undefined {
+  const fence = stream.sol() && /^\s*---\s*$/.test(stream.string);
+  if (state.front === "inside" || (state.front === "before" && fence))
+    return frontmatter(stream, state, fence);
+  return undefined;
+}
+
+/** Space between tokens, which parts an id from a shape; past it the frontmatter is behind. */
+function space(stream: StringStream, state: SyntaxState): null | undefined {
+  if (stream.eatSpace()) {
+    state.after = false;
+    return null;
+  }
+  state.front = "after";
+  return undefined;
+}
+
+/** The lines of a directive after its first. */
+function directiveLine(stream: StringStream, state: SyntaxState): string | undefined {
+  if (!state.directive) return undefined;
+  stream.skipToEnd();
+  if (DIRECTIVE_END.test(stream.string)) state.directive = false;
+  return "meta";
+}
+
+/** A comment, or the first line of a directive. A comment is a line of its own: the parsers do not cut one off the end of a statement. */
+function comment(stream: StringStream, state: SyntaxState): string | undefined {
+  if (!state.start || !stream.match("%%")) return undefined;
+  const directive = stream.peek() === "{";
+  stream.skipToEnd();
+  if (!directive) return "comment";
+  state.directive = !DIRECTIVE_END.test(stream.string);
+  return "meta";
+}
+
+/** A token measured already, by the step that read the piece of the line it is in. */
+function planned(stream: StringStream, state: SyntaxState): string | undefined {
+  if (!state.plan.length) return undefined;
+  const length = state.plan.shift() as number;
+  stream.pos = Math.min(stream.string.length, stream.pos + length);
+  return state.plan.shift() as string;
+}
+
+/** The header line of a type, the first statement of a source; `directed` where a direction follows it. */
+function headerLine(header: RegExp, directed: boolean): Step {
+  return (stream, state) => {
+    if (state.header) return undefined;
+    state.header = true;
+    if (!stream.match(header)) return undefined;
+    state.phase = directed ? "header" : "";
+    return "keyword";
+  };
+}
+
+/** The lines of a note of several lines, and of a description for screen readers. */
+function proseLine(stream: StringStream, state: SyntaxState): string | undefined {
+  if (!state.prose || state.phase !== "") return undefined;
+  if (state.prose === "note" && stream.match(/^end\s+note\b/i)) {
+    state.prose = "";
+    return "keyword";
+  }
+  if (state.prose === "acc" && stream.string.includes("}")) state.prose = "";
+  stream.skipToEnd();
+  return "string";
+}
+
+/** Plain words: what follows the keyword of a styling statement. */
+function plainWord(stream: StringStream): string | null {
+  if (stream.match(QUOTED)) return "string";
+  if (!stream.match(/^[\w-]+/)) stream.next();
   return null;
 }
+
+/** A statement every Mermaid type has, at the start of a line outside the body of a class or an entity. */
+function shared(step: Step): Step {
+  return (stream, state) => {
+    if (!state.start || state.body) return undefined;
+    const tag = step(stream, state);
+    if (tag !== undefined) state.start = false;
+    return tag;
+  };
+}
+
+/** A title or a description for screen readers. */
+const accessibility = shared(
+  rule(/^acc(Title|Descr)(?=\s*[:{])/, "keyword", (state, stream) => {
+    state.phase = "colon";
+    if (/^\s*accDescr\s*\{[^}]*$/.test(stream.string)) state.prose = "acc";
+  }),
+);
+
+/** What every Mermaid type reads first, in this order: frontmatter, space, directives, comments, and tokens already measured. */
+const MERMAID_LINES: Step[] = [frontLines, space, directiveLine, comment, planned];
+
+/** What the statements of every Mermaid type share, read after the header, in this order. */
+const MERMAID_STATEMENTS: Step[] = [
+  turn("header", "", anyOf([rule(DIRECTION, "atom"), rule(/^[<>^v](?=\s|;|$)/, "atom")])),
+  proseLine,
+  accessibility,
+  turn("colon", "text", rule(":", "punctuation")),
+  inPhase("text", toEnd("string")),
+  inPhase("plain", plainWord),
+  turn("direction", "plain", rule(DIRECTION, "atom")),
+  shared(rule(/^direction(?=\s|$)/, "keyword", toPhase("direction"))),
+];
+
+/** What a line starts as: a statement, with nothing of it read. */
+const lineStart = (): Partial<SyntaxState> => ({
+  start: true,
+  phase: "",
+  want: "node",
+  after: false,
+  arrow: false,
+  plan: [],
+});
 
 /**
  * A tokenizer of a Mermaid syntax: frontmatter, comments, directives, the header and the statements
@@ -112,97 +343,18 @@ function mermaid(
   statement: (stream: StringStream, state: SyntaxState) => string | null,
   electric?: RegExp,
 ): StreamParser<SyntaxState> {
-  const read = (stream: StringStream, state: SyntaxState): string | null => {
-    const fence = stream.sol() && /^\s*---\s*$/.test(stream.string);
-    if (state.front === "inside" || (state.front === "before" && fence))
-      return frontmatter(stream, state, fence);
-    if (stream.eatSpace()) {
-      state.after = false;
-      return null;
-    }
-    state.front = "after";
-    if (state.directive) {
-      stream.skipToEnd();
-      if (/\}%%\s*$/.test(stream.string)) state.directive = false;
-      return "meta";
-    }
-    // A comment is a line of its own: the parsers do not cut one off the end of a statement.
-    if (state.start && stream.match("%%")) {
-      const directive = stream.peek() === "{";
-      stream.skipToEnd();
-      if (!directive) return "comment";
-      state.directive = !/\}%%\s*$/.test(stream.string);
-      return "meta";
-    }
-    if (state.plan.length) {
-      const length = state.plan.shift() as number;
-      stream.pos = Math.min(stream.string.length, stream.pos + length);
-      return state.plan.shift() as string;
-    }
-    if (!state.header) {
-      state.header = true;
-      if (stream.match(header)) {
-        state.phase = directed ? "header" : "";
-        return "keyword";
-      }
-    }
-    if (state.phase === "header") {
-      state.phase = "";
-      if (stream.match(DIRECTION) || stream.match(/^[<>^v](?=\s|;|$)/)) return "atom";
-    }
-    if (state.prose && state.phase === "") {
-      if (state.prose === "note" && stream.match(/^end\s+note\b/i)) {
-        state.prose = "";
-        return "keyword";
-      }
-      if (state.prose === "acc" && stream.string.includes("}")) state.prose = "";
-      stream.skipToEnd();
-      return "string";
-    }
-    if (state.start && !state.body && stream.match(/^acc(Title|Descr)(?=\s*[:{])/)) {
-      state.start = false;
-      state.phase = "colon";
-      if (/^\s*accDescr\s*\{[^}]*$/.test(stream.string)) state.prose = "acc";
-      return "keyword";
-    }
-    if (state.phase === "colon") {
-      state.phase = "text";
-      if (stream.eat(":")) return "punctuation";
-    }
-    if (state.phase === "text") {
-      stream.skipToEnd();
-      return "string";
-    }
-    if (state.phase === "plain") {
-      if (stream.match(/^"[^"]*"?/)) return "string";
-      if (!stream.match(/^[\w-]+/)) stream.next();
-      return null;
-    }
-    if (state.phase === "direction") {
-      state.phase = "plain";
-      if (stream.match(DIRECTION)) return "atom";
-    }
-    if (state.start && !state.body && stream.match(/^direction(?=\s|$)/)) {
-      state.start = false;
-      state.phase = "direction";
-      return "keyword";
-    }
-    return statement(stream, state);
-  };
+  const read = anyOf([
+    ...MERMAID_LINES,
+    headerLine(header, directed),
+    ...MERMAID_STATEMENTS,
+    statement,
+  ]);
   return {
     startState,
     token(stream, state) {
-      if (stream.sol())
-        Object.assign(state, {
-          start: true,
-          phase: "",
-          want: "node",
-          after: false,
-          arrow: false,
-          plan: [],
-        });
+      if (stream.sol()) Object.assign(state, lineStart());
       const from = stream.pos,
-        tag = read(stream, state);
+        tag = read(stream, state) ?? null;
       // Whatever the line holds, the tokenizer moves on.
       if (stream.pos === from) stream.next();
       return tag;
@@ -214,200 +366,155 @@ function mermaid(
   };
 }
 
-/** A styling statement at the start of a line: its keyword, and the rest as plain words. */
-function styling(stream: StringStream, state: SyntaxState, words = STYLING): boolean {
-  if (!stream.match(words)) return false;
-  state.phase = "plain";
-  return true;
-}
+/** The marks a Mermaid element may carry after its name: a class, a stereotype, metadata. */
+const mark = anyOf([
+  rule(/^:::[\w,-]+/, "atom"),
+  rule(/^<<[^>]*(>>)?/, "annotation"),
+  rule(/^@\{[^}]*\}?/, "meta"),
+]);
 
 const CLASS_NAME = /^(`[^`]+`|[\p{L}\p{N}_.]+(~[^~]+~)?)/u;
 
 const CLASS_RELATION = /^(<\||\*|o|<|\(\))?(--|\.\.)(\|>|\*|o|>|\(\))?/;
 
+/** The phase a sign of a member moves to, from the phase it is read in. */
+const MEMBER_SIGNS = new Map<string, (phase: string) => string>([
+  ["(", () => "member-parameters"],
+  [")", () => "member-type"],
+  [":", (phase) => (phase === "member-parameters" ? "member-parameter-type" : "member-type")],
+  [",", (phase) => (phase === "member-parameter-type" ? "member-parameters" : phase)],
+]);
+
+/** The tag of a word of a member in a phase: a type, where the phase is none of these. */
+const MEMBER_WORDS = new Map([
+  ["member", "propertyName"],
+  ["member-parameters", "variableName"],
+]);
+
+/** The sign that moves a member on: to its parameters, their types, its type. */
+function memberSign(stream: StringStream, state: SyntaxState): string | undefined {
+  const next = MEMBER_SIGNS.get(stream.peek() ?? "");
+  if (!next) return undefined;
+  stream.next();
+  state.phase = next(state.phase);
+  return "punctuation";
+}
+
+/** The start of a member: its visibility. */
+function memberStart(stream: StringStream, state: SyntaxState): string | undefined {
+  state.start = false;
+  state.phase = "member";
+  return stream.match(/^[+\-#~]/) ? "modifier" : undefined;
+}
+
 /** A member of a class: its visibility, name, parameters and types. */
-function member(stream: StringStream, state: SyntaxState): string | null {
-  if (state.body && stream.eat("}")) {
-    state.body = false;
-    state.blocks.pop();
-    return "punctuation";
-  }
-  if (state.phase === "" || state.phase === "member-start") {
-    state.start = false;
-    state.phase = "member";
-    if (stream.match(/^[+\-#~]/)) return "modifier";
-  }
-  if (stream.match(/^<<[^>]*(>>)?/)) return "annotation";
-  if (stream.eat("(")) {
-    state.phase = "member-parameters";
-    return "punctuation";
-  }
-  if (stream.eat(")")) {
-    state.phase = "member-type";
-    return "punctuation";
-  }
-  if (stream.eat(":")) {
-    state.phase = state.phase === "member-parameters" ? "member-parameter-type" : "member-type";
-    return "punctuation";
-  }
-  if (stream.eat(",")) {
-    if (state.phase === "member-parameter-type") state.phase = "member-parameters";
-    return "punctuation";
-  }
+const member = statements([
+  when((state) => state.body, rule("}", "punctuation", closeBody)),
+  when((state) => state.phase === "" || state.phase === "member-start", memberStart),
+  rule(/^<<[^>]*(>>)?/, "annotation"),
+  memberSign,
   // `$` marks a static member and `*` an abstract one, at its end.
-  if (stream.match(/^[$*](?=\s*\}?\s*$)/)) return "modifier";
-  if (stream.match(/^[~[\]<>]/)) return "punctuation";
-  if (stream.match(/^[\p{L}\p{N}_.]+/u))
-    return state.phase === "member"
-      ? "propertyName"
-      : state.phase === "member-parameters"
-        ? "variableName"
-        : "typeName";
+  rule(/^[$*](?=\s*\}?\s*$)/, "modifier"),
+  rule(/^[~[\]<>]/, "punctuation"),
+  (stream, state) =>
+    stream.match(/^[\p{L}\p{N}_.]+/u) ? (MEMBER_WORDS.get(state.phase) ?? "typeName") : undefined,
+]);
+
+/** The text of a note: quoted text, and the signs between passed over. */
+function noteText(stream: StringStream): string | null {
+  if (stream.match(QUOTED)) return "string";
   stream.next();
   return null;
 }
 
+/** A brace that opens a class, whose lines are members, or a namespace. */
+const openClassBlock: Then = (state) => {
+  const declared = state.phase === "declare";
+  state.blocks.push(declared ? "class" : "namespace");
+  if (!declared) return;
+  state.body = true;
+  state.phase = "";
+};
+
+const className = rule(CLASS_NAME, "variableName", wants("edge"));
+
+const classRelation = rule(CLASS_RELATION, "operator", connects);
+
+/** A class or a relation. After a class a relation comes first, so that `o--` is not read as a class named `o`. */
+const classElement: Step = (stream, state) =>
+  state.want === "node"
+    ? (className(stream, state) ?? classRelation(stream, state))
+    : (classRelation(stream, state) ?? className(stream, state));
+
 /** The statements of a class diagram: classes with their bodies, namespaces, notes, relations. */
-function classStatement(stream: StringStream, state: SyntaxState): string | null {
-  if (state.body || state.phase.startsWith("member")) return member(stream, state);
-  if (state.start) {
-    state.start = false;
-    if (stream.match(/^class(?=\s)/)) {
-      state.phase = "declare";
-      return "keyword";
-    }
-    if (stream.match(/^namespace(?=\s)/)) {
-      state.phase = "namespace";
-      return "keyword";
-    }
-    if (stream.match(/^note(?=\s)/)) {
-      state.phase = "note";
-      return "keyword";
-    }
-    if (styling(stream, state)) return "keyword";
-  }
-  if (stream.eat("{")) {
-    state.blocks.push(state.phase === "declare" ? "class" : "namespace");
-    if (state.phase === "declare") {
-      state.body = true;
-      state.phase = "";
-    }
-    return "punctuation";
-  }
-  if (stream.eat("}")) {
-    state.blocks.pop();
-    return "punctuation";
-  }
-  const marked = mark(stream);
-  if (marked) return marked;
-  if (state.phase === "declare" || state.phase === "namespace") {
-    if (stream.match(/^\[[^\]]*\]?/)) return "string";
-    if (stream.match(CLASS_NAME)) return "variableName.definition";
-  }
-  if (state.phase === "note") {
-    state.phase = "note-text";
-    if (stream.match(/^for(?=\s)/)) {
-      state.phase = "note-for";
-      return "keyword";
-    }
-  }
-  if (state.phase === "note-for" && stream.match(/^\S+/)) {
-    state.phase = "note-text";
-    return "variableName";
-  }
-  if (state.phase === "note-text") {
-    if (stream.match(/^"[^"]*"?/)) return "string";
-    stream.next();
-    return null;
-  }
+const classStatement = statements([
+  when((state) => state.body || state.phase.startsWith("member"), member),
+  atStart([
+    rule(/^class(?=\s)/, "keyword", toPhase("declare")),
+    rule(/^namespace(?=\s)/, "keyword", toPhase("namespace")),
+    rule(/^note(?=\s)/, "keyword", toPhase("note")),
+    rule(
+      /^(classDef|style|linkStyle|cssClass|click|callback|links?|properties|details)\b/,
+      "keyword",
+      toPhase("plain"),
+    ),
+  ]),
+  rule("{", "punctuation", openClassBlock),
+  rule("}", "punctuation", leave),
+  mark,
+  when(
+    (state) => state.phase === "declare" || state.phase === "namespace",
+    anyOf([rule(/^\[[^\]]*\]?/, "string"), rule(CLASS_NAME, "variableName.definition")]),
+  ),
+  turn("note", "note-text", rule(/^for(?=\s)/, "keyword", toPhase("note-for"))),
+  inPhase("note-for", rule(/^\S+/, "variableName", toPhase("note-text"))),
+  inPhase("note-text", noteText),
   // A quoted text beside a relation is the multiplicity of its end.
-  if (stream.match(/^"[^"]*"?/)) return "number";
-  const name = () => {
-    if (!stream.match(CLASS_NAME)) return null;
-    state.want = "edge";
-    return "variableName";
-  };
-  const relation = () => {
-    if (!stream.match(CLASS_RELATION)) return null;
-    state.want = "node";
-    state.arrow = true;
-    return "operator";
-  };
-  // After a class a relation comes first, so that `o--` is not read as a class named `o`.
-  const tag = state.want === "node" ? (name() ?? relation()) : (relation() ?? name());
-  if (tag) return tag;
-  if (stream.eat(":")) {
-    // After a relation its label; after a class alone one of its members.
+  rule(QUOTED, "number"),
+  classElement,
+  // After a relation its label; after a class alone one of its members.
+  rule(":", "punctuation", (state) => {
     state.phase = state.arrow ? "text" : "member-start";
-    return "punctuation";
-  }
-  stream.next();
-  return null;
-}
+  }),
+]);
 
 const STATE_ID = /^[^:\s\-{}"]+/;
 
 /** The statements of a state machine: states, composites, transitions, notes. */
-function stateStatement(stream: StringStream, state: SyntaxState): string | null {
-  if (state.start) {
-    state.start = false;
-    if (stream.match(/^state(?=\s)/)) {
-      state.phase = "declare";
-      return "keyword";
-    }
-    if (stream.match(/^note(?=\s)/i)) {
+const stateStatement = statements([
+  atStart([
+    rule(/^state(?=\s)/, "keyword", toPhase("declare")),
+    rule(/^note(?=\s)/i, "keyword", (state, stream) => {
       state.phase = "note";
-      // Without a text on its line, the note is the lines up to `end note`.
-      if (/^\s*note\s+(left|right)\s+of\s+[^:]+$/i.test(stream.string)) state.prose = "note";
-      return "keyword";
-    }
-    if (
-      stream.match(/^hide\s+empty\s+description(?=\s*$)/i) ||
-      stream.match(/^scale\s+\d+\s+width(?=\s*$)/i)
-    )
-      return "keyword";
-    if (styling(stream, state, /^(classDef|class|style|linkStyle|click|callback|links?)(?=\s)/))
-      return "keyword";
+      if (NOTE_BLOCK.test(stream.string)) state.prose = "note";
+    }),
+    rule(/^hide\s+empty\s+description(?=\s*$)/i, "keyword"),
+    rule(/^scale\s+\d+\s+width(?=\s*$)/i, "keyword"),
+    rule(NODE_STYLING, "keyword", toPhase("plain")),
     // Two dashes alone divide the regions of a composite state.
-    if (stream.match(/^--(?=\s*$)/)) return "punctuation";
-  }
-  if (stream.match("[*]")) return "atom";
-  if (stream.match(/^\[\[\s*\w*\s*\]\]/)) return "annotation";
-  if (stream.match("-->")) {
+    rule(/^--(?=\s*$)/, "punctuation"),
+  ]),
+  rule("[*]", "atom"),
+  rule(/^\[\[\s*\w*\s*\]\]/, "annotation"),
+  rule("-->", "operator", (state) => {
     state.arrow = true;
-    return "operator";
-  }
-  if (stream.eat("{")) {
-    state.blocks.push("state");
-    return "punctuation";
-  }
-  if (stream.eat("}")) {
-    state.blocks.pop();
-    return "punctuation";
-  }
-  if (stream.match(/^"[^"]*"?/)) {
+  }),
+  rule("{", "punctuation", (state) => state.blocks.push("state")),
+  rule("}", "punctuation", leave),
+  rule(QUOTED, "string", (state) => {
     if (state.phase === "declare") state.phase = "declare-as";
-    return "string";
-  }
-  const marked = mark(stream);
-  if (marked) return marked;
-  if (state.phase === "declare-as" && stream.match(/^as(?=\s)/)) {
-    state.phase = "declare";
-    return "keyword";
-  }
-  if (state.phase === "note" && stream.match(/^(left|right)\s+of(?=\s|$)/i)) {
-    state.phase = "note-of";
-    return "keyword";
-  }
-  if (stream.eat(":")) {
-    state.phase = "text";
-    return "punctuation";
-  }
-  if (stream.match(STATE_ID))
-    return state.phase === "declare" ? "variableName.definition" : "variableName";
-  stream.next();
-  return null;
-}
+  }),
+  mark,
+  inPhase("declare-as", rule(/^as(?=\s)/, "keyword", toPhase("declare"))),
+  inPhase("note", rule(/^(left|right)\s+of(?=\s|$)/i, "keyword", toPhase("note-of"))),
+  rule(":", "punctuation", toPhase("text")),
+  (stream, state) =>
+    stream.match(STATE_ID)
+      ? state.phase === "declare"
+        ? "variableName.definition"
+        : "variableName"
+      : undefined,
+]);
 
 const FLOW_ID = /^[\p{L}\p{N}_!#$%&'*+.`?\\/]+(?:-(?![->.])[\p{L}\p{N}_!#$%&'*+.`?\\/]*)*/u;
 
@@ -451,62 +558,67 @@ function flowShape(stream: StringStream): boolean {
   return false;
 }
 
+/**
+ * An edge with a text inside, matched by a pattern of three groups: the start of the edge, the
+ * text, its end. The start is the token read; the text and the end are planned behind it.
+ */
+function labelled(pattern: RegExp, then: Then): Step {
+  return (stream, state) => {
+    const edge = stream.match(pattern, false) as RegExpMatchArray | null;
+    if (!edge) return undefined;
+    stream.pos += edge[1].length;
+    state.plan = [edge[2].length, "string", edge[3].length, "operator"];
+    then(state, stream);
+    return "operator";
+  };
+}
+
+/** A node of a flowchart: its shape may follow it right behind. */
+const flowNode = rule(FLOW_ID, "variableName", (state) => {
+  state.want = "edge";
+  state.after = true;
+});
+
+/** What a statement of a flowchart starts with, read before the shape of a node. */
+const flowLead = anyOf([
+  rule(";", "punctuation", (state) =>
+    Object.assign(state, { start: true, phase: "", want: "node" }),
+  ),
+  atStart([
+    rule(/^end(?=\s*(;|$))/, "keyword", leave),
+    rule(/^subgraph(?=\s|$)/, "keyword", enter("subgraph", "subgraph")),
+    rule(NODE_STYLING, "keyword", toPhase("plain")),
+  ]),
+  inPhase(
+    "subgraph",
+    anyOf([
+      rule(QUOTED, "string"),
+      rule(/^\[[^\]]*\]?/, "string"),
+      rule(/^[^\s[]+(?=\s*\[)/, "variableName.definition"),
+      rule(/^[^;"[]+?(?=\s*(?:;|$))/, "variableName.definition"),
+    ]),
+  ),
+]);
+
+/** The chain of nodes and edges of a flowchart statement. */
+const flowChain = statements([
+  mark,
+  rule("&", "punctuation", wants("node")),
+  wanting("node", flowNode),
+  labelled(FLOW_LABELLED, wants("node")),
+  rule(/^~{3,}/, "operator", wants("node")),
+  rule(FLOW_EDGE, "operator", wants("node")),
+  rule(/^\|[^|]*\|?/, "string"),
+  flowNode,
+]);
+
 /** The statements of a flowchart and of an activity with lanes: subgraphs, and chains of nodes and edges. */
 function flowStatement(stream: StringStream, state: SyntaxState): string | null {
   const after = state.after;
   state.after = false;
-  if (stream.eat(";")) {
-    Object.assign(state, { start: true, phase: "", want: "node" });
-    return "punctuation";
-  }
-  if (state.start) {
-    state.start = false;
-    if (stream.match(/^end(?=\s*(;|$))/)) {
-      state.blocks.pop();
-      return "keyword";
-    }
-    if (stream.match(/^subgraph(?=\s|$)/)) {
-      state.blocks.push("subgraph");
-      state.phase = "subgraph";
-      return "keyword";
-    }
-    if (styling(stream, state, /^(classDef|class|style|linkStyle|click|callback|links?)(?=\s)/))
-      return "keyword";
-  }
-  if (state.phase === "subgraph") {
-    if (stream.match(/^"[^"]*"?/) || stream.match(/^\[[^\]]*\]?/)) return "string";
-    if (stream.match(/^[^\s[]+(?=\s*\[)/) || stream.match(/^[^;"[]+?(?=\s*(?:;|$))/))
-      return "variableName.definition";
-  }
-  if (after && flowShape(stream)) return "string";
-  const marked = mark(stream);
-  if (marked) return marked;
-  if (stream.eat("&")) {
-    state.want = "node";
-    return "punctuation";
-  }
-  const node = () => {
-    if (!stream.match(FLOW_ID)) return false;
-    state.want = "edge";
-    state.after = true;
-    return true;
-  };
-  if (state.want === "node" && node()) return "variableName";
-  const labelled = stream.match(FLOW_LABELLED, false) as RegExpMatchArray | null;
-  if (labelled) {
-    stream.pos += labelled[1].length;
-    state.plan = [labelled[2].length, "string", labelled[3].length, "operator"];
-    state.want = "node";
-    return "operator";
-  }
-  if (stream.match(/^~{3,}/) || stream.match(FLOW_EDGE)) {
-    state.want = "node";
-    return "operator";
-  }
-  if (stream.match(/^\|[^|]*\|?/)) return "string";
-  if (node()) return "variableName";
-  stream.next();
-  return null;
+  const lead = flowLead(stream, state);
+  if (lead !== undefined) return lead;
+  return after && flowShape(stream) ? "string" : flowChain(stream, state);
 }
 
 const SEQUENCE_ARROW = /^(<<-->>|<<->>|-->>|->>|--x|-x|--\)|-\)|-->|->)/;
@@ -517,183 +629,102 @@ const SEQUENCE_MESSAGE =
 const SEQUENCE_COLOR =
   /^(rgba?\([^)]*\)|#[0-9a-f]{3,8}|transparent|aqua|black|blue|fuchsia|gray|grey|green|lime|maroon|navy|olive|purple|red|silver|teal|white|yellow|orange|pink|lightblue|lightgreen|lightgrey|lightgray|lightyellow|beige|ivory|lavender|wheat|tan|khaki|coral|salmon|gold|cyan|magenta)\b/i;
 
-/** The statements of a sequence diagram: participants, messages, notes, and the fragments that frame them. */
-function sequenceStatement(stream: StringStream, state: SyntaxState): string | null {
-  if (state.start) {
-    state.start = false;
-    if (stream.match(/^(create\s+)?(participant|actor)(?=\s)/)) {
-      state.phase = "participant";
-      return "keyword";
-    }
-    if (stream.match(/^(destroy|activate|deactivate)(?=\s)/)) {
-      state.phase = "ids";
-      return "keyword";
-    }
-    if (stream.match(/^box(?=\s|$)/)) {
-      state.blocks.push("box");
-      state.phase = "box";
-      return "keyword";
-    }
-    if (stream.match(/^end(?=\s*$)/)) {
-      state.blocks.pop();
-      return "keyword";
-    }
-    if (stream.match(/^note(?=\s)/i)) {
-      state.phase = "note";
-      return "keyword";
-    }
-    if (stream.match(/^autonumber(?=\s|$)/)) {
-      state.phase = "autonumber";
-      return "keyword";
-    }
-    if (stream.match(/^title(?=\s|:)/)) {
-      state.phase = "colon";
-      return "keyword";
-    }
-    if (styling(stream, state, /^(links?|properties|details)(?=\s)/)) return "keyword";
-    const rest = stream.string.slice(stream.pos),
-      message = rest.match(SEQUENCE_MESSAGE);
-    // A line that reads as a message is one, whatever word it starts with.
-    const block =
-      !message &&
-      (stream.match(
-        /^(loop|alt|opt|par|critical|break|rect|else|and|option)(?=\s|$)/,
-      ) as RegExpMatchArray | null);
-    if (block) {
-      if (!/^(else|and|option)$/.test(block[1])) state.blocks.push(block[1]);
-      state.phase = block[1] === "rect" ? "color" : "text";
-      return "keyword";
-    }
-    if (message) {
-      const [, from, arrow, sign, to] = message;
-      state.plan = [
-        ...[arrow.length, "operator"],
-        ...(sign ? [1, "modifier"] : []),
-        ...[to.length, "variableName"],
-      ];
-      state.phase = "colon";
-      state.arrow = true;
-      stream.pos += from.length;
-      return "variableName";
-    }
-  }
-  if (state.phase === "participant") {
-    state.phase = "alias";
-    if (stream.match(/^.+?(?=\s+as\s|\s*$)/)) return "variableName.definition";
-  }
-  if (state.phase === "alias" && stream.match(/^as(?=\s)/)) {
-    state.phase = "text";
-    return "keyword";
-  }
-  if (state.phase === "note" && stream.match(/^(left\s+of|right\s+of|over)(?=\s|$)/i)) {
-    state.phase = "ids";
-    return "keyword";
-  }
-  if (state.phase === "box") {
-    state.phase = "text";
-    if (stream.match(SEQUENCE_COLOR)) return "atom";
-    stream.skipToEnd();
-    return "string";
-  }
-  if (state.phase === "color") {
-    stream.skipToEnd();
-    return "atom";
-  }
-  if (state.phase === "autonumber") {
-    if (stream.match(/^\d+/)) return "number";
-    if (stream.match(/^off\b/)) return "atom";
-  }
-  if (stream.eat(",")) return "punctuation";
-  if (stream.eat(":")) {
-    state.phase = "text";
-    return "punctuation";
-  }
-  if (state.phase === "ids" && stream.match(/^[^,:]+?(?=\s*(?:[,:]|$))/)) return "variableName";
-  if (stream.match(SEQUENCE_ARROW)) {
-    state.arrow = true;
-    return "operator";
-  }
-  if (stream.match(/^[^\s:,\-<]+/)) return "variableName";
-  stream.next();
-  return null;
+/** A fragment that frames messages, or the keyword of its next operand. */
+function fragment(stream: StringStream, state: SyntaxState): string | undefined {
+  const block = stream.match(
+    /^(loop|alt|opt|par|critical|break|rect|else|and|option)(?=\s|$)/,
+  ) as RegExpMatchArray | null;
+  if (!block) return undefined;
+  if (!/^(else|and|option)$/.test(block[1])) state.blocks.push(block[1]);
+  state.phase = block[1] === "rect" ? "color" : "text";
+  return "keyword";
 }
+
+/** A message, its sender read as the token, its arrow, activation sign and receiver planned behind it. */
+function message(stream: StringStream, state: SyntaxState, line: RegExpMatchArray): string {
+  const [, from, arrow, sign, to] = line;
+  state.plan = [
+    ...[arrow.length, "operator"],
+    ...(sign ? [1, "modifier"] : []),
+    ...[to.length, "variableName"],
+  ];
+  state.phase = "colon";
+  state.arrow = true;
+  stream.pos += from.length;
+  return "variableName";
+}
+
+/** A line that reads as a message is one, whatever word it starts with; else it may be a fragment. */
+function messageOrFragment(stream: StringStream, state: SyntaxState): string | undefined {
+  const line = stream.string.slice(stream.pos).match(SEQUENCE_MESSAGE);
+  return line ? message(stream, state, line) : fragment(stream, state);
+}
+
+/** The statements of a sequence diagram: participants, messages, notes, and the fragments that frame them. */
+const sequenceStatement = statements([
+  atStart([
+    rule(/^(create\s+)?(participant|actor)(?=\s)/, "keyword", toPhase("participant")),
+    rule(/^(destroy|activate|deactivate)(?=\s)/, "keyword", toPhase("ids")),
+    rule(/^box(?=\s|$)/, "keyword", enter("box", "box")),
+    rule(/^end(?=\s*$)/, "keyword", leave),
+    rule(/^note(?=\s)/i, "keyword", toPhase("note")),
+    rule(/^autonumber(?=\s|$)/, "keyword", toPhase("autonumber")),
+    rule(/^title(?=\s|:)/, "keyword", toPhase("colon")),
+    rule(/^(links?|properties|details)(?=\s)/, "keyword", toPhase("plain")),
+    messageOrFragment,
+  ]),
+  turn("participant", "alias", rule(/^.+?(?=\s+as\s|\s*$)/, "variableName.definition")),
+  inPhase("alias", rule(/^as(?=\s)/, "keyword", toPhase("text"))),
+  inPhase("note", rule(/^(left\s+of|right\s+of|over)(?=\s|$)/i, "keyword", toPhase("ids"))),
+  turn("box", "text", anyOf([rule(SEQUENCE_COLOR, "atom"), toEnd("string")])),
+  inPhase("color", toEnd("atom")),
+  inPhase("autonumber", anyOf([rule(/^\d+/, "number"), rule(/^off\b/, "atom")])),
+  rule(",", "punctuation"),
+  rule(":", "punctuation", toPhase("text")),
+  inPhase("ids", rule(/^[^,:]+?(?=\s*(?:[,:]|$))/, "variableName")),
+  rule(SEQUENCE_ARROW, "operator", (state) => {
+    state.arrow = true;
+  }),
+  rule(/^[^\s:,\-<]+/, "variableName"),
+]);
 
 const USECASE_LABELLED = /^(<--|o--|x--|--)\s+(?!>)([^-\s][^-]*?)\s+(-->|--o|--x|--)(?!-)/;
 
 const USECASE_ARROW = /^(--\|>|--+>|<--+|--o|o--|--x|x--|--+)/;
 
-/** The statements of a use case diagram: actors, use cases, system boundaries and their relations. */
-function usecaseStatement(stream: StringStream, state: SyntaxState): string | null {
-  if (state.start) {
-    state.start = false;
-    if (stream.match(/^end(?=\s*$)/)) {
-      state.blocks.pop();
-      return "keyword";
-    }
-    if (stream.match(/^systemBoundary(?=\s)/)) {
-      state.blocks.push("systemBoundary");
-      state.phase = "declare";
-      return "keyword";
-    }
-    if (stream.match(/^actor(?=\s)/)) {
-      state.phase = "declare";
-      return "keyword";
-    }
-    if (stream.match(/^note\s+for(?=\s)/)) {
-      state.phase = "note";
-      return "keyword";
-    }
-    if (styling(stream, state, /^(classDef|class|style)(?=\s)/)) return "keyword";
-  }
-  if (state.phase === "note" && stream.match(/^\w+/)) {
-    state.phase = "text";
-    return "variableName";
-  }
-  if (state.phase === "include") {
-    if (stream.eat(":")) return "punctuation";
-    state.phase = "";
-    if (stream.match(/^(include|extend)\b/i)) return "keyword";
-  }
-  // The name of an element, in the brackets of its shape or in quotes.
-  if (
-    stream.match(/^\(\s*("[^"]*"|[^)]*)\s*\)?/) ||
-    stream.match(/^\[\s*("[^"]*"|[^\]]*)\s*\]?/) ||
-    stream.match(/^"[^"]*"?/)
-  )
-    return "string";
-  const marked = mark(stream);
-  if (marked) return marked;
-  if (stream.eat(",")) {
-    state.want = "node";
-    return "punctuation";
-  }
-  const element = () => {
-    if (!stream.match(/^\w+/)) return null;
-    state.want = "edge";
-    return state.phase === "declare" && !state.arrow ? "variableName.definition" : "variableName";
-  };
-  const id = state.want === "node" ? element() : null;
-  if (id) return id;
-  if (stream.match(/^\.\.>/)) {
-    Object.assign(state, { phase: "include", want: "node", arrow: true });
-    return "operator";
-  }
-  const labelled = stream.match(USECASE_LABELLED, false) as RegExpMatchArray | null;
-  if (labelled) {
-    stream.pos += labelled[1].length;
-    state.plan = [labelled[2].length, "string", labelled[3].length, "operator"];
-    Object.assign(state, { want: "node", arrow: true });
-    return "operator";
-  }
-  if (stream.match(USECASE_ARROW)) {
-    Object.assign(state, { want: "node", arrow: true });
-    return "operator";
-  }
-  const other = element();
-  if (other) return other;
-  stream.next();
-  return null;
+/** An actor or a use case: declared by the statement it starts, else named. */
+function usecaseElement(stream: StringStream, state: SyntaxState): string | undefined {
+  if (!stream.match(/^\w+/)) return undefined;
+  state.want = "edge";
+  return state.phase === "declare" && !state.arrow ? "variableName.definition" : "variableName";
 }
+
+/** The statements of a use case diagram: actors, use cases, system boundaries and their relations. */
+const usecaseStatement = statements([
+  atStart([
+    rule(/^end(?=\s*$)/, "keyword", leave),
+    rule(/^systemBoundary(?=\s)/, "keyword", enter("systemBoundary", "declare")),
+    rule(/^actor(?=\s)/, "keyword", toPhase("declare")),
+    rule(/^note\s+for(?=\s)/, "keyword", toPhase("note")),
+    rule(/^(classDef|class|style)(?=\s)/, "keyword", toPhase("plain")),
+  ]),
+  inPhase("note", rule(/^\w+/, "variableName", toPhase("text"))),
+  inPhase("include", rule(":", "punctuation")),
+  turn("include", "", rule(/^(include|extend)\b/i, "keyword")),
+  // The name of an element, in the brackets of its shape or in quotes.
+  rule(/^\(\s*("[^"]*"|[^)]*)\s*\)?/, "string"),
+  rule(/^\[\s*("[^"]*"|[^\]]*)\s*\]?/, "string"),
+  rule(QUOTED, "string"),
+  mark,
+  rule(",", "punctuation", wants("node")),
+  wanting("node", usecaseElement),
+  rule(/^\.\.>/, "operator", (state) =>
+    Object.assign(state, { phase: "include", want: "node", arrow: true }),
+  ),
+  labelled(USECASE_LABELLED, connects),
+  rule(USECASE_ARROW, "operator", connects),
+  usecaseElement,
+]);
 
 const ER_NAME = /^("[^"]*"?|[\p{L}\p{N}_][\p{L}\p{N}_.-]*)/u;
 
@@ -705,95 +736,127 @@ const ER_LINE = /^(--|\.\.|\.-|-\.|(?:optionally to|to)(?![\p{L}\p{N}_]))/u;
 
 const ER_KEY = /^(PK|FK|UK)(?![\p{L}\p{N}_])/u;
 
-/** An attribute in the block of an entity: its type, its name, its keys and its comment. */
-function erAttribute(stream: StringStream, state: SyntaxState): string | null {
-  state.start = false;
-  if (stream.eat("}")) {
-    state.body = false;
-    state.blocks.pop();
-    return "punctuation";
-  }
-  if (stream.match(/^"[^"]*"?/)) {
-    state.phase = "";
-    return "string";
-  }
-  if (stream.eat(",")) return "punctuation";
-  if (state.phase === "attribute-keys" && stream.match(ER_KEY)) return "modifier";
-  if (stream.match(/^[^\s,"}]+/)) {
-    const name = state.phase === "attribute-name";
-    state.phase = name ? "attribute-keys" : "attribute-name";
-    return name ? "propertyName" : "typeName";
-  }
-  stream.next();
-  return null;
+/** A line that only names an entity, which declares it. */
+const ER_DECLARATION = /^\s*("[^"]*"|[^\s"[{:]+)\s*(\[[^\]]*\]?)?\s*(:::[\w,-]*)?\s*(\{.*)?$/;
+
+/** A word of an attribute: its type first, then its name. */
+function attributeWord(stream: StringStream, state: SyntaxState): string | undefined {
+  if (!stream.match(/^[^\s,"}]+/)) return undefined;
+  const name = state.phase === "attribute-name";
+  state.phase = name ? "attribute-keys" : "attribute-name";
+  return name ? "propertyName" : "typeName";
 }
 
-/** The statements of an entity relationship diagram: entities with their attributes, and relationships. */
-function erStatement(stream: StringStream, state: SyntaxState): string | null {
-  if (state.body) return erAttribute(stream, state);
-  const first = state.start;
-  if (first) {
-    state.start = false;
-    if (styling(stream, state, /^(classDef|class|style|linkStyle|click|callback|link)(?=\s)/))
-      return "keyword";
-  }
-  const marked = mark(stream);
-  if (marked) return marked;
-  // The alias of an entity, in brackets behind its name.
+/** An attribute in the block of an entity: its type, its name, its keys and its comment. */
+const erAttribute = statements([
+  rule("}", "punctuation", closeBody),
+  rule(QUOTED, "string", toPhase("")),
+  rule(",", "punctuation"),
+  inPhase("attribute-keys", rule(ER_KEY, "modifier")),
+  attributeWord,
+]);
+
+/** The alias of an entity, in brackets right behind its name. */
+function erAlias(stream: StringStream, state: SyntaxState): string | undefined {
   if (state.after && stream.match(/^\[[^\]]*\]?/)) return "string";
   state.after = false;
-  const name = () => {
-    if (!stream.match(ER_NAME)) return null;
-    state.want = "edge";
-    state.after = true;
-    // A line that only names an entity declares it.
-    return first &&
-      /^\s*("[^"]*"|[^\s"[{:]+)\s*(\[[^\]]*\]?)?\s*(:::[\w,-]*)?\s*(\{.*)?$/.test(stream.string)
-      ? "variableName.definition"
-      : "variableName";
-  };
-  const relation = () => {
-    if (stream.match(ER_LINE)) {
-      state.arrow = true;
-      return "operator";
-    }
-    if (!stream.match(ER_CARDINALITY)) return null;
-    // The cardinality behind the line is the last piece before the second entity.
+  return undefined;
+}
+
+const erName = rule(ER_NAME, "variableName", (state) => {
+  state.want = "edge";
+  state.after = true;
+});
+
+/** The line of a relationship, or the cardinality of one of its ends. */
+const erRelation = anyOf([
+  rule(ER_LINE, "operator", (state) => {
+    state.arrow = true;
+  }),
+  // The cardinality behind the line is the last piece before the second entity.
+  rule(ER_CARDINALITY, "operator", (state) => {
     if (state.arrow) state.want = "node";
-    return "operator";
-  };
+  }),
+]);
+
+/** The tokens of a statement of an entity relationship diagram outside the block of an entity. */
+const erTokens = statements([
+  atStart([
+    rule(
+      /^(classDef|class|style|linkStyle|click|callback|link)(?=\s)/,
+      "keyword",
+      toPhase("plain"),
+    ),
+  ]),
+  mark,
+  erAlias,
   // After an entity a cardinality comes before a brace, so that `}o` is not read as the end of a block.
-  const edge = state.want === "edge" ? relation() : null;
-  if (edge) return edge;
-  if (stream.eat("{")) {
+  wanting("edge", erRelation),
+  rule("{", "punctuation", (state) => {
     state.blocks.push("entity");
     state.body = true;
     state.phase = "";
-    return "punctuation";
+  }),
+  rule("}", "punctuation", leave),
+  (stream, state) =>
+    state.want === "node"
+      ? (erName(stream, state) ?? erRelation(stream, state))
+      : erName(stream, state),
+  rule(":", "punctuation", toPhase("text")),
+]);
+
+/** The statements of an entity relationship diagram: entities with their attributes, and relationships. */
+function erStatement(stream: StringStream, state: SyntaxState): string | null {
+  if (state.body) {
+    state.start = false;
+    return erAttribute(stream, state);
   }
-  if (stream.eat("}")) {
-    state.blocks.pop();
-    return "punctuation";
-  }
-  const tag = state.want === "node" ? (name() ?? relation()) : name();
-  if (tag) return tag;
-  if (stream.eat(":")) {
-    state.phase = "text";
-    return "punctuation";
-  }
-  stream.next();
-  return null;
+  // A line that only names an entity declares it.
+  const declares = state.start && ER_DECLARATION.test(stream.string),
+    tag = erTokens(stream, state);
+  return declares && tag === "variableName" ? "variableName.definition" : tag;
 }
 
-const KINDS = new Set<string>(ELEMENT_KINDS);
-
-const TAM_HEADERS = new Set(["title", "direction", "level"]);
+/** The words a block diagram's line starts with: the kinds of element, and the header lines. */
+const TAM_KEYWORDS = new Set<string>([...ELEMENT_KINDS, "title", "direction", "level"]);
 
 /** The words of connections, longest first, and the keywords of dependencies. */
 const TAM_WORDS = [
   ...["reads/writes", "sends data", "reads", "writes", "calls", "delegates", "requires"],
   ...["use", "import", "create", "generate", "pointer", "provides", "stack"],
 ].map((word) => new RegExp(`^${word.replace("/", "\\/")}\\b`, "i"));
+
+/** The keyword a line of a block diagram starts with; after `title` the rest of the line is the title. */
+function tamKeyword(stream: StringStream, state: SyntaxState): string | undefined {
+  const word = stream.match(/^[A-Za-z_]\w*/, false) as RegExpMatchArray | null;
+  if (!word || !TAM_KEYWORDS.has(word[0])) return undefined;
+  stream.match(word[0]);
+  if (word[0] === "title") state.phase = "title";
+  return "keyword";
+}
+
+/** The tokens of a line of a block diagram. */
+const tamTokens = statements([
+  (stream) => (stream.eatSpace() ? null : undefined),
+  rule("%%", "comment", (_, stream) => stream.skipToEnd()),
+  inPhase("title", (stream) => {
+    stream.match(/^.*?(?=%%|$)/);
+    return "string";
+  }),
+  atStart([tamKeyword]),
+  rule(/^\[[^\]]*\]/, "string"),
+  rule(/^"[^"]*"/, "string"),
+  rule(/^:::\w+/, "atom"),
+  // A position, of an element or, signed, of a connection's label behind it.
+  rule(/^@\s*[-+]?\d+(\.\d+)?\s*,\s*[-+]?\d+(\.\d+)?(?=\s|%%|$)/, "number"),
+  rule(/^\d+(\.\d+)?x\d+(\.\d+)?/, "number"),
+  rule(/^@\s*[^-\s][^-]*?(?=\s*-->|\s*---|$)/, "meta"),
+  rule(/^(<--|-->|---|-\.-(?!>)|--|-\.|\.->)/, "operator"),
+  rule(/^\.\.\./, "punctuation"),
+  rule(/^[{}]/, "punctuation"),
+  (stream) => (TAM_WORDS.some((word) => stream.match(word)) ? "typeName" : undefined),
+  rule(/^[A-Za-z_]\w*/, "variableName"),
+]);
 
 /** The notation of block diagrams as tokens. */
 const tam: StreamParser<SyntaxState> = {
@@ -803,41 +866,7 @@ const tam: StreamParser<SyntaxState> = {
       state.start = true;
       state.phase = "";
     }
-    if (stream.eatSpace()) return null;
-    if (stream.match("%%")) {
-      stream.skipToEnd();
-      return "comment";
-    }
-    // After `title` the rest of the line is the title.
-    if (state.phase === "title") {
-      stream.match(/^.*?(?=%%|$)/);
-      return "string";
-    }
-    const first = state.start;
-    state.start = false;
-    if (first) {
-      const word = stream.match(/^[A-Za-z_]\w*/, false) as RegExpMatchArray | null;
-      if (word && (KINDS.has(word[0]) || TAM_HEADERS.has(word[0]))) {
-        stream.match(word[0]);
-        if (word[0] === "title") state.phase = "title";
-        return "keyword";
-      }
-    }
-    if (stream.match(/^\[[^\]]*\]/) || stream.match(/^"[^"]*"/)) return "string";
-    if (stream.match(/^:::\w+/)) return "atom";
-    // A position, of an element or, signed, of a connection's label behind it.
-    if (
-      stream.match(/^@\s*[-+]?\d+(\.\d+)?\s*,\s*[-+]?\d+(\.\d+)?(?=\s|%%|$)/) ||
-      stream.match(/^\d+(\.\d+)?x\d+(\.\d+)?/)
-    )
-      return "number";
-    if (stream.match(/^@\s*[^-\s][^-]*?(?=\s*-->|\s*---|$)/)) return "meta";
-    if (stream.match(/^(<--|-->|---|-\.-(?!>)|--|-\.|\.->)/)) return "operator";
-    if (stream.match(/^\.\.\./) || stream.match(/^[{}]/)) return "punctuation";
-    for (const word of TAM_WORDS) if (stream.match(word)) return "typeName";
-    if (stream.match(/^[A-Za-z_]\w*/)) return "variableName";
-    stream.next();
-    return null;
+    return tamTokens(stream, state);
   },
   languageData: { commentTokens: { line: "%%" }, indentOnInput: /^\s*\}$/ },
 };
@@ -888,55 +917,73 @@ export function scanSource(
   return { lines, state };
 }
 
-/** Whether a line opens a block of its syntax: the lines after it stand one step further in. */
-function opens(type: DiagramType, line: string): boolean {
-  switch (type) {
-    case "tam":
-    case "class":
-    case "er":
-      return /\{\s*$/.test(line);
-    case "state":
-      return /\{\s*$/.test(line) || /^\s*note\s+(left|right)\s+of\s+[^:]+$/i.test(line);
-    case "flowchart":
-    case "swimlane":
-      return /^\s*subgraph(\s|$)/.test(line);
-    case "sequence":
-      return /^\s*(loop|alt|opt|par|critical|break|rect|box|else|and|option)(\s+[^-<\s]|\s*$)/.test(
-        line,
-      );
-    case "usecase":
-      return /^\s*systemBoundary\s/.test(line);
-  }
+/** How the blocks of a syntax are written: the lines that open one and close one, and whether braces hold them. */
+interface Blocks {
+  opens: RegExp;
+  closes: RegExp;
+  braces?: boolean;
 }
 
+const BRACES: Blocks = { opens: /\{\s*$/, closes: /^\s*\}/, braces: true };
+
+const SUBGRAPHS: Blocks = { opens: /^\s*subgraph(\s|$)/, closes: /^\s*end\s*;?\s*$/ };
+
+/** The blocks of each syntax. */
+const BLOCKS: Record<DiagramType, Blocks> = {
+  tam: BRACES,
+  class: BRACES,
+  er: BRACES,
+  state: {
+    opens: new RegExp(`\\{\\s*$|${NOTE_BLOCK.source}`, "i"),
+    closes: /^\s*(\}|end\s+note\s*$)/i,
+    braces: true,
+  },
+  flowchart: SUBGRAPHS,
+  swimlane: SUBGRAPHS,
+  sequence: {
+    opens: /^\s*(loop|alt|opt|par|critical|break|rect|box|else|and|option)(\s+[^-<\s]|\s*$)/,
+    closes: /^\s*(end\s*$|(else|and|option)(\s+[^-<\s]|\s*$))/,
+  },
+  usecase: { opens: /^\s*systemBoundary\s/, closes: SUBGRAPHS.closes },
+};
+
 /** Whether a line closes a block of its syntax: it stands one step further out than the lines before it. */
-function closes(type: DiagramType, line: string): boolean {
-  switch (type) {
-    case "tam":
-    case "class":
-    case "er":
-      return /^\s*\}/.test(line);
-    case "state":
-      return /^\s*(\}|end\s+note\s*$)/i.test(line);
-    case "flowchart":
-    case "swimlane":
-    case "usecase":
-      return /^\s*end\s*;?\s*$/.test(line);
-    case "sequence":
-      return /^\s*(end\s*$|(else|and|option)(\s+[^-<\s]|\s*$))/.test(line);
-  }
-}
+const closes = (type: DiagramType, line: string) => BLOCKS[type].closes.test(line);
 
 /**
  * How many steps a line stands further in than the line before it: one more after a line that opens
  * a block, one less when the line itself closes one.
  */
 export function indentChange(type: DiagramType, before: string, line: string): number {
-  return (opens(type, before) ? 1 : 0) - (closes(type, line) ? 1 : 0);
+  return (BLOCKS[type].opens.test(before) ? 1 : 0) - (closes(type, line) ? 1 : 0);
 }
 
 const HEADER =
   /^\s*(classDiagram(-v2)?|stateDiagram(-v2)?|flowchart(-elk)?|graph|swimlane-beta|usecase-beta|sequenceDiagram|erDiagram)(?![\w-])/;
+
+/** The text before a place: the line up to it, else the last line with text above; empty where there is none. */
+function textBefore(doc: Text, pos: number): string {
+  const line = doc.lineAt(pos);
+  let before = line.text.slice(0, pos - line.from),
+    number = line.number;
+  while (!before.trim() && number > 1) before = doc.line(--number).text;
+  return before.trim() ? before : "";
+}
+
+/**
+ * Whether the statements below a header line stand one step in: the next line with text after
+ * the line of a number does, or there is none.
+ */
+function indentedBelow(
+  doc: Text,
+  number: number,
+  header: string,
+  indent: (text: string) => number,
+): boolean {
+  let next = number + 1;
+  while (next <= doc.lines && !doc.line(next).text.trim()) next++;
+  return next > doc.lines || indent(doc.line(next).text) > indent(header);
+}
 
 /**
  * The indentation of a line: that of the line before it, moved by the blocks the two open and
@@ -946,20 +993,17 @@ const HEADER =
 function indenter(type: DiagramType) {
   return (context: IndentContext, pos: number): number => {
     const { doc } = context.state,
-      line = doc.lineAt(pos);
-    // The line before: the text up to the break of a new line, else the last line with text above.
-    let before = line.text.slice(0, pos - line.from),
-      number = line.number;
-    while (!before.trim() && number > 1) before = doc.line(--number).text;
-    if (!before.trim()) return 0;
-    let steps = indentChange(type, before, context.textAfterPos(pos));
+      before = textBefore(doc, pos);
+    if (!before) return 0;
     const indent = (text: string) =>
       countColumn(text, context.state.tabSize, text.length - text.trimStart().length);
-    if (type !== "tam" && HEADER.test(before)) {
-      let next = line.number + 1;
-      while (next <= doc.lines && !doc.line(next).text.trim()) next++;
-      if (next > doc.lines || indent(doc.line(next).text) > indent(before)) steps++;
-    }
+    let steps = indentChange(type, before, context.textAfterPos(pos));
+    if (
+      type !== "tam" &&
+      HEADER.test(before) &&
+      indentedBelow(doc, doc.lineAt(pos).number, before, indent)
+    )
+      steps++;
     return Math.max(0, indent(before) + steps * context.unit);
   };
 }
@@ -1010,8 +1054,8 @@ const CLOSERS = /^[)\]}|"']+\s*$/;
 export function pastClosers(type: DiagramType, line: string, column: number): number | undefined {
   const rest = line.slice(column);
   if (!CLOSERS.test(rest) || !line.slice(0, column).trim()) return undefined;
-  const block = type === "tam" || type === "class" || type === "state" || type === "er";
-  if (block && rest.startsWith("}") && /\{\s*$/.test(line.slice(0, column))) return undefined;
+  if (BLOCKS[type].braces && rest.startsWith("}") && /\{\s*$/.test(line.slice(0, column)))
+    return undefined;
   return column + rest.trimEnd().length;
 }
 
@@ -1024,18 +1068,26 @@ export function braceBelow(
   type: DiagramType,
   state: EditorState,
 ): { from: number; to: number; cursor: number } | undefined {
-  if (type !== "tam" && type !== "class" && type !== "state" && type !== "er") return undefined;
+  if (!BLOCKS[type].braces) return undefined;
   const range = state.selection.main,
     line = state.doc.lineAt(range.head);
   if (!range.empty || line.text.trim() || line.number === state.doc.lines) return undefined;
-  let next = state.doc.line(line.number + 1);
-  while (!next.text.trim() && next.number < state.doc.lines) next = state.doc.line(next.number + 1);
-  if (!/^\s*\}/.test(next.text)) return undefined;
-  // Every block of the source is closed already: one more brace would close none.
-  const text = state.doc.toString(),
-    count = (sign: string) => text.split(sign).length - 1;
-  if (count("{") !== count("}")) return undefined;
+  const next = nextWithText(state.doc, line.number);
+  if (!/^\s*\}/.test(next.text) || !balanced(state.doc.toString())) return undefined;
   return { from: line.from, to: next.from, cursor: line.from + next.text.indexOf("}") + 1 };
+}
+
+/** The first line with text below the line of a number, else the last line. */
+function nextWithText(doc: Text, number: number) {
+  let next = doc.line(number + 1);
+  while (!next.text.trim() && next.number < doc.lines) next = doc.line(next.number + 1);
+  return next;
+}
+
+/** Whether every block of a source is closed already: one more brace would close none. */
+function balanced(text: string): boolean {
+  const count = (sign: string) => text.split(sign).length - 1;
+  return count("{") === count("}");
 }
 
 /**

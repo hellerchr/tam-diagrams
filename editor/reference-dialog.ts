@@ -67,6 +67,9 @@ function rowCode(guide: Guide, section: GuideSection, item: GuideRow): Node[] {
   );
 }
 
+/** Whether a row is written into the source: a statement the parser reads is; a sign on its own or a refused one is only copied. */
+const writes = (item: GuideRow) => !item.fragment && !item.refused;
+
 /** Whether a row takes the whole width: code of several lines, or of one long line. */
 const wide = (item: GuideRow) => item.write.includes("\n") || item.write.length > 20;
 
@@ -230,8 +233,6 @@ export class GuideSheet {
 
   /** A row: its code, what it means, and the buttons that copy it and write it into the source. */
   private row(guide: Guide, section: GuideSection, item: GuideRow): HTMLElement {
-    // A statement the parser reads is written into the source; a sign on its own or a refused one is only copied.
-    const writes = !item.fragment && !item.refused;
     const made = h(
       "div",
       {
@@ -245,19 +246,22 @@ export class GuideSheet {
       h(
         "span",
         { class: "guide-acts" },
-        writes &&
+        writes(item) &&
           this.act("plus", "Insert into the source", "Enter", () => this.insert(guide, item.write)),
         this.act("copy", "Copy", "C", () => this.copy(item.write)),
       ),
     );
-    made.addEventListener("keydown", (event) => {
-      if (event.target !== made || event.ctrlKey || event.metaKey || event.altKey) return;
-      if (event.key === "Enter" && writes) this.insert(guide, item.write);
-      else if (event.key.toLowerCase() === "c") this.copy(item.write);
-      else return;
-      event.preventDefault();
-    });
+    made.addEventListener("keydown", (event) => this.rowKey(event, made, guide, item));
     return made;
+  }
+
+  /** A key on a row: Enter writes it into the source, where it is a statement to write; C copies it. */
+  private rowKey(event: KeyboardEvent, made: HTMLElement, guide: Guide, item: GuideRow) {
+    if (event.target !== made || event.ctrlKey || event.metaKey || event.altKey) return;
+    if (event.key === "Enter" && writes(item)) this.insert(guide, item.write);
+    else if (event.key.toLowerCase() === "c") this.copy(item.write);
+    else return;
+    event.preventDefault();
   }
 
   /** A button of a row. The keyboard reaches what it does through its row. */
@@ -342,25 +346,11 @@ export class GuideSheet {
    * of it, in the sections that have any; a section whose title has the words shows whole.
    */
   private narrow() {
-    const words = this.filter.value.toLowerCase().split(/\s+/).filter(Boolean),
-      has = (text: string) => words.every((word) => text.includes(word));
+    const words = this.filter.value.toLowerCase().split(/\s+/).filter(Boolean);
     let found = 0;
-    for (const section of this.body.querySelectorAll<HTMLElement>("section")) {
-      const whole = !words.length || has(section.dataset.title ?? "");
-      let any = whole;
-      for (const item of section.querySelectorAll<HTMLElement>("[data-text], li, .guide-prose")) {
-        const shown = whole || has(item.dataset.text ?? item.textContent?.toLowerCase() ?? "");
-        item.hidden = !shown;
-        any ||= shown;
-        if (shown && item.matches(".guide-row")) found++;
-      }
-      section.hidden = !any;
-    }
-    this.count.textContent = !words.length
-      ? ""
-      : found
-        ? `${found} ${found === 1 ? "row" : "rows"}`
-        : "Nothing";
+    for (const section of this.body.querySelectorAll<HTMLElement>("section"))
+      found += narrowSection(section, words);
+    this.count.textContent = rowCount(words, found);
     // One row is the stop of Tab; the arrow keys go from row to row.
     const rows = this.rows();
     rows.forEach((item, index) => (item.tabIndex = index ? -1 : 0));
@@ -370,29 +360,11 @@ export class GuideSheet {
   private key(event: KeyboardEvent) {
     // A key pressed in the sheet is the sheet's: the canvas does not act on it.
     event.stopPropagation();
-    if (event.key === "Escape") {
-      event.preventDefault();
-      if (!this.filter.value) return this.close();
-      this.filter.value = "";
-      this.narrow();
-      return this.filter.focus();
-    }
+    if (event.key === "Escape") return this.escape(event);
     const target = event.target as HTMLElement,
       rows = this.rows(),
-      at = rows.indexOf(target);
-    // From the filter the arrow down goes to the first row.
-    const next =
-      event.key === "ArrowDown" && (at >= 0 || target === this.filter)
-        ? rows[at + 1]
-        : at < 0
-          ? undefined
-          : event.key === "ArrowUp"
-            ? (rows[at - 1] ?? this.filter)
-            : event.key === "Home"
-              ? rows[0]
-              : event.key === "End"
-                ? rows.at(-1)
-                : undefined;
+      at = rows.indexOf(target),
+      next = this.stopAfter(event.key, rows, at, target);
     if (!next) return;
     event.preventDefault();
     if (at >= 0) rows[at].tabIndex = -1;
@@ -400,7 +372,55 @@ export class GuideSheet {
     else if (rows[0]) rows[0].tabIndex = 0;
     next.focus();
   }
+
+  /** Escape clears the filter, and closes the sheet where the filter is clear. */
+  private escape(event: KeyboardEvent) {
+    event.preventDefault();
+    if (!this.filter.value) return this.close();
+    this.filter.value = "";
+    this.narrow();
+    this.filter.focus();
+  }
+
+  /**
+   * Where a key goes from the row at `at` of the rows on show, or from `from` where that is no
+   * row: up and down, to the first and to the last. From the filter the arrow down goes to the
+   * first row, and up from the first row goes to the filter.
+   */
+  private stopAfter(key: string, rows: HTMLElement[], at: number, from: HTMLElement) {
+    if (key === "ArrowDown") return at >= 0 || from === this.filter ? rows[at + 1] : undefined;
+    if (at < 0) return undefined;
+    if (key === "ArrowUp") return rows[at - 1] ?? this.filter;
+    if (key === "Home") return rows[0];
+    return key === "End" ? rows.at(-1) : undefined;
+  }
 }
+
+/** The text a part of the guide is found by: what its row or example says, else its words. */
+const findable = (item: HTMLElement) => item.dataset.text ?? item.textContent?.toLowerCase() ?? "";
+
+/**
+ * Narrows a section to the words of a filter: what has every word shows, and the whole section
+ * where its title has them; a section with nothing that shows is hidden. The rows that show.
+ */
+function narrowSection(section: HTMLElement, words: string[]): number {
+  const has = (text: string) => words.every((word) => text.includes(word)),
+    whole = !words.length || has(section.dataset.title ?? "");
+  let any = whole,
+    found = 0;
+  for (const item of section.querySelectorAll<HTMLElement>("[data-text], li, .guide-prose")) {
+    const shown = whole || has(findable(item));
+    item.hidden = !shown;
+    any ||= shown;
+    if (shown && item.matches(".guide-row")) found++;
+  }
+  section.hidden = !any;
+  return found;
+}
+
+/** How many rows the filter found, said under it; nothing while there is no filter. */
+const rowCount = (words: string[], found: number) =>
+  !words.length ? "" : found ? `${found} ${found === 1 ? "row" : "rows"}` : "Nothing";
 
 /** The name of a diagram inside a sentence. */
 const lower = (name: string) => (name.startsWith("TAM") ? name : name.toLowerCase());

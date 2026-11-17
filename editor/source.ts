@@ -19,8 +19,10 @@ import {
   Compartment,
   EditorSelection,
   EditorState,
+  type Extension,
   StateEffect,
   StateField,
+  type Transaction,
   type TransactionSpec,
 } from "@codemirror/state";
 import {
@@ -33,6 +35,7 @@ import {
   keymap,
   lineNumbers,
   tooltips,
+  type ViewUpdate,
 } from "@codemirror/view";
 import { tags } from "@lezer/highlight";
 import type { Known } from "./completion.ts";
@@ -327,6 +330,24 @@ export function occurrences(text: string, sought: string): number[] {
 }
 
 /**
+ * Which of the places found the find bar selects, from the place of the cursor: the first from
+ * there on (0), the next (1) or the one before (-1), going round at the ends. The place selected
+ * now is where the others are counted from. -1 where there are none.
+ */
+function placeIndex(places: number[], from: number, step: -1 | 0 | 1): number {
+  if (!places.length) return -1;
+  const here = places.indexOf(from),
+    onward = Math.max(
+      0,
+      places.findIndex((place) => place >= from),
+    );
+  if (step === 0) return onward;
+  if (here >= 0) return (here + step + places.length) % places.length;
+  if (step > 0) return onward;
+  return (places.findLastIndex((place) => place < from) + places.length) % places.length;
+}
+
+/**
  * Backspace at the end of a line that holds only spaces removes the line: the cursor is back at
  * the end of the line above, as before Enter was pressed there. Left to the other bindings
  * anywhere else.
@@ -346,6 +367,36 @@ export const backspaceBlankLine: Command = (view) => {
   return true;
 };
 
+/** How long the start and the end are that two texts have in common, the end not reaching into the start. */
+function sharedEnds(old: string, text: string): { start: number; end: number } {
+  const most = Math.min(old.length, text.length);
+  let start = 0;
+  while (start < most && old[start] === text[start]) start++;
+  let end = 0;
+  while (end < most - start && old[old.length - 1 - end] === text[text.length - 1 - end]) end++;
+  return { start, end };
+}
+
+/**
+ * How many characters earlier a change of whole lines may be said to start: text that is only
+ * added or removed may start earlier when it ends as the text before it does, back to the start
+ * of a line. None where the change is no such text, or no line start is reached.
+ */
+function lineShift(old: string, text: string, start: number, end: number): number {
+  const longer = old.length > text.length ? old : text,
+    length = longer.length - end - start;
+  if (Math.min(old.length, text.length) !== start + end) return 0;
+  if (!longer.slice(start, start + length).includes("\n")) return 0;
+  let back = 0;
+  while (
+    start - back > 0 &&
+    longer[start - back - 1] !== "\n" &&
+    longer[start - back - 1] === longer[start - back + length - 1]
+  )
+    back++;
+  return start - back === 0 || longer[start - back - 1] === "\n" ? back : 0;
+}
+
 /**
  * The smallest change that turns one text into another: what lies between the start and the end
  * the two have in common. Where lines were only added or only removed, the change is whole lines:
@@ -356,27 +407,10 @@ export function changeBetween(
   text: string,
 ): { from: number; to: number; insert: string } | undefined {
   if (old === text) return undefined;
-  const most = Math.min(old.length, text.length);
-  let start = 0;
-  while (start < most && old[start] === text[start]) start++;
-  let end = 0;
-  while (end < most - start && old[old.length - 1 - end] === text[text.length - 1 - end]) end++;
-  // Text that is only added or removed may be said to start earlier, when it ends as the text before it does.
-  const longer = old.length > text.length ? old : text,
-    length = longer.length - end - start;
-  if (most === start + end && longer.slice(start, start + length).includes("\n")) {
-    let back = 0;
-    while (
-      start - back > 0 &&
-      longer[start - back - 1] !== "\n" &&
-      longer[start - back - 1] === longer[start - back + length - 1]
-    )
-      back++;
-    if (start - back === 0 || longer[start - back - 1] === "\n") {
-      start -= back;
-      end += back;
-    }
-  }
+  const shared = sharedEnds(old, text),
+    back = lineShift(old, text, shared.start, shared.end),
+    start = shared.start - back,
+    end = shared.end + back;
   return { from: start, to: old.length - end, insert: text.slice(start, text.length - end) };
 }
 
@@ -462,40 +496,67 @@ interface Reveal {
   yMargin: number;
 }
 
+/** Where a place is drawn and the room of the pane around it, as measured before the pane scrolls. */
+interface Measured {
+  /** The place where it is drawn; null where it is not. */
+  at: { top: number; bottom: number; left: number; right: number } | null;
+  /** The line the place is in. */
+  line: { top: number; bottom: number };
+  /** The room within the margins, in the coordinates of the window. */
+  top: number;
+  bottom: number;
+  left: number;
+  right: number;
+}
+
+/** Measures a place of the text and the room of the pane, inside the margins of a reveal. */
+function measure(view: EditorView, pos: number, options: Reveal): Measured {
+  const at = Math.min(pos, view.state.doc.length),
+    block = view.lineBlockAt(at),
+    scroller = view.scrollDOM,
+    box = scroller.getBoundingClientRect(),
+    gutters = scroller.querySelector<HTMLElement>(".cm-gutters")?.offsetWidth ?? 0;
+  return {
+    at: view.coordsAtPos(at),
+    line: { top: view.documentTop + block.top, bottom: view.documentTop + block.bottom },
+    top: box.top + options.yMargin,
+    bottom: box.top + scroller.clientHeight - options.yMargin,
+    left: box.left + gutters + options.xMargin,
+    right: box.left + scroller.clientWidth - options.xMargin,
+  };
+}
+
+/** How far the pane scrolls down so that the place, else its line, stands where `y` says: none where it stands there. */
+function verticalShift(y: string, { at, line, top, bottom }: Measured): number {
+  // The place itself where it is drawn, else the line it is in.
+  const { top: start, bottom: end } = at ?? line,
+    align = y === "nearest" ? (start < top ? "start" : end > bottom ? "end" : "") : y;
+  if (align === "center") return (start + end) / 2 - (top + bottom) / 2;
+  if (align === "start") return start - top;
+  return align === "end" ? end - bottom : 0;
+}
+
+/** How far the pane scrolls right so that the place stands inside the room: none where it does. */
+function horizontalShift({ at, left, right }: Measured): number {
+  if (at && at.left < left) return at.left - left;
+  return at && at.right > right ? at.right - right : 0;
+}
+
 /**
  * Scrolls the pane, and nothing else, so that a place of the text shows. The heights of lines far
  * from view are estimates, so the place is looked at once more after the pane moved.
  */
 function reveal(view: EditorView, pos: number, options: Reveal, again = true) {
   view.requestMeasure({
-    read(view) {
-      const at = Math.min(pos, view.state.doc.length),
-        block = view.lineBlockAt(at),
-        scroller = view.scrollDOM,
-        box = scroller.getBoundingClientRect(),
-        gutters = scroller.querySelector<HTMLElement>(".cm-gutters")?.offsetWidth ?? 0;
-      return {
-        at: view.coordsAtPos(at),
-        line: { top: view.documentTop + block.top, bottom: view.documentTop + block.bottom },
-        top: box.top + options.yMargin,
-        bottom: box.top + scroller.clientHeight - options.yMargin,
-        left: box.left + gutters + options.xMargin,
-        right: box.left + scroller.clientWidth - options.xMargin,
-      };
-    },
-    write({ at, line, top, bottom, left, right }, view) {
+    read: (view) => measure(view, pos, options),
+    write(measured, view) {
       const scroller = view.scrollDOM,
         before = scroller.scrollTop,
-        // The place itself where it is drawn, else the line it is in.
-        { top: start, bottom: end } = at ?? line,
-        y =
-          options.y === "nearest" ? (start < top ? "start" : end > bottom ? "end" : "") : options.y;
-      if (y === "center") scroller.scrollTop += (start + end) / 2 - (top + bottom) / 2;
-      else if (y === "start") scroller.scrollTop += start - top;
-      else if (y === "end") scroller.scrollTop += end - bottom;
-      if (at && at.left < left) scroller.scrollLeft += at.left - left;
-      else if (at && at.right > right) scroller.scrollLeft += at.right - right;
-      if (again && (!at || Math.abs(scroller.scrollTop - before) > 1))
+        down = verticalShift(options.y, measured),
+        right = horizontalShift(measured);
+      if (down) scroller.scrollTop += down;
+      if (right) scroller.scrollLeft += right;
+      if (again && (!measured.at || Math.abs(scroller.scrollTop - before) > 1))
         reveal(view, pos, options, false);
     },
   });
@@ -528,6 +589,21 @@ function tooltipHolder(): HTMLElement {
   });
   document.body.append(holder);
   return holder;
+}
+
+/** Whether a change leaves a whole statement: a line that was ended, a completion, and text that came whole do. */
+function leavesStatement(transaction: Transaction): boolean {
+  if (
+    transaction.isUserEvent("input.complete") ||
+    transaction.isUserEvent("input.paste") ||
+    transaction.isUserEvent("input.drop")
+  )
+    return true;
+  let lines = false;
+  transaction.changes.iterChanges((_from, _to, _start, _end, inserted) => {
+    lines ||= inserted.lines > 1;
+  });
+  return lines;
 }
 
 /** What the pane asks of the editor around it. */
@@ -577,108 +653,102 @@ export class SourcePane {
   constructor(parent: HTMLElement, host: SourceHost) {
     this.host = host;
     this.type = host.type();
+    this.view = new EditorView({
+      parent,
+      state: EditorState.create({ extensions: this.extensions() }),
+    });
+    this.finder = this.findBar(parent);
+    this.watchPage();
+  }
+
+  /** What the pane is made of: its syntax, its completions, its keys, its looks and what it tells the host. */
+  private extensions(): Extension[] {
+    const { host } = this;
     // What is typed is read as the type its text says, which the document learns only after a pause.
     const typed = () => typeOf(this.view.state.doc.toString());
     // A block diagram is completed from its elements; the other types from their text.
     const complete = (context: CompletionContext) =>
       completeSource(context, typed(), host.completes() ? host.elements() : []);
-    this.view = new EditorView({
-      parent,
-      state: EditorState.create({
-        extensions: [
-          lineNumbers(),
-          drawSelection(),
-          highlightActiveLine(),
-          indentUnit.of("  "),
-          EditorState.tabSize.of(2),
-          this.syntax.of(syntaxOf(this.type)),
-          syntaxHighlighting(colors),
-          typingRules(typed),
-          closeBrackets(),
-          // The list reaches past the pane, which would cut it off.
-          tooltips({ position: "fixed", parent: tooltipHolder() }),
-          autocompletion({
-            override: [complete],
-            icons: true,
-            closeOnBlur: true,
-            activateOnCompletion: continues,
-          }),
-          keymap.of([
-            // Tab takes the completion on offer, as Enter does; else it indents.
-            { key: "Tab", run: acceptCompletion },
-            { key: "Tab", run: tabBehindText },
-            { key: "Enter", run: newlineAfterBlock(typed) },
-            { key: "Mod-f", run: () => (this.find(), true), preventDefault: true },
-            ...closeBracketsKeymap,
-            { key: "Backspace", run: backspaceBlankLine },
-            ...defaultKeymap,
-            indentWithTab,
-          ]),
-          scrollPane,
-          EditorView.domEventHandlers({
-            keydown: (event) => {
-              this.active = true;
-              // The pane has no history of its own: the document's holds typed and canvas edits alike.
-              const key = event.key.toLowerCase();
-              if (!(event.ctrlKey || event.metaKey) || event.altKey || (key !== "z" && key !== "y"))
-                return false;
-              return this.step(
-                key === "z" && !event.shiftKey ? () => host.undo() : () => host.redo(),
-              );
-            },
-            mousedown: (_, view) => {
-              this.active = true;
-              view.setTabFocusMode(false);
-            },
-            // A pane the focus came to by Tab lets Tab go on to the next control, until something is typed or pressed in it.
-            focus: (_, view) => {
-              if (performance.now() - this.tabbed < 100) view.setTabFocusMode(true);
-            },
-            blur: () => {
-              this.active = false;
-            },
-          }),
-          selectedLines,
-          foundPlaces,
-          // A line cut at the pane's edge hides what it says: long lines wrap.
-          EditorView.lineWrapping,
-          hangingIndent,
-          look,
-          EditorView.contentAttributes.of({ "aria-label": "Diagram source", spellcheck: "false" }),
-          EditorView.updateListener.of((update) => {
-            const own = update.transactions.filter(
-              (transaction) => !transaction.annotation(fromDocument),
-            );
-            if (own.some((transaction) => transaction.docChanged)) {
-              this.pending = true;
-              this.active = true;
-              update.view.setTabFocusMode(false);
-              // A line that was ended, a completion, and text that came whole leave a statement.
-              const whole = own.some((transaction) => {
-                if (
-                  transaction.isUserEvent("input.complete") ||
-                  transaction.isUserEvent("input.paste") ||
-                  transaction.isUserEvent("input.drop")
-                )
-                  return true;
-                let lines = false;
-                transaction.changes.iterChanges((_from, _to, _start, _end, inserted) => {
-                  lines ||= inserted.lines > 1;
-                });
-                return lines;
-              });
-              host.changed(update.state.doc.toString(), whole);
-              if (!this.finder.bar.hidden) this.seek(0, false);
-            }
-            // A click or a key moved the cursor: the element declared there is selected.
-            else if (update.selectionSet && own.length && update.view.hasFocus)
-              host.cursorAt(update.state.doc.lineAt(update.state.selection.main.head).number);
-          }),
-        ],
+    return [
+      lineNumbers(),
+      drawSelection(),
+      highlightActiveLine(),
+      indentUnit.of("  "),
+      EditorState.tabSize.of(2),
+      this.syntax.of(syntaxOf(this.type)),
+      syntaxHighlighting(colors),
+      typingRules(typed),
+      closeBrackets(),
+      // The list reaches past the pane, which would cut it off.
+      tooltips({ position: "fixed", parent: tooltipHolder() }),
+      autocompletion({
+        override: [complete],
+        icons: true,
+        closeOnBlur: true,
+        activateOnCompletion: continues,
       }),
-    });
-    this.finder = this.findBar(parent);
-    // What happens outside the pane: a press there ends the work in it, and Tab may bring the focus to it.
+      keymap.of([
+        // Tab takes the completion on offer, as Enter does; else it indents.
+        { key: "Tab", run: acceptCompletion },
+        { key: "Tab", run: tabBehindText },
+        { key: "Enter", run: newlineAfterBlock(typed) },
+        { key: "Mod-f", run: () => (this.find(), true), preventDefault: true },
+        ...closeBracketsKeymap,
+        { key: "Backspace", run: backspaceBlankLine },
+        ...defaultKeymap,
+        indentWithTab,
+      ]),
+      scrollPane,
+      EditorView.domEventHandlers({
+        keydown: (event) => this.keydown(event),
+        mousedown: (_, view) => {
+          this.active = true;
+          view.setTabFocusMode(false);
+        },
+        // A pane the focus came to by Tab lets Tab go on to the next control, until something is typed or pressed in it.
+        focus: (_, view) => {
+          if (performance.now() - this.tabbed < 100) view.setTabFocusMode(true);
+        },
+        blur: () => {
+          this.active = false;
+        },
+      }),
+      selectedLines,
+      foundPlaces,
+      // A line cut at the pane's edge hides what it says: long lines wrap.
+      EditorView.lineWrapping,
+      hangingIndent,
+      look,
+      EditorView.contentAttributes.of({ "aria-label": "Diagram source", spellcheck: "false" }),
+      EditorView.updateListener.of((update) => this.updated(update)),
+    ];
+  }
+
+  /** A key pressed in the pane. The pane has no history of its own: the document's holds typed and canvas edits alike. */
+  private keydown(event: KeyboardEvent): boolean {
+    this.active = true;
+    const key = event.key.toLowerCase();
+    if (!(event.ctrlKey || event.metaKey) || event.altKey || (key !== "z" && key !== "y"))
+      return false;
+    const host = this.host;
+    return this.step(key === "z" && !event.shiftKey ? () => host.undo() : () => host.redo());
+  }
+
+  /** The pane changed: typed text goes to the host, and a cursor moved by a click or a key selects what is declared there. */
+  private updated(update: ViewUpdate) {
+    const own = update.transactions.filter((transaction) => !transaction.annotation(fromDocument));
+    if (own.some((transaction) => transaction.docChanged)) {
+      this.pending = true;
+      this.active = true;
+      update.view.setTabFocusMode(false);
+      this.host.changed(update.state.doc.toString(), own.some(leavesStatement));
+      if (!this.finder.bar.hidden) this.seek(0, false);
+    } else if (update.selectionSet && own.length && update.view.hasFocus)
+      this.host.cursorAt(update.state.doc.lineAt(update.state.selection.main.head).number);
+  }
+
+  /** What happens outside the pane: a press there ends the work in it, and Tab may bring the focus to it. */
+  private watchPage() {
     document.addEventListener(
       "pointerdown",
       (event) => {
@@ -785,25 +855,8 @@ export class SourcePane {
       { state } = this.view,
       sought = field.value,
       places = occurrences(state.doc.toString(), sought),
-      range = state.selection.main,
-      here = places.indexOf(range.from),
-      // The place selected now is where the others are counted from.
-      at = !places.length
-        ? -1
-        : step === 0
-          ? Math.max(
-              0,
-              places.findIndex((place) => place >= range.from),
-            )
-          : here >= 0
-            ? (here + step + places.length) % places.length
-            : step > 0
-              ? Math.max(
-                  0,
-                  places.findIndex((place) => place >= range.from),
-                )
-              : (places.findLastIndex((place) => place < range.from) + places.length) %
-                places.length;
+      at = placeIndex(places, state.selection.main.from, step),
+      chosen = select && at >= 0;
     count.textContent = !sought ? "" : places.length ? `${at + 1} of ${places.length}` : "None";
     this.view.dispatch({
       effects: [
@@ -814,9 +867,9 @@ export class SourcePane {
             here: select && index === at,
           })),
         ),
-        ...(select && at >= 0 ? [EditorView.scrollIntoView(places[at], { y: "center" })] : []),
+        ...(chosen ? [EditorView.scrollIntoView(places[at], { y: "center" })] : []),
       ],
-      ...(select && at >= 0
+      ...(chosen
         ? { selection: EditorSelection.range(places[at], places[at] + sought.length) }
         : {}),
       annotations: fromDocument.of(true),
