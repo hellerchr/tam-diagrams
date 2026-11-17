@@ -71,7 +71,8 @@ package needs one of the others, or the command line, which runs from the bundle
 ## Editor
 
 `npm run editor` serves a diagram editor (`npm run build:editor` writes it as a static page to
-`dist/editor`). It edits every diagram type on a canvas: TAM block diagrams with elements placed by
+`dist/editor`, and `npm run build` with the command line). `tam-diagrams edit <file>` serves the
+built editor on a file of the disk, which Save writes back to: see [Command line](#command-line). It edits every diagram type on a canvas: TAM block diagrams with elements placed by
 hand, and the UML types (class, use case, activity with lanes or without, state machine, sequence,
 entity relationship)
 by their structure, with the layout automatic until a part is moved.
@@ -225,6 +226,7 @@ cat diagram.tam | npx tam-diagrams render - > diagram.svg
 npx tam-diagrams check docs/*.tam docs/*.mmd
 npx tam-diagrams convert diagram.tam -o diagram.drawio
 npx tam-diagrams convert diagram.drawio -o diagram.tam
+npx tam-diagrams edit diagram.tam
 ```
 
 `render` writes the SVG to the file given with `-o`, or to stdout; with `--rounded`, `render` and
@@ -247,6 +249,19 @@ repos:
 ```
 
 The `files:` pattern matches whatever extensions the project uses for diagram sources.
+
+`edit` opens the [editor](#editor) in the default browser on a file, and runs until Ctrl+C. It
+serves the editor the package builds (`dist/editor`) on `127.0.0.1`, on a free port or the one given
+with `--port <n>`, and prints its address; `--no-open` leaves opening it to you. The editor shows
+the file's diagram, with its name, and *Save* (Ctrl+S) writes back to the file in the file's own
+form: a `.tam` or `.mmd` file gets the source; a Markdown text the first `tam` or `mermaid` fence
+that holds a diagram, with every other line kept; a draw.io file (`.drawio`, `.drawio.svg`) the
+picture on show as a draw.io file, so it stays one. A file that does not exist yet starts an empty
+diagram and is written on the first save. *Save as* picks another file as in the browser. The
+address carries a random token that every request to the file must carry, so no other page of the
+machine reads or writes it, and the command writes no file but the one it was given. When the
+command has stopped, *Save* says so and downloads the file instead. Without a file, `edit` opens
+the editor as `npm run editor` does, with its own storage.
 
 Exit codes: `0` success, `1` a diagram error, `2` a usage or I/O error, `3` an internal error (a
 bug in tam-diagrams; `check` still checks the other files). A source with no elements, such as an

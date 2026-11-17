@@ -54,6 +54,24 @@ function isDiagram(text: string): boolean {
   }
 }
 
+/** A file's text with the line ends of the editor, and without a byte order mark. */
+export const withEditorLines = (content: string) =>
+  content.replace(/^\uFEFF/, "").replace(/\r\n?/g, "\n");
+
+/**
+ * The first `tam` or `mermaid` fence of a Markdown text that reads as a diagram: its body, which
+ * ends with its last line end, and where in the text the body starts.
+ */
+export function diagramFence(text: string): { source: string; at: number } | undefined {
+  const fences = text.matchAll(
+    /^[ \t]*(`{3,}|~{3,})[ \t]*(?:tam|mermaid)\b[^\n]*\n([\s\S]*?)^[ \t]*\1[ \t]*$/gm,
+  );
+  for (const fence of fences)
+    if (isDiagram(fence[2]))
+      return { source: fence[2], at: fence.index + fence[0].indexOf("\n") + 1 };
+  return undefined;
+}
+
 /** The diagram found in a file, or why there is none. */
 export type Opened =
   | {
@@ -69,13 +87,11 @@ export type Opened =
  * byte order mark is dropped. A `.tam` or `.mmd` file is taken as it is, to be mended in the source.
  */
 export function diagramIn(name: string, content: string): Opened {
-  const text = content.replace(/^\uFEFF/, "").replace(/\r\n?/g, "\n");
+  const text = withEditorLines(content);
   if (!text.trim()) return { refusal: `${name} is empty.` };
   if (isDiagram(text)) return { source: text, fenced: false };
-  const fences = text.matchAll(
-    /^[ \t]*(`{3,}|~{3,})[ \t]*(?:tam|mermaid)\b[^\n]*\n([\s\S]*?)^[ \t]*\1[ \t]*$/gm,
-  );
-  for (const [, , body] of fences) if (isDiagram(body)) return { source: body, fenced: true };
+  const fence = diagramFence(text);
+  if (fence) return { source: fence.source, fenced: true };
   if (/\.(tam|mmd)$/i.test(name)) return { source: text, fenced: false };
   return {
     refusal: `${name} is not a diagram: it holds neither a TAM source nor a Mermaid diagram the editor draws.`,

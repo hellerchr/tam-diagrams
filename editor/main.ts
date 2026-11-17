@@ -29,6 +29,7 @@ import {
   withRecent,
 } from "./files.ts";
 import type { ThemeChoice } from "./menus.ts";
+import { NotWritten, ServedFile, tokenIn } from "./served.ts";
 import { STARTER } from "./starter.ts";
 import { sameType, typeInfo, typeOf } from "./types.ts";
 import { Panels } from "./ui.ts";
@@ -119,6 +120,16 @@ const pickers = window as {
   showSaveFilePicker?: (options: PickerOptions) => Promise<FileHandle>;
 };
 
+/**
+ * The file a diagram belongs to: one opened or saved in the browser, with what writes back to it
+ * where the browser allows, or the one `tam-diagrams edit` serves the editor with.
+ */
+interface DiagramFile {
+  name: string;
+  handle?: FileHandle;
+  served?: ServedFile;
+}
+
 /** Whether a picker failed because the user closed it. */
 const gaveUp = (reason: unknown) => reason instanceof DOMException && reason.name === "AbortError";
 
@@ -186,6 +197,10 @@ async function start() {
   const system = matchMedia("(prefers-color-scheme: dark)");
   let choice: ThemeChoice = (stored("theme") as ThemeChoice | null) ?? "system";
   const theme = () => (choice === "system" ? (system.matches ? "dark" : "light") : choice);
+  /** The token of `tam-diagrams edit`, when it opened the page on a file. */
+  const token = tokenIn(location.search);
+  // A file the command opens is no first visit: its diagram shows, not the sample.
+  if (token) store("welcomed", "yes");
   /** Whether connections bend round at their corners: a choice remembered across visits. */
   let rounded = stored("rounded") === "1";
   const doc = new Steps(textMeasure(FONT), await elkWorkerPool(elkWorker).catch(() => undefined));
@@ -210,7 +225,7 @@ async function start() {
     store("saved", source);
   };
   /** The file the diagram was opened from or saved to last, with what writes back to it where the browser allows. */
-  let file: { name: string; handle?: FileHandle } | undefined;
+  let file: DiagramFile | undefined;
   /** The name of the diagram's files without an extension: that of its file, else its title. */
   const stem = () => (file ? stemOf(file.name) : fileStem(doc.picture?.title));
   const kinds = (extension: string): PickerOptions["types"] => [
@@ -228,11 +243,22 @@ async function start() {
     panels.commit();
     const text = doc.source,
       extension = extensionOf(text),
-      name = `${stem()}.${extension}`;
+      name = `${stem()}.${extension}`,
+      served = another ? undefined : file?.served;
     if (!text.trim()) {
       panels.toast("The diagram is empty: there is nothing to save.");
       return false;
     }
+    /** Writes the file of the edit command, in its own form; a draw.io file from the picture on show. */
+    const writeServed = async (served: ServedFile) => {
+      const shown = doc.picture?.source === text && !doc.problem ? doc.picture : undefined;
+      await served.save(text, {
+        scene: shown?.scene,
+        rounded,
+        svg: () => picture("white", 16)?.svg,
+      });
+      panels.toast(`Saved to ${served.name}.`);
+    };
     const write = async (handle: FileHandle) => {
       const writer = await handle.createWritable();
       await writer.write(text);
@@ -245,7 +271,8 @@ async function start() {
       panels.toast(`${why}${name} was downloaded.`);
     };
     try {
-      if (file?.handle && !another) await write(file.handle);
+      if (served) await writeServed(served);
+      else if (file?.handle && !another) await write(file.handle);
       else if (pickers.showSaveFilePicker)
         await write(
           await pickers.showSaveFilePicker({ suggestedName: name, types: kinds(extension) }),
@@ -253,6 +280,18 @@ async function start() {
       else asDownload("");
     } catch (reason) {
       if (gaveUp(reason)) return false;
+      if (served && reason instanceof NotWritten) {
+        // The file was not written, so it is downloaded as it would have been.
+        download(served.name, new Blob([reason.content], { type: "text/plain" }));
+        panels.toast(`${reason.message} ${served.name} was downloaded instead.`);
+        keep(text);
+        editor.refresh();
+        return true;
+      }
+      if (served) {
+        panels.toast(reason instanceof Error ? reason.message : String(reason));
+        return false;
+      }
       // The browser did not let the file be written: a download always works.
       asDownload(
         `The browser did not let ${file?.handle && !another ? file.name : "the file"} be written: `,
@@ -265,7 +304,7 @@ async function start() {
   /** The diagrams that were on show lately. */
   let recents = readRecents(stored("recent"));
   /** The replacements made: a step across one shows a whole other diagram, with its file. */
-  const swaps = new Replacements<{ name: string; handle?: FileHandle }>();
+  const swaps = new Replacements<DiagramFile>();
   /** Keeps the diagram on show in the list of recent ones, as it is when another takes its place. */
   const remember = () => {
     const { picture } = doc,
@@ -329,12 +368,37 @@ async function start() {
     else if (!(await replace(source, false, notice))) return;
     file = { name: `${stemOf(name.replace(/\.drawio(\.\w+)?$/i, ""))}.${extensionOf(source)}` };
     editor.refresh();
+    remarks(name, source, warnings);
+  };
+  /** Lists what a draw.io file holds that its diagram has no place for. */
+  const remarks = (name: string, source: string, warnings: string[]) => {
     if (warnings.length)
       noticeDialog(
         "Read from draw.io, with remarks",
         `${name} reads as a ${typeInfo(typeOf(source)).name.toLowerCase()}. Some of it needs a look:`,
         warnings,
       );
+  };
+  /**
+   * Shows the diagram of the file `tam-diagrams edit` serves the editor with, in place of the one
+   * on show, which Undo brings back; Save then writes back to the file. A file that does not exist
+   * yet starts an empty diagram.
+   */
+  const openServed = async (served: ServedFile) => {
+    let opening;
+    try {
+      opening = await served.open();
+    } catch (reason) {
+      const why = reason instanceof Error ? reason.message : String(reason);
+      return panels.toast(`The file of the edit command did not open: ${why}`);
+    }
+    const { source, notice, warnings } = opening;
+    if (source === doc.source) panels.toast(notice);
+    else if (!(await replace(source, true, notice))) return;
+    file = { name: served.name, served };
+    keep(doc.source);
+    editor.refresh();
+    remarks(served.name, source, warnings);
   };
   /** Shows the diagram of a file, or says why the file has none; the diagram on show then stays. */
   const opened = async (name: string, content: string, handle?: FileHandle) => {
@@ -586,6 +650,7 @@ async function start() {
     if (!doc.problem) await doc.apply(source);
   }
   if (saved === null) keep(doc.source);
+  if (token) await openServed(new ServedFile(token));
   // For tests and the curious: the editor on the console.
   Object.assign(window, { tamEditor: editor });
   await editor.fitSoon();

@@ -41,7 +41,7 @@
     "./drawio": "./src/drawio.ts"
   },
   "scripts": {
-    "build": "rolldown -c",
+    "build": "rolldown -c && vite build editor",
     "build:editor": "vite build editor",
     "editor": "vite editor",
     "prepare": "npm run build",

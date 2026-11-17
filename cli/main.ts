@@ -1,4 +1,5 @@
 import { type Command, parseCommand, USAGE, UsageError } from "./args.ts";
+import { runEdit } from "./edit.ts";
 import { checkSource, convertSource, isDiagramError, renderSource, sourceOf } from "./diagram.ts";
 import { diagramMessage, inputName, internalMessage, ioMessage, warningLines } from "./report.ts";
 
@@ -112,5 +113,6 @@ export async function main(argv: string[], io: CliIo): Promise<number> {
     io.stdout(USAGE);
     return OK;
   }
+  if (command.kind === "edit") return runEdit(command, io);
   return command.kind === "check" ? runCheck(command, io) : runRender(command, io);
 }
