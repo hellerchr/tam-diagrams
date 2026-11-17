@@ -18,13 +18,14 @@
 
 import type { Structure, StructureEdge, StructureNode } from "./structure.ts";
 import { scan } from "./uml.ts";
+import { dedent, indentOf, linesOf, numberedId, rootEnd } from "./uml-edit-text.ts";
 import { type MessageEvent, parseSequenceDiagram, type SequenceDiagram } from "./uml-sequence.ts";
 
 /** What a canvas adds to a sequence diagram. */
-export type SequencePiece = "participant" | "actor" | "box" | "note" | "alt" | "opt" | "loop";
+type SequencePiece = "participant" | "actor" | "box" | "note" | "alt" | "opt" | "loop";
 
 /** The kinds of fragment that frame messages under a condition. */
-export type FragmentKind = "alt" | "loop" | "opt" | "par" | "critical" | "break";
+type FragmentKind = "alt" | "loop" | "opt" | "par" | "critical" | "break";
 
 const FRAGMENTS: string[] = ["alt", "opt", "loop", "par", "critical", "break"];
 
@@ -40,16 +41,12 @@ const DIVIDERS: Record<string, string | undefined> = {
  * (`m3`, `note1`, `block2`), in the fragment and the branch that one stands in, or as the first
  * statement of a branch of a fragment (`into`, with `branch` counted from 0).
  */
-export interface SequencePlace {
+interface SequencePlace {
   before?: string;
   after?: string;
   into?: string;
   branch?: number;
 }
-
-const linesOf = (source: string) => source.replace(/\r\n?/g, "\n").split("\n");
-
-const indentOf = (line: string) => line.match(/^\s*/)![0];
 
 /** The indent of a statement one level inside a line with the given indent. */
 const deeper = (indent: string) => indent + (indent.includes("\t") ? "\t" : "  ");
@@ -201,12 +198,8 @@ function declarations(source: string): Declaration[] {
 }
 
 /** An id no participant has yet. */
-function freshId(diagram: SequenceDiagram, base: string): string {
-  for (let count = 1; ; count++) {
-    const id = `${base}${count}`;
-    if (!diagram.participants.has(id)) return id;
-  }
-}
+const freshId = (diagram: SequenceDiagram, base: string) =>
+  numberedId((id) => diagram.participants.has(id), base);
 
 /** The indent of the statements that stand in no box and no fragment: that of the first one. */
 function topIndent(source: string, lines: string[]): string {
@@ -245,23 +238,27 @@ function declarePlace(
   limit = Infinity,
 ): { at: number; indent: string } {
   const last = declarations(source).findLast((item) => !item.created && item.index < limit);
-  if (last) {
-    const around = diagram.boxes
-      .map((box) => ({ open: box.line - 1, end: boxEnd(source, diagram, box.line) }))
-      .find((box) => box.open < last.index && last.index < box.end);
-    return {
-      at: (around ? around.end : last.index) + 1,
-      indent: indentOf(lines[around ? around.open : last.index]),
-    };
-  }
+  if (last) return afterDeclaration(source, diagram, lines, last);
   const statements = scan(source).lines,
     first = statements
       .slice(1)
       .find((item) => !/^(title|autonumber|accTitle|accDescr)\b/.test(item.text));
-  return {
-    at: first ? first.line - 1 : (statements[0]?.line ?? lines.length),
-    indent: first ? indentOf(lines[first.line - 1]) : topIndent(source, lines),
-  };
+  if (first) return { at: first.line - 1, indent: indentOf(lines[first.line - 1]) };
+  return { at: statements[0]?.line ?? lines.length, indent: topIndent(source, lines) };
+}
+
+/** The place after a declaration, behind the box it stands in. */
+function afterDeclaration(
+  source: string,
+  diagram: SequenceDiagram,
+  lines: string[],
+  last: Declaration,
+) {
+  const around = diagram.boxes
+    .map((box) => ({ open: box.line - 1, end: boxEnd(source, diagram, box.line) }))
+    .find((box) => box.open < last.index && last.index < box.end);
+  if (!around) return { at: last.index + 1, indent: indentOf(lines[last.index]) };
+  return { at: around.end + 1, indent: indentOf(lines[around.open]) };
 }
 
 /** The declaration that names a participant first and so sets its column, when it has one. */
@@ -308,28 +305,44 @@ export function insertParticipant(
     who = participantOf(read, (following ? piece.after : piece.before) ?? "");
   if (who === null) return addSequencePiece(source, { kind: piece.kind, label: piece.label });
   const id = freshId(read, piece.kind),
-    name = textOf(piece.label ?? "") || (piece.kind === "actor" ? "Actor" : "Participant"),
-    text = `${piece.kind} ${id} as ${name}`;
-  let lines: string[], at: number;
-  if (read.participants.get(who)!.created) {
-    // A participant a message creates: before its `create`, or after the message that creates it.
-    const create = read.events.findIndex((event) => event.type === "create" && event.who === who),
-      made = read.events.find(
-        (event, index) =>
-          index > create && event.type === "message" && (event.to === who || event.from === who),
-      );
-    lines = linesOf(source);
-    at = following ? (made ?? read.events[create]).line : read.events[create].line - 1;
-    lines.splice(at, 0, indentOf(lines[read.events[create].line - 1]) + text);
-  } else {
-    const ready = pinned(source, who),
-      pin = pinOf(ready, parseSequenceDiagram(ready), who)!;
-    lines = linesOf(ready);
-    at = pin.index + (following ? 1 : 0);
-    lines.splice(at, 0, indentOf(lines[pin.index]) + text);
-  }
-  const result = lines.join("\n");
+    text = `${piece.kind} ${id} as ${columnName(piece.kind, piece.label)}`,
+    result = read.participants.get(who)!.created
+      ? besideCreated(source, read, who, following, text)
+      : besideDeclared(source, who, following, text);
   return parses(result) ? { source: result, id: `head:${id}` } : { source, id: "" };
+}
+
+/** The name of a new participant or actor: its label, or what it is. */
+const columnName = (kind: "participant" | "actor", label: string | undefined) =>
+  textOf(label ?? "") || (kind === "actor" ? "Actor" : "Participant");
+
+/** The source with a declaration beside a participant a message creates: before its `create`, or after the message that creates it. */
+function besideCreated(
+  source: string,
+  read: SequenceDiagram,
+  who: string,
+  following: boolean,
+  text: string,
+): string {
+  const create = read.events.findIndex((event) => event.type === "create" && event.who === who),
+    made = read.events.find(
+      (event, index) =>
+        index > create && event.type === "message" && (event.to === who || event.from === who),
+    ),
+    lines = linesOf(source),
+    at = following ? (made ?? read.events[create]).line : read.events[create].line - 1;
+  lines.splice(at, 0, indentOf(lines[read.events[create].line - 1]) + text);
+  return lines.join("\n");
+}
+
+/** The source with a declaration beside the declaration of a participant, which is declared first when only messages name it. */
+function besideDeclared(source: string, who: string, following: boolean, text: string): string {
+  const ready = pinned(source, who),
+    pin = pinOf(ready, parseSequenceDiagram(ready), who)!,
+    lines = linesOf(ready),
+    at = pin.index + (following ? 1 : 0);
+  lines.splice(at, 0, indentOf(lines[pin.index]) + text);
+  return lines.join("\n");
 }
 
 /**
@@ -342,72 +355,114 @@ export function insertParticipant(
 export function moveParticipant(source: string, id: string, delta: -1 | 1): string {
   const before = parseSequenceDiagram(source),
     who = participantOf(before, id),
-    order = columns(before);
-  if (who === null || before.participants.get(who)!.created) return source;
-  const beside = order[order.indexOf(who) + delta];
-  if (beside && before.participants.get(beside)!.created) return source;
+    order = columns(before),
+    beside = who === null ? undefined : order[order.indexOf(who) + delta];
+  if (who === null || [who, beside].some((item) => isCreated(before, item))) return source;
   // The later of the two first: declaring it declares the columns before it as well.
   const ready = pinned(pinned(source, delta === 1 && beside ? beside : who), who),
     diagram = parseSequenceDiagram(ready),
-    lines = linesOf(ready),
-    borders = diagram.boxes.flatMap((box) => [
-      { index: box.line - 1, type: "open" as const, id: "" },
-      { index: boxEnd(ready, diagram, box.line), type: "close" as const, id: "" },
-    ]),
-    stops = [
-      ...borders,
-      ...columns(diagram).flatMap((item) => {
-        const pin = pinOf(ready, diagram, item);
-        return pin ? [{ index: pin.index, type: "pin" as const, id: item }] : [];
-      }),
-    ].toSorted((a, b) => a.index - b.index),
+    stops = stopsOf(ready, diagram),
     here = stops.find((stop) => stop.id === who)!,
     there = stops[stops.indexOf(here) + delta];
   if (!there) return source;
-  const own = lines[here.index].trim(),
+  const lines = linesOf(ready),
     wanted = columns(diagram);
   if (there.type === "pin") {
-    lines[here.index] = indentOf(lines[here.index]) + lines[there.index].trim();
-    lines[there.index] = indentOf(lines[there.index]) + own;
+    swapLines(lines, here.index, there.index);
     const at = wanted.indexOf(who);
     [wanted[at], wanted[at + delta]] = [wanted[at + delta], wanted[at]];
-  } else {
-    // Into the box: as deep as its participants; out of it: as deep as the box.
-    const enters = (there.type === "open") === (delta === 1),
-      box = diagram.boxes.findIndex(
-        (item) =>
-          item.line - 1 === there.index || boxEnd(ready, diagram, item.line) === there.index,
-      ),
-      open = diagram.boxes[box].line - 1,
-      member = declarations(ready).find(
-        (item) => item.index > open && item.index < boxEnd(ready, diagram, open + 1),
-      ),
-      outer = indentOf(lines[open]),
-      indent = enters ? (member ? indentOf(lines[member.index]) : deeper(outer)) : outer;
-    lines.splice(there.index + (delta === 1 ? 1 : 0), 0, indent + own);
-    lines.splice(here.index + (delta === 1 ? 0 : 1), 1);
-  }
-  let result = lines.join("\n");
+  } else crossBorder(ready, diagram, lines, here.index, there, delta);
+  return arrangedAs(lines.join("\n"), diagram, wanted) ?? source;
+}
+
+/** Whether a message creates a participant. */
+const isCreated = (diagram: SequenceDiagram, who: string | undefined) =>
+  who !== undefined && diagram.participants.get(who)!.created;
+
+/** A line a participant can move past: a declaration that sets a column, or the opening or the `end` of a box. */
+interface Stop {
+  index: number;
+  type: "open" | "close" | "pin";
+  id: string;
+}
+
+/** The lines a participant can move past, in their order. */
+function stopsOf(source: string, diagram: SequenceDiagram): Stop[] {
+  const borders = diagram.boxes.flatMap((box): Stop[] => [
+    { index: box.line - 1, type: "open", id: "" },
+    { index: boxEnd(source, diagram, box.line), type: "close", id: "" },
+  ]);
+  const pins = columns(diagram).flatMap((item): Stop[] => {
+    const pin = pinOf(source, diagram, item);
+    return pin ? [{ index: pin.index, type: "pin", id: item }] : [];
+  });
+  return [...borders, ...pins].toSorted((a, b) => a.index - b.index);
+}
+
+/** Swaps the statements of two lines, each keeping the indent of its line. */
+function swapLines(lines: string[], here: number, there: number) {
+  const own = lines[here].trim();
+  lines[here] = indentOf(lines[here]) + lines[there].trim();
+  lines[there] = indentOf(lines[there]) + own;
+}
+
+/** Moves a declaration over the border of a box: into it as deep as its participants, out of it as deep as the box. */
+function crossBorder(
+  source: string,
+  diagram: SequenceDiagram,
+  lines: string[],
+  here: number,
+  there: Stop,
+  delta: -1 | 1,
+) {
+  const enters = (there.type === "open") === (delta === 1),
+    box = diagram.boxes.findIndex(
+      (item) => item.line - 1 === there.index || boxEnd(source, diagram, item.line) === there.index,
+    ),
+    open = diagram.boxes[box].line - 1,
+    member = declarations(source).find(
+      (item) => item.index > open && item.index < boxEnd(source, diagram, open + 1),
+    ),
+    outer = indentOf(lines[open]),
+    inner = member ? indentOf(lines[member.index]) : deeper(outer),
+    own = lines[here].trim();
+  lines.splice(there.index + (delta === 1 ? 1 : 0), 0, (enters ? inner : outer) + own);
+  lines.splice(here + (delta === 1 ? 0 : 1), 1);
+}
+
+/** The participants of a box. */
+const membersOf = (read: SequenceDiagram, box: number) =>
+  [...read.participants.values()].filter((item) => item.box === box).length;
+
+/**
+ * A source whose columns stand in the order wanted, without the box a participant was the last
+ * to stand in; undefined where it does not read or the columns stand otherwise.
+ */
+function arrangedAs(
+  result: string,
+  diagram: SequenceDiagram,
+  wanted: string[],
+): string | undefined {
   try {
     const moved = parseSequenceDiagram(result);
-    if (columns(moved).join("\n") !== wanted.join("\n")) return source;
-    // The box the participant was the last to stand in.
-    const members = (read: SequenceDiagram, box: number) =>
-      [...read.participants.values()].filter((item) => item.box === box).length;
+    if (columns(moved).join("\n") !== wanted.join("\n")) return undefined;
     const empty = moved.boxes.findIndex(
-      (_, box) => !members(moved, box) && members(diagram, box) > 0,
+      (_, box) => !membersOf(moved, box) && membersOf(diagram, box) > 0,
     );
-    if (empty >= 0) {
-      const rest = linesOf(result),
-        end = boxEnd(result, moved, moved.boxes[empty].line);
-      rest.splice(end, 1);
-      rest.splice(moved.boxes[empty].line - 1, 1);
-      result = rest.join("\n");
-    }
-    return parses(result) ? result : source;
+    const kept = empty < 0 ? result : withoutBox(result, moved, empty);
+    return parses(kept) ? kept : undefined;
   } catch {
-    return source;
+    return undefined;
   }
+}
+
+/** A source without the lines that open and close a box. */
+function withoutBox(source: string, diagram: SequenceDiagram, box: number): string {
+  const lines = linesOf(source),
+    end = boxEnd(source, diagram, diagram.boxes[box].line);
+  lines.splice(end, 1);
+  lines.splice(diagram.boxes[box].line - 1, 1);
+  return lines.join("\n");
 }
 
 /**
@@ -424,49 +479,61 @@ export function boxParticipants(
   const before = parseSequenceDiagram(source),
     order = columns(before),
     none = { source, id: "" },
-    found = [...new Set(ids.map((id) => participantOf(before, id)))],
-    members = found
-      .filter((who): who is string => who !== null)
-      .toSorted((a, b) => order.indexOf(a) - order.indexOf(b));
-  if (!members.length || members.length < found.length) return none;
-  const first = order.indexOf(members[0]);
-  if (
-    members.some((who, offset) => {
-      const item = before.participants.get(who)!;
-      return order[first + offset] !== who || item.created || item.box !== null;
-    })
-  )
-    return none;
+    members = boxable(before, ids);
+  if (!members) return none;
   const ready = members.reduce(pinned, source),
     diagram = parseSequenceDiagram(ready),
     lines = linesOf(ready),
     pins = members.map((who) => pinOf(ready, diagram, who));
   if (pins.some((pin) => !pin)) return none;
-  const taken = new Set(pins.map((pin) => pin!.index)),
-    at = pins[0]!.index,
+  const indexes = pins.map((pin) => pin!.index),
+    taken = new Set(indexes),
+    at = indexes[0],
     indent = indentOf(lines[at]),
     box = [
       boxLine(indent, "", label || "Group"),
-      ...pins.map((pin) => deeper(indent) + lines[pin!.index].trim()),
+      ...indexes.map((index) => deeper(indent) + lines[index].trim()),
       `${indent}end`,
     ],
     result = lines
       .flatMap((line, index) => (index === at ? box : taken.has(index) ? [] : [line]))
-      .join("\n");
+      .join("\n"),
+    number = boxedAs(result, members, order);
+  return number === undefined ? none : { source: result, id: `box${number}` };
+}
+
+/**
+ * The participants of some node ids in the order of their columns, where they can be framed:
+ * participants of columns that stand side by side, in no box yet, and that no message creates.
+ */
+function boxable(diagram: SequenceDiagram, ids: string[]): string[] | undefined {
+  const order = columns(diagram),
+    found = [...new Set(ids.map((id) => participantOf(diagram, id)))],
+    members = found
+      .filter((who): who is string => who !== null)
+      .toSorted((a, b) => order.indexOf(a) - order.indexOf(b));
+  if (!members.length || members.length < found.length) return undefined;
+  const first = order.indexOf(members[0]),
+    fits = members.every((who, offset) => {
+      const item = diagram.participants.get(who)!;
+      return order[first + offset] === who && !item.created && item.box === null;
+    });
+  return fits ? members : undefined;
+}
+
+/** The number of the box that frames the participants in a source, and them alone, with the columns as they were. */
+function boxedAs(result: string, members: string[], order: string[]): number | undefined {
   try {
     const boxed = parseSequenceDiagram(result),
-      number = boxed.participants.get(members[0])!.box;
-    if (
-      number === null ||
-      columns(boxed).join("\n") !== order.join("\n") ||
-      [...boxed.participants.values()].some(
-        (item) => (item.box === number) !== members.includes(item.id),
-      )
-    )
-      return none;
-    return { source: result, id: `box${number}` };
+      number = boxed.participants.get(members[0])!.box,
+      alone = [...boxed.participants.values()].every(
+        (item) => (item.box === number) === members.includes(item.id),
+      );
+    return number !== null && alone && columns(boxed).join("\n") === order.join("\n")
+      ? number
+      : undefined;
   } catch {
-    return none;
+    return undefined;
   }
 }
 
@@ -486,60 +553,104 @@ export function addSequencePiece(
   piece: { kind: SequencePiece; label?: string; parent?: string | null },
 ): { source: string; id: string } {
   const diagram = parseSequenceDiagram(source),
-    lines = linesOf(source),
-    beside = participantOf(diagram, piece.parent?.startsWith("head:") ? piece.parent : "");
+    beside = headOf(diagram, piece.parent);
   if (piece.kind === "alt" || piece.kind === "opt" || piece.kind === "loop")
-    return piece.parent && messageOf(diagram, piece.parent)
-      ? wrapMessages(source, [piece.parent], piece.kind, piece.label ?? "")
-      : { source, id: "" };
-  if (piece.kind === "note") {
-    // At a message: over its two ends. At a note: over the participants of that one.
-    const message = messageOf(diagram, piece.parent ?? ""),
-      note = noteOf(diagram, piece.parent ?? ""),
-      over = message ? [message.from, message.to] : note?.type === "note" ? note.who : undefined;
-    if (over) return insertNote(source, { over, text: piece.label, after: piece.parent! });
-    if (beside === null) return { source, id: "" };
-    let end = lines.length;
-    while (end > 0 && !lines[end - 1].trim()) end--;
-    lines.splice(
-      end,
-      0,
-      `${topIndent(source, lines)}note over ${beside}: ${textOf(piece.label ?? "") || "Note"}`,
-    );
-    const notes = diagram.events.filter((event) => event.type === "note").length;
-    return { source: lines.join("\n"), id: `note${notes + 1}` };
-  }
-  if (beside !== null)
-    return piece.kind === "box"
-      ? boxParticipants(source, [beside], piece.label ?? "")
-      : insertParticipant(source, { kind: piece.kind, label: piece.label, after: beside });
-  const id = freshId(diagram, piece.kind === "actor" ? "actor" : "participant"),
-    label = textOf(piece.label ?? "");
-  const parent = piece.kind === "box" ? null : boxOf(diagram, piece.parent);
-  let at: number, indent: string;
-  if (parent !== null) {
-    const open = diagram.boxes[parent].line - 1;
-    at = boxEnd(source, diagram, open + 1);
-    const member = declarations(source).findLast((item) => item.index > open && item.index < at);
-    indent = member ? indentOf(lines[member.index]) : deeper(indentOf(lines[open]));
-  } else ({ at, indent } = declarePlace(source, diagram, lines));
-  if (piece.kind === "box") {
+    return addFragment(source, diagram, piece.kind, piece.label, piece.parent);
+  if (piece.kind === "note") return addNote(source, diagram, beside, piece);
+  if (beside === null) return addColumn(source, diagram, piece.kind, piece.label, piece.parent);
+  return piece.kind === "box"
+    ? boxParticipants(source, [beside], piece.label ?? "")
+    : insertParticipant(source, { kind: piece.kind, label: piece.label, after: beside });
+}
+
+/** The participant whose head a node id is, when it is one. */
+const headOf = (diagram: SequenceDiagram, node: string | null | undefined) =>
+  node?.startsWith("head:") ? participantOf(diagram, node) : null;
+
+/** Adds a fragment that frames the message given as parent; nothing without one. */
+function addFragment(
+  source: string,
+  diagram: SequenceDiagram,
+  kind: FragmentKind,
+  label: string | undefined,
+  parent: string | null | undefined,
+): { source: string; id: string } {
+  if (!parent || !messageOf(diagram, parent)) return { source, id: "" };
+  return wrapMessages(source, [parent], kind, label ?? "");
+}
+
+/**
+ * Adds a note: at a message over its two ends, at a note over the participants of that one, and
+ * else over the participant beside, as the last statement.
+ */
+function addNote(
+  source: string,
+  diagram: SequenceDiagram,
+  beside: string | null,
+  piece: { label?: string; parent?: string | null },
+): { source: string; id: string } {
+  const over = overOf(diagram, piece.parent ?? "");
+  if (over) return insertNote(source, { over, text: piece.label, after: piece.parent! });
+  if (beside === null) return { source, id: "" };
+  const lines = linesOf(source);
+  lines.splice(
+    rootEnd(lines),
+    0,
+    `${topIndent(source, lines)}note over ${beside}: ${textOf(piece.label ?? "") || "Note"}`,
+  );
+  const notes = diagram.events.filter((event) => event.type === "note").length;
+  return { source: lines.join("\n"), id: `note${notes + 1}` };
+}
+
+/** The participants a note at a part stands over: the two ends of a message, or those of a note. */
+function overOf(diagram: SequenceDiagram, parent: string): string[] | undefined {
+  const message = messageOf(diagram, parent);
+  if (message) return [message.from, message.to];
+  const note = noteOf(diagram, parent);
+  return note?.type === "note" ? note.who : undefined;
+}
+
+/**
+ * Adds a participant, an actor, or a box with a first participant: after the last one declared,
+ * or at the top; a participant inside the box `parent` when it is one.
+ */
+function addColumn(
+  source: string,
+  diagram: SequenceDiagram,
+  kind: "participant" | "actor" | "box",
+  label: string | undefined,
+  parent: string | null | undefined,
+): { source: string; id: string } {
+  const lines = linesOf(source),
+    id = freshId(diagram, kind === "actor" ? "actor" : "participant"),
+    text = textOf(label ?? ""),
+    box = kind === "box" ? null : boxOf(diagram, parent),
+    { at, indent } =
+      box === null ? declarePlace(source, diagram, lines) : inBox(source, diagram, lines, box);
+  if (kind === "box") {
     lines.splice(
       at,
       0,
-      boxLine(indent, "", label || "Group"),
+      boxLine(indent, "", text || "Group"),
       `${deeper(indent)}participant ${id} as Participant`,
       `${indent}end`,
     );
     return {
       source: lines.join("\n"),
-      id: `box${diagram.boxes.filter((box) => box.line - 1 < at).length}`,
+      id: `box${diagram.boxes.filter((item) => item.line - 1 < at).length}`,
     };
   }
-  const keyword = piece.kind === "actor" ? "actor" : "participant",
-    name = label || (piece.kind === "actor" ? "Actor" : "Participant");
-  lines.splice(at, 0, `${indent}${keyword} ${id} as ${name}`);
+  const name = text || (kind === "actor" ? "Actor" : "Participant");
+  lines.splice(at, 0, `${indent}${kind} ${id} as ${name}`);
   return { source: lines.join("\n"), id: `head:${id}` };
+}
+
+/** Where a participant is declared in a box: before its `end`, as deep as its participants. */
+function inBox(source: string, diagram: SequenceDiagram, lines: string[], box: number) {
+  const open = diagram.boxes[box].line - 1,
+    at = boxEnd(source, diagram, open + 1),
+    member = declarations(source).findLast((item) => item.index > open && item.index < at);
+  return { at, indent: member ? indentOf(lines[member.index]) : deeper(indentOf(lines[open])) };
 }
 
 /** The note with a node id. */
@@ -565,17 +676,7 @@ function placeOf(
   lines: string[],
   place: SequencePlace,
 ): { at: number; indent: string } | undefined {
-  const { events } = diagram;
-  if (place.into !== undefined) {
-    const frame = frameOf(diagram, place.into),
-      border = frame && [frame.start, ...frame.dividers][place.branch ?? 0];
-    if (!frame || !border) return undefined;
-    // As deep as the statement it comes to stand before, when the branch has one.
-    const next = events[events.indexOf(border) + 1],
-      outer = indentOf(lines[border.line - 1]),
-      inner = next ? indentOf(lines[next.line - 1]) : "";
-    return { at: border.line, indent: inner.length > outer.length ? inner : deeper(outer) };
-  }
+  if (place.into !== undefined) return branchPlace(diagram, lines, place.into, place.branch ?? 0);
   const after = place.after !== undefined,
     id = after ? place.after! : place.before;
   if (id === undefined) return undefined;
@@ -585,15 +686,54 @@ function placeOf(
       at: after ? frame.end.line : frame.start.line - 1,
       indent: indentOf(lines[frame.start.line - 1]),
     };
-  const index = events.findIndex(
-    (event) => (event.type === "message" || event.type === "note") && event.id === id,
-  );
+  return besideStatement(diagram, lines, id, after);
+}
+
+/** The place first in a branch of a fragment: as deep as the statement it comes to stand before, when the branch has one. */
+function branchPlace(diagram: SequenceDiagram, lines: string[], into: string, branch: number) {
+  const frame = frameOf(diagram, into),
+    border = frame && [frame.start, ...frame.dividers][branch];
+  if (!border) return undefined;
+  const next = diagram.events[diagram.events.indexOf(border) + 1],
+    outer = indentOf(lines[border.line - 1]),
+    inner = next ? indentOf(lines[next.line - 1]) : "";
+  return { at: border.line, indent: inner.length > outer.length ? inner : deeper(outer) };
+}
+
+/**
+ * The place after or before a message or a note. The statement that creates or destroys a
+ * participant belongs to the message below it.
+ */
+function besideStatement(diagram: SequenceDiagram, lines: string[], id: string, after: boolean) {
+  const { events } = diagram,
+    index = events.findIndex(
+      (event) => (event.type === "message" || event.type === "note") && event.id === id,
+    );
   if (index < 0) return undefined;
-  let line = events[index].line;
-  // The statement that creates or destroys a participant belongs to the message below it.
-  if (!after && ["create", "destroy"].includes(events[index - 1]?.type))
-    line = events[index - 1].line;
-  return { at: after ? line : line - 1, indent: indentOf(lines[events[index].line - 1]) };
+  const indent = indentOf(lines[events[index].line - 1]);
+  if (after) return { at: events[index].line, indent };
+  const bound = ["create", "destroy"].includes(events[index - 1]?.type);
+  return { at: events[bound ? index - 1 : index].line - 1, indent };
+}
+
+/** Where a statement is written for a place, or else as the last statement, in no fragment. */
+const writePlace = (
+  source: string,
+  diagram: SequenceDiagram,
+  lines: string[],
+  place: SequencePlace,
+) => placeOf(diagram, lines, place) ?? { at: rootEnd(lines), indent: topIndent(source, lines) };
+
+/** The id of the message or the note a source has on a line (from 1), if it reads. */
+function madeAt(source: string, type: "message" | "note", line: number): string | undefined {
+  try {
+    const made = parseSequenceDiagram(source).events.find(
+      (event) => event.type === type && event.line === line,
+    );
+    return made && "id" in made ? made.id : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /** Whether two diagrams hold the same statements in the same order, whatever they say. */
@@ -625,36 +765,38 @@ export function connectSequence(
     receiver = participantOf(diagram, to),
     note = noteOf(diagram, sender === null ? from : to),
     host = sender ?? receiver;
-  if (note && host !== null && (sender === null) !== (receiver === null)) {
-    const index = note.line - 1,
-      parts = lines[index].trim().match(NOTE);
-    if (!parts) return { source, edge: "" };
-    lines[index] = `${indentOf(lines[index])}${parts[1]}${host}${parts[3]} ${parts[4]}`;
-    const moved = lines.join("\n");
-    return { source: parses(moved) ? moved : source, edge: "" };
-  }
+  if (note && host !== null && (sender === null) !== (receiver === null))
+    return { source: noteOver(source, note.line - 1, host), edge: "" };
   if (sender === null || receiver === null) return { source, edge: "" };
-  const arrow = ARROWS.find(([name]) => name === (kind ?? "sync"))?.[1] ?? "->>",
-    parts = {
-      from: sender,
-      arrow,
-      sign: options.sign ?? "",
-      to: receiver,
-      text: textOf(options.label ?? "message"),
-    };
-  const place = placeOf(diagram, lines, options);
-  let at = place?.at ?? lines.length;
-  if (!place) while (at > 0 && !lines[at - 1].trim()) at--;
-  lines.splice(at, 0, messageLine(place?.indent ?? topIndent(source, lines), parts));
-  const result = lines.join("\n");
-  try {
-    const made = parseSequenceDiagram(result).events.find(
-      (event) => event.type === "message" && event.line === at + 1,
-    );
-    return made?.type === "message" ? { source: result, edge: made.id } : { source, edge: "" };
-  } catch {
-    return { source, edge: "" };
-  }
+  const { at, indent } = writePlace(source, diagram, lines, options);
+  lines.splice(at, 0, messageLine(indent, newMessage(sender, receiver, kind, options)));
+  const result = lines.join("\n"),
+    edge = madeAt(result, "message", at + 1);
+  return edge ? { source: result, edge } : { source, edge: "" };
+}
+
+/** The pieces of a new message of a kind, `sync` when none is given, with its text `message` unless a label is given. */
+const newMessage = (
+  from: string,
+  to: string,
+  kind: string | undefined,
+  options: { label?: string; sign?: "+" | "-" | "" },
+): MessageParts => ({
+  from,
+  arrow: ARROWS.find(([name]) => name === (kind ?? "sync"))?.[1] ?? "->>",
+  sign: options.sign ?? "",
+  to,
+  text: textOf(options.label ?? "message"),
+});
+
+/** The source with the note on a line put over another participant; unchanged where that does not read. */
+function noteOver(source: string, index: number, host: string): string {
+  const lines = linesOf(source),
+    parts = lines[index].trim().match(NOTE);
+  if (!parts) return source;
+  lines[index] = `${indentOf(lines[index])}${parts[1]}${host}${parts[3]} ${parts[4]}`;
+  const moved = lines.join("\n");
+  return parses(moved) ? moved : source;
 }
 
 /** Sends a message as `connectSequence` does, and returns the source alone. */
@@ -700,26 +842,18 @@ export function insertNote(
   const diagram = parseSequenceDiagram(source),
     lines = linesOf(source),
     who = [...new Set(note.over.map((id) => participantOf(diagram, id)))],
-    side = note.side ?? "over",
-    none = { source, id: "" };
-  if (!who.length || who.includes(null) || who.length > (side === "over" ? 2 : 1)) return none;
-  const place = placeOf(diagram, lines, note);
-  let at = place?.at ?? lines.length;
-  if (!place) while (at > 0 && !lines[at - 1].trim()) at--;
+    side = note.side ?? "over";
+  if (!who.length || who.includes(null) || who.length > (side === "over" ? 2 : 1))
+    return { source, id: "" };
+  const { at, indent } = writePlace(source, diagram, lines, note);
   lines.splice(
     at,
     0,
-    `${place?.indent ?? topIndent(source, lines)}note ${side} ${who.join(",")}: ${textOf(note.text ?? "") || "Note"}`,
+    `${indent}note ${side} ${who.join(",")}: ${textOf(note.text ?? "") || "Note"}`,
   );
-  const result = lines.join("\n");
-  try {
-    const made = parseSequenceDiagram(result).events.find(
-      (event) => event.type === "note" && event.line === at + 1,
-    );
-    return made?.type === "note" ? { source: result, id: made.id } : none;
-  } catch {
-    return none;
-  }
+  const result = lines.join("\n"),
+    id = madeAt(result, "note", at + 1);
+  return id ? { source: result, id } : { source, id: "" };
 }
 
 /**
@@ -774,32 +908,48 @@ function step(
     lines = linesOf(source),
     statements = scan(source).lines,
     at = statements.findIndex((item) => item.line === line),
-    eventAt = (position: number) =>
-      diagram.events.find((event) => event.line === statements[position]?.line);
-  const beside = eventAt(at + delta),
-    bound = (position: number) => {
-      const event = eventAt(position);
-      return event?.type === "create" || event?.type === "destroy";
-    };
+    eventAt = eventsAt(diagram, statements),
+    beside = eventAt(at + delta);
   // A `create` or `destroy` and the message below it belong together.
-  if (!beside || bound(at + delta) || bound(at - 1) || (delta === -1 && bound(at - 2))) return null;
+  if (!beside || [at + delta, at - 1].some((position) => isBound(eventAt(position)))) return null;
+  if (delta === -1 && isBound(eventAt(at - 2))) return null;
   const here = line - 1,
     there = beside.line - 1,
-    own = lines[here].trim();
-  let indent = indentOf(lines[here]);
-  if (beside.type === "start" || beside.type === "end") {
-    const border = indentOf(lines[there]);
-    if ((beside.type === "start") === (delta === 1)) {
-      // Into the fragment: as deep as the statement it comes to stand beside, when there is one.
-      const next = statements[at + 2 * delta],
-        inner = next ? indentOf(lines[next.line - 1]) : "";
-      indent = inner.length > border.length ? inner : deeper(border);
-    } else indent = border;
-  }
+    own = lines[here].trim(),
+    indent = passingIndent(lines, statements, beside, at, delta, indentOf(lines[here]));
   lines[here] = lines[there];
   lines[there] = indent + own;
   const moved = lines.join("\n");
   return parses(moved) ? { source: moved, line: there + 1 } : null;
+}
+
+/** The event of the statement at a place among the statements. */
+const eventsAt = (diagram: SequenceDiagram, statements: { line: number }[]) => (position: number) =>
+  diagram.events.find((event) => event.line === statements[position]?.line);
+
+/** Whether an event creates or destroys a participant, and so belongs to the message below it. */
+const isBound = (event: SequenceDiagram["events"][number] | undefined) =>
+  event?.type === "create" || event?.type === "destroy";
+
+/**
+ * The indent a statement takes that passes the statement beside it, from a place among the
+ * statements: into a fragment as deep as the statement it comes to stand beside, when there is
+ * one; out of a fragment as deep as its border; else its own.
+ */
+function passingIndent(
+  lines: string[],
+  statements: { line: number }[],
+  beside: SequenceDiagram["events"][number],
+  edge: number,
+  delta: -1 | 1,
+  own: string,
+): string {
+  if (beside.type !== "start" && beside.type !== "end") return own;
+  const border = indentOf(lines[beside.line - 1]);
+  if ((beside.type === "start") !== (delta === 1)) return border;
+  const next = statements[edge + 2 * delta],
+    inner = next ? indentOf(lines[next.line - 1]) : "";
+  return inner.length > border.length ? inner : deeper(border);
 }
 
 /**
@@ -815,16 +965,19 @@ export function moveMessageTo(
   edge: string,
   delta: -1 | 1,
 ): { source: string; edge: string } {
-  const message = messageOf(parseSequenceDiagram(source), edge),
-    moved = message && step(source, message.line, delta),
-    now =
-      moved &&
-      parseSequenceDiagram(moved.source).events.find(
-        (event) => event.type === "message" && event.line === moved.line,
-      );
-  return moved && now?.type === "message"
-    ? { source: moved.source, edge: now.id }
-    : { source, edge };
+  const moved = stepped(source, messageOf(parseSequenceDiagram(source), edge), delta);
+  return moved ? { source: moved.source, edge: moved.id } : { source, edge };
+}
+
+/** A message or a note moved one statement up or down, with the id it has afterwards; undefined where it does not move. */
+function stepped(
+  source: string,
+  event: { type: string; line: number } | undefined,
+  delta: -1 | 1,
+): { source: string; id: string } | undefined {
+  const moved = event && step(source, event.line, delta),
+    id = moved ? madeAt(moved.source, event.type as "message" | "note", moved.line) : undefined;
+  return moved && id ? { source: moved.source, id } : undefined;
 }
 
 /** Moves a message as `moveMessageTo` does, and returns the source alone. */
@@ -842,14 +995,7 @@ export function moveNote(
   id: string,
   delta: -1 | 1,
 ): { source: string; id: string } {
-  const note = noteOf(parseSequenceDiagram(source), id),
-    moved = note && step(source, note.line, delta),
-    now =
-      moved &&
-      parseSequenceDiagram(moved.source).events.find(
-        (event) => event.type === "note" && event.line === moved.line,
-      );
-  return moved && now?.type === "note" ? { source: moved.source, id: now.id } : { source, id };
+  return stepped(source, noteOf(parseSequenceDiagram(source), id), delta) ?? { source, id };
 }
 
 /**
@@ -865,39 +1011,61 @@ export function moveFragment(
 ): { source: string; id: string } {
   const diagram = parseSequenceDiagram(source),
     frame = frameOf(diagram, id),
-    same = { source, id };
-  if (!frame) return same;
-  const lines = linesOf(source),
-    statements = scan(source).lines,
-    open = frame.start.line - 1,
-    close = frame.end.line - 1,
-    eventAt = (position: number) =>
-      diagram.events.find((event) => event.line === statements[position]?.line),
+    moved = frame && moveFrame(source, diagram, frame.start.line - 1, frame.end.line - 1, delta);
+  return moved ?? { source, id };
+}
+
+/** Moves the lines of a fragment, from the one that opens it to its `end`, as `moveFragment` says. */
+function moveFrame(
+  source: string,
+  diagram: SequenceDiagram,
+  open: number,
+  close: number,
+  delta: -1 | 1,
+): { source: string; id: string } | undefined {
+  const statements = scan(source).lines,
     edge = statements.findIndex((item) => item.line === (delta === 1 ? close : open) + 1),
-    beside = eventAt(edge + delta),
-    bound = (event: ReturnType<typeof eventAt>) =>
-      event?.type === "create" || event?.type === "destroy";
-  if (!beside || bound(beside) || (delta === -1 && bound(eventAt(edge - 2)))) return same;
-  const there = beside.line - 1,
+    beside = passable(eventsAt(diagram, statements), edge, delta);
+  if (!beside) return undefined;
+  const lines = linesOf(source),
+    there = beside.line - 1,
     own = indentOf(lines[open]),
-    border = indentOf(lines[there]);
-  let indent = own;
-  if (beside.type === "start" || beside.type === "end") {
-    if ((beside.type === "start") === (delta === 1)) {
-      const next = statements[edge + 2 * delta],
-        inner = next ? indentOf(lines[next.line - 1]) : "";
-      indent = inner.length > border.length ? inner : deeper(border);
-    } else indent = border;
-  }
-  const block = lines
+    indent = passingIndent(lines, statements, beside, edge, delta, own),
+    block = lines
       .slice(open, close + 1)
       .map((line) => (line.startsWith(own) ? indent + line.slice(own.length) : line)),
-    passed = lines[there],
-    result = (
+    result = passed(lines, block, open, close, there, delta),
+    at = delta === 1 ? there - (close - open) : there,
+    id = startAt(result, at + 1, diagram.events.length);
+  return id ? { source: result, id } : undefined;
+}
+
+/** The event a fragment passes from its border at a place, where it can: no `create` or `destroy` with its message. */
+function passable(
+  eventAt: (position: number) => SequenceDiagram["events"][number] | undefined,
+  edge: number,
+  delta: -1 | 1,
+) {
+  const beside = eventAt(edge + delta);
+  if (!beside || isBound(beside) || (delta === -1 && isBound(eventAt(edge - 2)))) return undefined;
+  return beside;
+}
+
+/** The lines with a block of them, from `open` to `close`, moved past the line `there`. */
+function passed(
+  lines: string[],
+  block: string[],
+  open: number,
+  close: number,
+  there: number,
+  delta: -1 | 1,
+): string {
+  const line = lines[there],
+    order =
       delta === 1
         ? [
             ...lines.slice(0, open),
-            passed,
+            line,
             ...lines.slice(close + 1, there),
             ...block,
             ...lines.slice(there + 1),
@@ -906,19 +1074,20 @@ export function moveFragment(
             ...lines.slice(0, there),
             ...block,
             ...lines.slice(there + 1, open),
-            passed,
+            line,
             ...lines.slice(close + 1),
-          ]
-    ).join("\n"),
-    at = delta === 1 ? there - (close - open) : there;
+          ];
+  return order.join("\n");
+}
+
+/** The id of the fragment that opens on a line (from 1) of a source that reads with as many events as before. */
+function startAt(source: string, line: number, events: number): string | undefined {
   try {
-    const moved = parseSequenceDiagram(result),
-      now = moved.events.find((event) => event.type === "start" && event.line === at + 1);
-    return now?.type === "start" && moved.events.length === diagram.events.length
-      ? { source: result, id: now.id }
-      : same;
+    const moved = parseSequenceDiagram(source),
+      now = moved.events.find((event) => event.type === "start" && event.line === line);
+    return now?.type === "start" && moved.events.length === events ? now.id : undefined;
   } catch {
-    return same;
+    return undefined;
   }
 }
 
@@ -933,48 +1102,75 @@ export function moveFragment(
  */
 export function renameSequence(source: string, id: string, label: string): string {
   const diagram = parseSequenceDiagram(source),
-    lines = linesOf(source),
-    text = textOf(label);
-  const note = noteOf(diagram, id),
+    note = noteOf(diagram, id),
     fragment = diagram.events.find((event) => event.type === "start" && event.id === id);
-  if (note || fragment) {
-    const index = (note ?? fragment)!.line - 1,
-      statement = lines[index].trim(),
-      parts = statement.match(NOTE),
-      keyword = statement.match(/^\w+/)![0];
-    if (note ? !parts || !text : keyword === "rect") return source;
-    lines[index] =
-      indentOf(lines[index]) +
-      (note
-        ? `${parts![1]}${parts![2]}${parts![3]} ${text}`
-        : `${keyword}${text ? ` ${text}` : ""}`);
-    const result = lines.join("\n");
-    try {
-      return sameShape(parseSequenceDiagram(result), diagram) ? result : source;
-    } catch {
-      return source;
-    }
-  }
+  if (note || fragment) return retext(source, diagram, (note ?? fragment)!.line - 1, !!note, label);
   const box = boxOf(diagram, id);
-  if (box !== null) {
-    const index = diagram.boxes[box].line - 1,
-      rest = lines[index].trim().replace(/^box\s*/, "");
-    lines[index] = boxLine(indentOf(lines[index]), rest.match(COLOR)?.[0].trim() ?? "", label);
-    return lines.join("\n");
-  }
+  if (box !== null) return renameBox(source, diagram.boxes[box].line - 1, label);
   const who = participantOf(diagram, id);
-  if (who === null) return source;
-  const declared = declarations(source).filter((item) => item.id === who),
-    // The last alias is the one that shows.
+  return who === null ? source : renameParticipant(source, diagram, who, textOf(label));
+}
+
+/**
+ * The source with a note's text or a fragment's condition another one: a note keeps the text it
+ * has for an empty one, and a `rect` has no condition.
+ */
+function retext(
+  source: string,
+  diagram: SequenceDiagram,
+  index: number,
+  note: boolean,
+  label: string,
+): string {
+  const lines = linesOf(source),
+    text = textOf(label),
+    statement = lines[index].trim(),
+    parts = statement.match(NOTE),
+    keyword = statement.match(/^\w+/)![0];
+  if (note ? !parts || !text : keyword === "rect") return source;
+  lines[index] =
+    indentOf(lines[index]) +
+    (note ? `${parts![1]}${parts![2]}${parts![3]} ${text}` : `${keyword}${text ? ` ${text}` : ""}`);
+  return sameShapeAs(lines.join("\n"), diagram) ?? source;
+}
+
+/** A source that holds the same statements in the same order as a diagram; undefined where it does not. */
+function sameShapeAs(result: string, diagram: SequenceDiagram): string | undefined {
+  try {
+    return sameShape(parseSequenceDiagram(result), diagram) ? result : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** The source with a box's label another one, its colour kept. */
+function renameBox(source: string, index: number, label: string): string {
+  const lines = linesOf(source),
+    rest = lines[index].trim().replace(/^box\s*/, "");
+  lines[index] = boxLine(indentOf(lines[index]), rest.match(COLOR)?.[0].trim() ?? "", label);
+  return lines.join("\n");
+}
+
+/**
+ * The source with a participant's name the alias of its last declaration that has one, or its
+ * first; a participant only messages name is declared before the line that first names it, after
+ * those the same line names before it.
+ */
+function renameParticipant(
+  source: string,
+  diagram: SequenceDiagram,
+  who: string,
+  text: string,
+): string {
+  const lines = linesOf(source),
+    declared = declarations(source).filter((item) => item.id === who),
     found = declared.findLast((item) => item.alias !== undefined) ?? declared[0],
-    named = (keywords: string, name: string) =>
-      `${keywords}${name}${text && text !== name ? ` as ${text}` : ""}`;
+    named = (keywords: string) => `${keywords}${who}${text && text !== who ? ` as ${text}` : ""}`;
   if (found) {
-    lines[found.index] = indentOf(lines[found.index]) + named(found.keywords, who);
+    lines[found.index] = indentOf(lines[found.index]) + named(found.keywords);
     return lines.join("\n");
   }
   if (!text || text === who) return source;
-  // Declared before the line that first names it, after those the same line names before it.
   const first = diagram.participants.get(who)!.line,
     together = [...diagram.participants.values()].filter((item) => item.line === first),
     indent = indentOf(lines[first - 1]);
@@ -984,8 +1180,7 @@ export function renameSequence(source: string, id: string, label: string): strin
     ...together
       .slice(0, together.findIndex((item) => item.id === who) + 1)
       .map(
-        (item) =>
-          `${indent}${item.id === who ? named("participant ", who) : `participant ${item.id}`}`,
+        (item) => `${indent}${item.id === who ? named("participant ") : `participant ${item.id}`}`,
       ),
   );
   return lines.join("\n");
@@ -1068,93 +1263,177 @@ export function removeSequence(source: string, ids: Iterable<string>): string {
       all.filter((id) => !frames.includes(id)),
     );
   const diagram = parseSequenceDiagram(source),
-    lines = linesOf(source),
     named = new Set(all),
-    events = diagram.events;
-  const participants = [...diagram.participants.values()],
-    gone = new Set<string>(),
-    dropped = new Set<number>(),
-    rewritten = new Map<number, string>();
+    removal: Removal = {
+      source,
+      diagram,
+      lines: linesOf(source),
+      named,
+      gone: goneParticipants(diagram, named),
+      dropped: new Set(),
+      rewritten: new Map(),
+      removed: new Set(),
+      emptied: [],
+    };
+  dropBoxes(removal);
+  removeEvents(removal);
+  const unsigned = unsignBars(removal);
+  settleCreations(removal);
+  dropEmptied(removal);
+  dropLines(removal);
+  rewriteUnsigned(removal, unsigned);
+  const declared = redeclared(removal, mentionsOf(removal));
+  return removal.lines
+    .flatMap((line, index) => [
+      ...(declared.get(index) ?? []),
+      ...(removal.dropped.has(index) ? [] : [removal.rewritten.get(index) ?? line]),
+    ])
+    .join("\n");
+}
+
+/** What a removal takes, as it is worked out: participants, events and lines. */
+interface Removal {
+  source: string;
+  diagram: SequenceDiagram;
+  lines: string[];
+  /** The ids chosen. */
+  named: Set<string>;
+  /** The participants that go. */
+  gone: Set<string>;
+  /** The lines that go, and the lines written anew. */
+  dropped: Set<number>;
+  rewritten: Map<number, string>;
+  /** The events that go, by index. */
+  removed: Set<number>;
+  /** The lines of the fragments that go as they hold nothing any more, from their start to their end. */
+  emptied: [number, number][];
+}
+
+/** The participants chosen, and those of the boxes chosen. */
+function goneParticipants(diagram: SequenceDiagram, named: Set<string>): Set<string> {
+  const gone = new Set<string>();
   for (const id of named) {
     const who = id.startsWith("head:") ? participantOf(diagram, id) : null,
       box = boxOf(diagram, id);
     if (who !== null) gone.add(who);
-    if (box !== null) for (const item of participants) if (item.box === box) gone.add(item.id);
+    if (box !== null)
+      for (const item of diagram.participants.values()) if (item.box === box) gone.add(item.id);
   }
+  return gone;
+}
+
+/** Drops the lines of the boxes chosen, and of those that keep no participant. */
+function dropBoxes({ source, diagram, named, gone, dropped }: Removal) {
+  const participants = [...diagram.participants.values()];
   diagram.boxes.forEach((box, number) => {
     const members = participants.filter((item) => item.box === number);
     if (named.has(`box${number}`) || (members.length && members.every((item) => gone.has(item.id))))
       dropped.add(box.line - 1).add(boxEnd(source, diagram, box.line));
   });
+}
 
-  // The events that go, by index.
-  const removed = new Set<number>();
-  events.forEach((event, index) => {
+/** Marks the events that go: the messages chosen or of a participant that goes, the notes, and what concerns that participant alone. */
+function removeEvents(removal: Removal) {
+  const { diagram, named, gone, removed } = removal;
+  diagram.events.forEach((event, index) => {
     if (event.type === "message") {
       if (named.has(event.id) || gone.has(event.from) || gone.has(event.to)) removed.add(index);
-    } else if (event.type === "note") {
-      const left = event.who.filter((who) => !gone.has(who));
-      if (!left.length || named.has(event.id)) removed.add(index);
-      else if (left.length < event.who.length) {
-        const line = lines[event.line - 1],
-          match = line.match(/^(\s*note\s+over\s+)[^:]+?(\s*:.*)$/i);
-        if (match) rewritten.set(event.line - 1, `${match[1]}${left.join(",")}${match[2]}`);
-      }
-    } else if ("who" in event && gone.has(event.who)) removed.add(index);
+    } else if (event.type === "note") removeNote(removal, event, index);
+    else if ("who" in event && gone.has(event.who)) removed.add(index);
   });
+}
 
-  // A bar that loses one end loses the other: a statement goes, a message keeps all but its sign.
+/** Marks a note that goes, chosen or over participants that all go; one over two keeps the other. */
+function removeNote(
+  { lines, named, gone, removed, rewritten }: Removal,
+  event: { id: string; who: string[]; line: number },
+  index: number,
+) {
+  const left = event.who.filter((who) => !gone.has(who));
+  if (!left.length || named.has(event.id)) removed.add(index);
+  else if (left.length < event.who.length) {
+    const match = lines[event.line - 1].match(/^(\s*note\s+over\s+)[^:]+?(\s*:.*)$/i);
+    if (match) rewritten.set(event.line - 1, `${match[1]}${left.join(",")}${match[2]}`);
+  }
+}
+
+/**
+ * A bar that loses one end loses the other: a statement goes, a message keeps all but its sign.
+ * Returns the messages that lose their sign, by index.
+ */
+function unsignBars({ diagram, removed }: Removal): Set<number> {
   const unsigned = new Set<number>();
-  for (const pair of bars(events)) {
+  for (const pair of bars(diagram.events)) {
     if (removed.has(pair[0]) === removed.has(pair[1])) continue;
     const other = removed.has(pair[0]) ? pair[1] : pair[0];
-    if (events[other].type === "message") unsigned.add(other);
+    if (diagram.events[other].type === "message") unsigned.add(other);
     else removed.add(other);
   }
+  return unsigned;
+}
 
-  // A participant no message creates any more stands at the top; a destruction needs its message.
-  const stays = (index: number) => !removed.has(index);
+/** A participant no message creates any more stands at the top; a destruction needs its message. */
+function settleCreations({ diagram, lines, removed, rewritten }: Removal) {
+  const { events } = diagram;
   events.forEach((event, index) => {
-    if (!stays(index) || (event.type !== "create" && event.type !== "destroy")) return;
-    const follows = events.some(
-      (other, at) =>
-        at > index &&
-        stays(at) &&
-        other.type === "message" &&
-        (other.to === event.who || (event.type === "destroy" && other.from === event.who)),
-    );
-    if (follows) return;
+    if (removed.has(index) || (event.type !== "create" && event.type !== "destroy")) return;
+    if (followed(events, removed, index, event)) return;
     if (event.type === "destroy") removed.add(index);
     else rewritten.set(event.line - 1, lines[event.line - 1].replace(/^(\s*)create\s+/, "$1"));
   });
+}
 
-  // Fragments that held something removed and hold no message or note any more.
-  const opened: number[] = [],
-    emptied: [number, number][] = [];
+/** Whether a message that stays follows a `create` or a `destroy` and makes or ends its participant. */
+function followed(
+  events: SequenceDiagram["events"],
+  removed: Set<number>,
+  index: number,
+  event: { type: string; who: string },
+) {
+  return events.some(
+    (other, at) =>
+      at > index &&
+      !removed.has(at) &&
+      other.type === "message" &&
+      (other.to === event.who || (event.type === "destroy" && other.from === event.who)),
+  );
+}
+
+/** Drops the fragments that held something removed and hold no message or note any more. */
+function dropEmptied({ diagram, removed, dropped, emptied }: Removal) {
+  const { events } = diagram,
+    opened: number[] = [],
+    border = (at: number) => ["start", "else", "end"].includes(events[at].type);
   events.forEach((event, index) => {
     if (event.type === "start") opened.push(index);
     if (event.type !== "end") return;
     const start = opened.pop()!,
       inside = events.slice(start + 1, index).map((_, offset) => start + 1 + offset);
-    const border = (at: number) => ["start", "else", "end"].includes(events[at].type);
     if (
-      inside.some((at) => removed.has(at) && !border(at)) &&
-      inside.every((at) => removed.has(at) || border(at))
-    ) {
-      for (let line = events[start].line - 1; line < event.line; line++) dropped.add(line);
-      emptied.push([events[start].line - 1, event.line - 1]);
-    }
+      !inside.some((at) => removed.has(at) && !border(at)) ||
+      !inside.every((at) => removed.has(at) || border(at))
+    )
+      return;
+    for (let line = events[start].line - 1; line < event.line; line++) dropped.add(line);
+    emptied.push([events[start].line - 1, event.line - 1]);
   });
+}
 
-  for (const index of removed) dropped.add(events[index].line - 1);
+/** Drops the lines of the events that go, and the declarations and decorations of the participants that go. */
+function dropLines({ source, diagram, removed, dropped, gone }: Removal) {
+  for (const index of removed) dropped.add(diagram.events[index].line - 1);
   for (const item of declarations(source)) if (gone.has(item.id)) dropped.add(item.index);
   // What only decorates a participant: its links and properties.
   for (const { text, line } of scan(source).lines) {
     const match = text.match(/^(?:links?|properties|details)\s+([^:]+?)\s*:/);
     if (match && gone.has(match[1])) dropped.add(line - 1);
   }
+}
+
+/** Writes the messages that lose their sign anew, where they stay. */
+function rewriteUnsigned({ diagram, lines, dropped, rewritten }: Removal, unsigned: Set<number>) {
   for (const index of unsigned) {
-    const at = events[index].line - 1,
+    const at = diagram.events[index].line - 1,
       parts = messageParts(lines[at]);
     if (parts && !dropped.has(at))
       rewritten.set(
@@ -1166,54 +1445,71 @@ export function removeSequence(source: string, ids: Iterable<string>): string {
         }),
       );
   }
-  // The participants each line names, in the order it names them.
+}
+
+/** The participants each line names, in the order it names them, by the index of the line. */
+function mentionsOf({ source, diagram }: Removal): Map<number, string[]> {
   const mentions = new Map<number, string[]>(),
     mention = (index: number, ...who: string[]) =>
       mentions.set(index, [...(mentions.get(index) ?? []), ...who]);
   for (const item of declarations(source)) mention(item.index, item.id);
-  for (const event of events) {
+  for (const event of diagram.events) {
     if (event.type === "message") mention(event.line - 1, event.from, event.to);
     else if (event.type === "note") mention(event.line - 1, ...event.who);
     else if ("who" in event && event.type !== "create") mention(event.line - 1, event.who);
   }
-  // Where each participant that stays is named first: as the source stands, and once the lines go.
-  const staying = participants.filter((item) => !gone.has(item.id)),
-    place = (who: string, kept: boolean): [number, number] => {
-      for (const [index, list] of [...mentions].toSorted((a, b) => a[0] - b[0]))
-        if (list.includes(who) && !(kept && dropped.has(index))) return [index, list.indexOf(who)];
-      return [Infinity, 0];
-    },
-    earlier = (a: [number, number], b: [number, number]) =>
-      a[0] < b[0] || (a[0] === b[0] && a[1] < b[1]);
-  // A participant that would be gone, or stand behind one of a later column, is declared in its
-  // place. From the last column on: each is measured against where the later ones come to stand.
-  const declared = new Map<number, string[]>(),
+  return new Map([...mentions].toSorted((a, b) => a[0] - b[0]));
+}
+
+/** Where a participant is first named: the line and its place in the line; with `dropped`, once those lines go. */
+function namedFirst(
+  mentions: Map<number, string[]>,
+  who: string,
+  dropped?: Set<number>,
+): [number, number] {
+  for (const [index, list] of mentions)
+    if (list.includes(who) && !dropped?.has(index)) return [index, list.indexOf(who)];
+  return [Infinity, 0];
+}
+
+/** Whether one place in the source comes before another. */
+const earlier = (a: [number, number], b: [number, number]) =>
+  a[0] < b[0] || (a[0] === b[0] && a[1] < b[1]);
+
+/**
+ * The declarations that keep the participants that stay in their columns, by the line each comes
+ * before: a participant that would be gone, or stand behind one of a later column, is declared in
+ * its place. From the last column on: each is measured against where the later ones come to stand.
+ */
+function redeclared(removal: Removal, mentions: Map<number, string[]>): Map<number, string[]> {
+  const { diagram, gone, dropped } = removal,
+    staying = [...diagram.participants.values()].filter((item) => !gone.has(item.id)),
+    declared = new Map<number, string[]>(),
     stands = new Map<string, [number, number]>();
   staying.toReversed().forEach((item, behind) => {
-    const first = place(item.id, false),
-      left = place(item.id, true),
+    const first = namedFirst(mentions, item.id),
+      left = namedFirst(mentions, item.id, dropped),
       later = staying.slice(staying.length - behind);
     stands.set(item.id, left);
     if (!dropped.has(first[0])) return;
     if (left[0] !== Infinity && !later.some((other) => earlier(stands.get(other.id)!, left)))
       return;
-    // As deep as the outermost fragment that goes around it.
-    const outer = Math.min(
-      first[0],
-      ...emptied.filter(([from, to]) => from <= first[0] && first[0] <= to).map(([from]) => from),
-    );
     stands.set(item.id, first);
     declared.set(first[0], [
-      `${indentOf(lines[outer])}participant ${item.id}`,
+      declaration(removal, first[0], item.id),
       ...(declared.get(first[0]) ?? []),
     ]);
   });
-  return lines
-    .flatMap((line, index) => [
-      ...(declared.get(index) ?? []),
-      ...(dropped.has(index) ? [] : [rewritten.get(index) ?? line]),
-    ])
-    .join("\n");
+  return declared;
+}
+
+/** A declaration of a participant before a line, as deep as the outermost fragment that goes around it. */
+function declaration({ lines, emptied }: Removal, line: number, who: string): string {
+  const outer = Math.min(
+    line,
+    ...emptied.filter(([from, to]) => from <= line && line <= to).map(([from]) => from),
+  );
+  return `${indentOf(lines[outer])}participant ${who}`;
 }
 
 /** A statement with one participant id written as another, wherever it stands as an id. */
@@ -1252,29 +1548,47 @@ function withParticipant(text: string, from: string, to: string): string {
  */
 export function renameParticipantId(source: string, id: string, newId: string): string {
   const diagram = parseSequenceDiagram(source),
-    who = participantOf(diagram, id),
-    lines = linesOf(source);
+    who = participantOf(diagram, id);
   if (who === null || !canBeId(newId) || diagram.participants.has(newId)) return source;
-  const fragments = new Set(
-    diagram.events.flatMap((event) =>
-      event.type === "start" || event.type === "else" ? [event.line] : [],
-    ),
-  );
-  for (const { text, line } of scan(source).lines.slice(1))
-    if (!fragments.has(line) && !/^(title|autonumber|accTitle|accDescr|box|end)\b/.test(text))
-      lines[line - 1] = indentOf(lines[line - 1]) + withParticipant(text, who, newId);
-  const result = lines.join("\n"),
+  const result = withParticipantEverywhere(source, diagram, who, newId),
     wanted = columns(diagram).map((item) => (item === who ? newId : item));
+  return renamedTo(result, newId, wanted) ?? source;
+}
+
+/**
+ * A source with a participant under a new id, its columns as wanted, and without an alias that
+ * says what the id says; undefined where it does not read so.
+ */
+function renamedTo(result: string, newId: string, wanted: string[]): string | undefined {
   try {
     const renamed = parseSequenceDiagram(result);
-    if (columns(renamed).join("\n") !== wanted.join("\n")) return source;
+    if (columns(renamed).join("\n") !== wanted.join("\n")) return undefined;
     return renamed.participants.get(newId)!.label === newId &&
       declarations(result).some((item) => item.id === newId && item.alias !== undefined)
       ? renameSequence(result, `head:${newId}`, newId)
       : result;
   } catch {
-    return source;
+    return undefined;
   }
+}
+
+/** The source with a participant's id written as another on every statement that can name it. */
+function withParticipantEverywhere(
+  source: string,
+  diagram: SequenceDiagram,
+  who: string,
+  newId: string,
+): string {
+  const lines = linesOf(source),
+    fragments = new Set(
+      diagram.events.flatMap((event) =>
+        event.type === "start" || event.type === "else" ? [event.line] : [],
+      ),
+    );
+  for (const { text, line } of scan(source).lines.slice(1))
+    if (!fragments.has(line) && !/^(title|autonumber|accTitle|accDescr|box|end)\b/.test(text))
+      lines[line - 1] = indentOf(lines[line - 1]) + withParticipant(text, who, newId);
+  return lines.join("\n");
 }
 
 /**
@@ -1326,16 +1640,6 @@ export function retitleSequence(
   return { source: renameSequence(source, id, name), id };
 }
 
-/** The lines strictly between two others, one step less indented where they stand deeper than the first. */
-function dedent(lines: string[], open: number, close: number) {
-  const outer = indentOf(lines[open]),
-    inside = lines.slice(open + 1, close).find((line) => line.trim()),
-    inner = inside ? indentOf(inside) : outer;
-  if (inner.length > outer.length && inner.startsWith(outer))
-    for (let index = open + 1; index < close; index++)
-      if (lines[index].startsWith(inner)) lines[index] = outer + lines[index].slice(inner.length);
-}
-
 /**
  * Takes the frame of a fragment away and keeps what it holds: the line that opens it, the lines
  * that divide it (`else`, `and`, `option`) and its `end` go, the statements between them stand one
@@ -1371,28 +1675,10 @@ export function wrapMessages(
     { events } = diagram,
     lines = linesOf(source),
     none = { source, id: "" },
-    chosen = new Set(edges),
-    at = events.flatMap((event, index) =>
-      event.type === "message" && chosen.has(event.id) ? [index] : [],
-    );
-  if (!at.length || at.length < chosen.size || !FRAGMENTS.includes(kind)) return none;
-  let first = at[0],
-    last = at.at(-1)!;
-  // The statement that creates or destroys a participant belongs to the message below it.
-  if (["create", "destroy"].includes(events[first - 1]?.type)) first--;
-  let depth = 0;
-  for (let index = first; index <= last; index++) {
-    const event = events[index];
-    if (event.type === "message" && !chosen.has(event.id)) return none;
-    if (event.type === "start") depth++;
-    else if (event.type === "end" && --depth < 0) return none;
-    else if (event.type === "else" && !depth) return none;
-  }
-  // The fragments that open in the run close with it.
-  for (; depth && events[last + 1]?.type === "end"; depth--) last++;
-  if (depth) return none;
-  const open = events[first].line - 1,
-    close = events[last].line - 1,
+    run = FRAGMENTS.includes(kind) ? runOf(events, new Set(edges)) : undefined;
+  if (!run) return none;
+  const open = events[run.first].line - 1,
+    close = events[run.last].line - 1,
     indent = indentOf(lines[open]),
     text = textOf(label),
     step = deeper(indent).slice(indent.length);
@@ -1400,15 +1686,58 @@ export function wrapMessages(
     if (lines[index].trim()) lines[index] = step + lines[index];
   lines.splice(close + 1, 0, `${indent}end`);
   lines.splice(open, 0, `${indent}${kind}${text ? ` ${text}` : ""}`);
-  const result = lines.join("\n");
+  const result = lines.join("\n"),
+    id = wrappedAs(result, open + 1, diagram);
+  return id ? { source: result, id } : none;
+}
+
+/**
+ * The events from the first chosen message to the last, where they are a run: no other message
+ * among them, and every fragment that opens in the run closing with it. The statement that creates
+ * or destroys a participant belongs to the message below it.
+ */
+function runOf(events: SequenceDiagram["events"], chosen: Set<string>) {
+  const at = events.flatMap((event, index) =>
+    event.type === "message" && chosen.has(event.id) ? [index] : [],
+  );
+  if (!at.length || at.length < chosen.size) return undefined;
+  const first = isBound(events[at[0] - 1]) ? at[0] - 1 : at[0],
+    last = at.at(-1)!,
+    depth = depthOf(events, first, last, chosen);
+  if (depth === undefined) return undefined;
+  // The fragments that open in the run close with it.
+  const closing = events.slice(last + 1, last + 1 + depth).filter((event) => event.type === "end");
+  return closing.length === depth ? { first, last: last + depth } : undefined;
+}
+
+/** How many fragments open between two events and stay open; undefined where the run is broken. */
+function depthOf(
+  events: SequenceDiagram["events"],
+  first: number,
+  last: number,
+  chosen: Set<string>,
+): number | undefined {
+  let depth = 0;
+  for (const event of events.slice(first, last + 1)) {
+    if (event.type === "message" && !chosen.has(event.id)) return undefined;
+    if (event.type === "start") depth++;
+    else if (event.type === "end" && --depth < 0) return undefined;
+    else if (event.type === "else" && !depth) return undefined;
+  }
+  return depth;
+}
+
+/** The id of the fragment that opens on a line (from 1), where every participant stands in the box it stood in. */
+function wrappedAs(result: string, line: number, diagram: SequenceDiagram): string | undefined {
+  const boxes = (read: SequenceDiagram) => [...read.participants.values()].map((item) => item.box);
   try {
     const wrapped = parseSequenceDiagram(result),
-      made = wrapped.events.find((event) => event.type === "start" && event.line === open + 1),
-      boxes = (read: SequenceDiagram) => [...read.participants.values()].map((item) => item.box);
-    if (!made || !("id" in made) || boxes(wrapped).join() !== boxes(diagram).join()) return none;
-    return { source: result, id: made.id };
+      made = wrapped.events.find((event) => event.type === "start" && event.line === line);
+    if (!made || !("id" in made) || boxes(wrapped).join() !== boxes(diagram).join())
+      return undefined;
+    return made.id;
   } catch {
-    return none;
+    return undefined;
   }
 }
 
@@ -1531,28 +1860,30 @@ export function removeFragmentBranch(source: string, id: string, index: number):
  * end. Its id stays, as its place does.
  */
 export function reverseMessage(source: string, edge: string): string {
-  const turned = (text: string): string => {
-    const lines = linesOf(text),
-      message = messageOf(parseSequenceDiagram(text), edge),
-      parts = message && messageParts(lines[message.line - 1]);
-    if (!message || !parts) return text;
-    // The sender carries the space before the arrow.
-    const gap = parts.from.match(/\s*$/)![0];
-    lines[message.line - 1] = messageLine(indentOf(lines[message.line - 1]), {
-      ...parts,
-      from: parts.to.trim() + gap,
-      to: parts.from.trim(),
-      text: parts.text?.trim(),
-    });
-    return lines.join("\n");
-  };
   const message = messageOf(parseSequenceDiagram(source), edge);
   if (!message) return source;
-  const result = turned(source);
+  const result = turned(source, edge);
   if (parses(result)) return result;
   if (!message.activate && !message.deactivate) return source;
-  const plain = turned(toggleActivation(source, edge));
+  const plain = turned(toggleActivation(source, edge), edge);
   return parses(plain) ? plain : source;
+}
+
+/** A source with a message's sender and receiver changed places. */
+function turned(text: string, edge: string): string {
+  const lines = linesOf(text),
+    message = messageOf(parseSequenceDiagram(text), edge),
+    parts = message && messageParts(lines[message.line - 1]);
+  if (!message || !parts) return text;
+  // The sender carries the space before the arrow.
+  const gap = parts.from.match(/\s*$/)![0];
+  lines[message.line - 1] = messageLine(indentOf(lines[message.line - 1]), {
+    ...parts,
+    from: parts.to.trim() + gap,
+    to: parts.from.trim(),
+    text: parts.text?.trim(),
+  });
+  return lines.join("\n");
 }
 
 /**
@@ -1688,47 +2019,67 @@ export function toggleActivation(source: string, edge: string): string {
     message = messageOf(diagram, edge);
   if (!message) return source;
   const index = events.indexOf(message),
-    pairs = bars(events),
     cut = new Set<number>();
-  /** Writes a message with another sign, or drops the statement that stands for one. */
-  const sign = (at: number, mark: "+" | "-" | "") => {
-    const event = events[at],
-      parts = event.type === "message" ? messageParts(lines[event.line - 1]) : null;
-    if (!parts) cut.add(event.line - 1);
-    else
-      lines[event.line - 1] = messageLine(indentOf(lines[event.line - 1]), {
-        ...parts,
-        sign: parts.sign.replace(/[+-]/, "") + mark,
-        text: parts.text?.trim(),
-      });
-  };
-  const next = events[index + 1],
-    stated = next?.type === "activate" && next.who === message.to ? index + 1 : -1;
-  if (message.activate || stated >= 0) {
-    const opener = message.activate ? index : stated,
-      closer = pairs.find((pair) => pair[0] === opener)?.[1];
-    sign(opener, "");
-    if (closer !== undefined) sign(closer, "");
-  } else if (message.deactivate) {
-    sign(index, "");
-    const opener = pairs.find((pair) => pair[1] === index)?.[0];
-    if (opener !== undefined) sign(opener, "");
-  } else {
-    sign(index, "+");
-    const reply = events.findIndex(
-      (event, at) =>
-        at > index &&
-        event.type === "message" &&
-        event.dashed &&
-        event.from === message.to &&
-        event.to === message.from &&
-        !event.activate &&
-        !event.deactivate,
-    );
-    if (reply >= 0 && message.from !== message.to) sign(reply, "-");
-  }
+  for (const [at, mark] of signsFor(events, message, index)) resign(lines, events[at], mark, cut);
   const result = lines.filter((_, at) => !cut.has(at)).join("\n");
   return parses(result) ? result : source;
+}
+
+/**
+ * The events whose sign a toggle writes, by index, with the sign: both ends of the bar the message
+ * opens, with its `+` or by the `activate` after it; both ends of the bar it closes with `-`; or
+ * else a `+` on it and a `-` on the reply to it.
+ */
+function signsFor(
+  events: SequenceDiagram["events"],
+  message: MessageEvent,
+  index: number,
+): [number, "+" | "-" | ""][] {
+  const next = events[index + 1],
+    stated = next?.type === "activate" && next.who === message.to ? index + 1 : -1;
+  if (message.activate) return barOf(events, index, 0);
+  if (stated >= 0) return barOf(events, stated, 0);
+  if (message.deactivate) return barOf(events, index, 1);
+  const reply = replyIndex(events, message, index);
+  return [[index, "+"], ...(reply >= 0 ? [[reply, "-"] as [number, "-"]] : [])];
+}
+
+/** Both ends of the bar an event opens (`end` 0) or closes (`end` 1), that one first, each to lose its sign. */
+function barOf(events: SequenceDiagram["events"], index: number, end: 0 | 1): [number, ""][] {
+  const pair = bars(events).find((item) => item[end] === index);
+  return [[index, ""], ...(pair ? [[pair[1 - end], ""] as [number, ""]] : [])];
+}
+
+/** The reply to a message that closes the bar it opens: the next plain dashed message from its receiver back to its sender. */
+function replyIndex(events: SequenceDiagram["events"], message: MessageEvent, index: number) {
+  if (message.from === message.to) return -1;
+  return events.findIndex(
+    (event, at) =>
+      at > index &&
+      event.type === "message" &&
+      event.dashed &&
+      event.from === message.to &&
+      event.to === message.from &&
+      !event.activate &&
+      !event.deactivate,
+  );
+}
+
+/** Writes a message with another sign, or drops the statement that stands for one. */
+function resign(
+  lines: string[],
+  event: SequenceDiagram["events"][number],
+  mark: "+" | "-" | "",
+  cut: Set<number>,
+) {
+  const parts = event.type === "message" ? messageParts(lines[event.line - 1]) : null;
+  if (!parts) cut.add(event.line - 1);
+  else
+    lines[event.line - 1] = messageLine(indentOf(lines[event.line - 1]), {
+      ...parts,
+      sign: parts.sign.replace(/[+-]/, "") + mark,
+      text: parts.text?.trim(),
+    });
 }
 
 /** Numbers the messages (`autonumber`, as the first statement) or takes the numbers away. */
@@ -1736,16 +2087,14 @@ export function setAutonumber(source: string, on: boolean): string {
   const lines = linesOf(source),
     statements = scan(source).lines,
     numbering = statements.filter((item) => /^autonumber\b/.test(item.text));
-  if (on && numbering.length && !numbering.some((item) => /\boff$/.test(item.text))) return source;
+  if (on && hasAutonumber(source)) return source;
   const cut = new Set(numbering.map((item) => item.line - 1)),
     first = statements.slice(1).find((item) => !/^(title|accTitle|accDescr)\b/.test(item.text)),
     at = first ? first.line - 1 : lines.length,
+    line = on ? [`${topIndent(source, lines)}autonumber`] : [],
     result = lines
-      .flatMap((line, index) => [
-        ...(on && index === at ? [`${topIndent(source, lines)}autonumber`] : []),
-        ...(cut.has(index) ? [] : [line]),
-      ])
-      .concat(on && at >= lines.length ? [`${topIndent(source, lines)}autonumber`] : [])
+      .flatMap((text, index) => [...(index === at ? line : []), ...(cut.has(index) ? [] : [text])])
+      .concat(at >= lines.length ? line : [])
       .join("\n");
   return parses(result) ? result : source;
 }

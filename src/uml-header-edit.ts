@@ -18,7 +18,7 @@ import { parseStateDiagram } from "./uml-state.ts";
 import { parseUseCaseDiagram } from "./uml-usecase.ts";
 
 /** The settings a diagram type has besides its title, which every type has. */
-export interface UmlSettings {
+interface UmlSettings {
   /** The way the layout runs when the source does not say; none for a type whose layout has one way. */
   direction?: Direction;
   /** Whether the type reads the `%% level` comment. */
@@ -72,39 +72,32 @@ const ACTIVITY_HEADER = /^(\s*(?:flowchart(?:-elk)?|graph|swimlane-beta))(?:([ \
 /** A diagram parsed by the parser of its type: what it says of itself. */
 function parsed(source: string): { kind: UmlKind; header: UmlHeader } {
   const kind = detectUml(source);
-  switch (kind) {
-    case "class": {
-      const { title, direction, level } = parseClassDiagram(source);
-      return { kind, header: { title, direction, level } };
-    }
-    case "state": {
-      const { title, direction, level } = parseStateDiagram(source);
-      return { kind, header: { title, direction, level } };
-    }
-    case "usecase": {
-      const { title, direction, level } = parseUseCaseDiagram(source);
-      return { kind, header: { title, direction, level } };
-    }
-    case "er": {
-      const { title, direction } = parseErDiagram(source);
-      return { kind, header: { title, direction } };
-    }
-    case "flowchart":
-    case "swimlane": {
-      const { title, direction, level } = parseFlowchart(source);
-      return { kind, header: { title, direction, level } };
-    }
-    case "sequence": {
-      const { title, level } = parseSequenceDiagram(source);
-      const numbered = scan(source).lines.some(
-        ({ text }) => AUTONUMBER.test(text) && !/\soff$/.test(text),
-      );
-      return { kind, header: { title, level, numbered } };
-    }
-    default:
-      throw new UmlError(0, "Unknown diagram type.");
-  }
+  if (!kind) throw new UmlError(0, "Unknown diagram type.");
+  return { kind, header: HEADERS[kind](source) };
 }
+
+/** What the title, direction and level of a parsed diagram are. */
+const said = ({ title, direction, level }: UmlHeader): UmlHeader => ({ title, direction, level });
+
+/** How each diagram type reads what a source says of its whole diagram. */
+const HEADERS: Record<UmlKind, (source: string) => UmlHeader> = {
+  class: (source) => said(parseClassDiagram(source)),
+  state: (source) => said(parseStateDiagram(source)),
+  usecase: (source) => said(parseUseCaseDiagram(source)),
+  er: (source) => {
+    const { title, direction } = parseErDiagram(source);
+    return { title, direction };
+  },
+  flowchart: (source) => said(parseFlowchart(source)),
+  swimlane: (source) => said(parseFlowchart(source)),
+  sequence: (source) => {
+    const { title, level } = parseSequenceDiagram(source);
+    const numbered = scan(source).lines.some(
+      ({ text }) => AUTONUMBER.test(text) && !/\soff$/.test(text),
+    );
+    return { title, level, numbered };
+  },
+};
 
 /** What a source says of its whole diagram, with the defaults of its type; throws as its parser does. */
 export function umlHeader(source: string): UmlHeader {
@@ -143,17 +136,24 @@ export function withTitle(source: string, title: string): string {
     { lines, ended } = linesOf(source),
     front = frontmatter(lines),
     line = name && `title: ${yamlTitle(name)}`;
-  if (front) {
-    const at = lines.findIndex(
-      (text, index) => index > front.open && index < front.close && /^title:/.test(text),
-    );
-    if (at >= 0) lines.splice(at, 1, ...(line ? [line] : []));
-    else if (line) lines.splice(front.open + 1, 0, line);
-    const after = frontmatter(lines)!;
-    // A block with nothing in it goes.
-    if (after.close === after.open + 1) lines.splice(after.open, 2);
-  } else if (line) lines.unshift("---", line, "---");
+  if (front) retitleFront(lines, front, line);
+  else if (line) lines.unshift("---", line, "---");
   return lines.join("\n") + (ended ? "\n" : "");
+}
+
+/**
+ * Writes a title line into a frontmatter block, in place of the one there or as its first line;
+ * none removes it, and the block with it when nothing else is in it.
+ */
+function retitleFront(lines: string[], front: { open: number; close: number }, line: string) {
+  const at = lines.findIndex(
+    (text, index) => index > front.open && index < front.close && /^title:/.test(text),
+  );
+  if (at >= 0) lines.splice(at, 1, ...(line ? [line] : []));
+  else if (line) lines.splice(front.open + 1, 0, line);
+  const after = frontmatter(lines)!;
+  // A block with nothing in it goes.
+  if (after.close === after.open + 1) lines.splice(after.open, 2);
 }
 
 /** The statement lines of a source outside every block (`{ … }`), as indexes into its lines. */
@@ -172,36 +172,59 @@ function topLevel(source: string): { index: number; text: string }[] {
 /** The settings that stand below the diagram's first line, in the order they stand there. */
 const ORDER = ["title", "direction", "level", "autonumber"] as const;
 
-/** A source's lines, with what an edit of its settings needs to know of them. */
-function linesAround(source: string, kind: UmlKind) {
+/** A source's lines, read for an edit of its settings. */
+function linesAround(source: string, kind: UmlKind): SettingLines {
   const { lines, ended } = linesOf(source),
-    header = scan(source).lines[0].line - 1,
     top = topLevel(source);
-  const indent = lines[top[0]?.index ?? -1]?.match(/^\s*/)?.[0] || "  ";
-  const rank = (text: string) =>
-    ORDER.findIndex((_, index) =>
-      [TITLE[kind] ?? /^$/, DIRECTION, LEVEL, AUTONUMBER][index].test(text.trim()),
-    );
   return {
     lines,
-    header,
+    ended,
+    header: scan(source).lines[0].line - 1,
     top,
-    /** Adds a setting's line below the first line, after the settings that come before it. */
-    add(setting: (typeof ORDER)[number], text: string) {
-      let at = header + 1;
-      while (at < lines.length && rank(lines[at]) >= 0 && rank(lines[at]) < ORDER.indexOf(setting))
-        at++;
-      lines.splice(at, 0, `${indent}${text}`);
-    },
-    /** Replaces the lines at some indexes, each with its indent, or removes them; false when there are none. */
-    replace(found: number[], text: string | undefined) {
-      for (const index of found.toReversed())
-        lines.splice(index, 1, ...(text ? [`${lines[index].match(/^\s*/)![0]}${text}`] : []));
-      return found.length > 0;
-    },
-    done: () => lines.join("\n") + (ended ? "\n" : ""),
+    indent: lines[top[0]?.index ?? -1]?.match(/^\s*/)?.[0] || "  ",
+    kind,
   };
 }
+
+/** A source's lines, with what an edit of its settings needs to know of them. */
+interface SettingLines {
+  lines: string[];
+  /** Whether the source ends with a line break. */
+  ended: boolean;
+  /** The index of the diagram's first line. */
+  header: number;
+  /** The statements outside every block. */
+  top: { index: number; text: string }[];
+  /** The indentation of a setting's line. */
+  indent: string;
+  kind: UmlKind;
+}
+
+/** Where a line stands in `ORDER`, -1 for a line that is no setting. */
+const rankOf = (kind: UmlKind, text: string) =>
+  ORDER.findIndex((_, index) =>
+    [TITLE[kind] ?? /^$/, DIRECTION, LEVEL, AUTONUMBER][index].test(text.trim()),
+  );
+
+/** Adds a setting's line below the first line, after the settings that come before it. */
+function addSetting(at: SettingLines, setting: (typeof ORDER)[number], text: string) {
+  const { lines, kind } = at,
+    before = (line: string) =>
+      rankOf(kind, line) >= 0 && rankOf(kind, line) < ORDER.indexOf(setting);
+  let index = at.header + 1;
+  while (index < lines.length && before(lines[index])) index++;
+  lines.splice(index, 0, `${at.indent}${text}`);
+}
+
+/** Replaces the lines at some indexes, each with its indent, or removes them; false when there are none. */
+function replaceLines({ lines }: SettingLines, found: number[], text: string | undefined) {
+  for (const index of found.toReversed())
+    lines.splice(index, 1, ...(text ? [`${lines[index].match(/^\s*/)![0]}${text}`] : []));
+  return found.length > 0;
+}
+
+/** The source the lines make. */
+const sourceOf = ({ lines, ended }: SettingLines) => lines.join("\n") + (ended ? "\n" : "");
 
 /** The names of the diagram types, as a sentence says them of all diagrams of the type. */
 const PLURALS: Record<UmlKind, string> = {
@@ -223,7 +246,20 @@ const PLURALS: Record<UmlKind, string> = {
  */
 export function setUmlHeader(source: string, change: UmlHeaderChange): string {
   const { kind } = parsed(source),
-    settings = SETTINGS[kind],
+    settings = SETTINGS[kind];
+  refuseUnknown(kind, change);
+  let next = change.title === undefined ? source : retitle(source, kind, change.title);
+  if (change.direction !== undefined)
+    next = redirect(next, kind, change.direction, settings.direction!);
+  if (change.level !== undefined) next = relevel(next, kind, change.level);
+  if (change.numbered !== undefined) next = renumber(next, kind, change.numbered);
+  parsed(next);
+  return next;
+}
+
+/** Throws a UmlError for a change of a setting the diagram type does not have. */
+function refuseUnknown(kind: UmlKind, change: UmlHeaderChange) {
+  const settings = SETTINGS[kind],
     plural = PLURALS[kind];
   if (change.direction !== undefined && !settings.direction)
     throw new UmlError(0, `${plural} have no direction: their lifelines always run down.`);
@@ -231,26 +267,25 @@ export function setUmlHeader(source: string, change: UmlHeaderChange): string {
     throw new UmlError(0, `${plural} have no TAM level.`);
   if (change.numbered !== undefined && !settings.numbering)
     throw new UmlError(0, `${plural} have no numbered messages.`);
-  let next = change.title === undefined ? source : retitle(source, kind, change.title);
-  if (change.direction !== undefined)
-    next = redirect(next, kind, change.direction, settings.direction!);
-  if (change.level !== undefined) {
-    const at = linesAround(next, kind),
-      // The comment may stand before the first line too.
-      found = at.lines.flatMap((text, index) => (LEVEL.test(text.trim()) ? [index] : [])),
-      text = change.level && `%% level ${change.level}`;
-    if (!at.replace(found, text || undefined) && text) at.add("level", text);
-    next = at.done();
-  }
-  if (change.numbered !== undefined) {
-    const at = linesAround(next, kind),
-      found = at.top.filter(({ text }) => AUTONUMBER.test(text)).map(({ index }) => index);
-    if (!change.numbered) at.replace(found, undefined);
-    else if (!found.length) at.add("autonumber", "autonumber");
-    next = at.done();
-  }
-  parsed(next);
-  return next;
+}
+
+/** A source at another level, or at none with an empty one. */
+function relevel(source: string, kind: UmlKind, level: Level | ""): string {
+  const at = linesAround(source, kind),
+    // The comment may stand before the first line too.
+    found = at.lines.flatMap((text, index) => (LEVEL.test(text.trim()) ? [index] : [])),
+    text = level && `%% level ${level}`;
+  if (!replaceLines(at, found, text || undefined) && text) addSetting(at, "level", text);
+  return sourceOf(at);
+}
+
+/** A source whose messages are numbered or not. */
+function renumber(source: string, kind: UmlKind, numbered: boolean): string {
+  const at = linesAround(source, kind),
+    found = at.top.filter(({ text }) => AUTONUMBER.test(text)).map(({ index }) => index);
+  if (!numbered) replaceLines(at, found, undefined);
+  else if (!found.length) addSetting(at, "autonumber", "autonumber");
+  return sourceOf(at);
 }
 
 /**
@@ -267,9 +302,9 @@ function redirect(source: string, kind: UmlKind, direction: Direction, usual: Di
   } else {
     const found = at.top.filter(({ text }) => DIRECTION.test(text)).map(({ index }) => index),
       text = `direction ${direction}`;
-    if (!at.replace(found, text) && direction !== usual) at.add("direction", text);
+    if (!replaceLines(at, found, text) && direction !== usual) addSetting(at, "direction", text);
   }
-  return at.done();
+  return sourceOf(at);
 }
 
 /** Whether a source's frontmatter says a title. */
@@ -291,9 +326,9 @@ function retitle(source: string, kind: UmlKind, title: string): string {
   if (!found.length) return withTitle(source, name);
   for (const { index, text } of found.toReversed()) {
     const [, gap] = text.match(statement!)!;
-    at.replace([index], name ? `title${gap}${name}` : undefined);
+    replaceLines(at, [index], name ? `title${gap}${name}` : undefined);
   }
-  const kept = at.done();
+  const kept = sourceOf(at);
   return frontTitle(kept) ? withTitle(kept, name) : kept;
 }
 
