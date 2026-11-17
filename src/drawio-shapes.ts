@@ -152,7 +152,7 @@ export const TAMSHAPES = {
 } as const;
 
 /** The colors an exported diagram is drawn in: the light theme of the editor. */
-export const EXPORT_COLORS: DiagramColors = {
+const EXPORT_COLORS: DiagramColors = {
   background: "#ffffff",
   text: "#1b1c1f",
   secondary: "#3f4146",
@@ -300,7 +300,7 @@ function dropStraight(bends: Point[], first: Point, last: Point): Point[] {
 }
 
 /** The share (0 to 1) of a path's length at which the point nearest `point` lies. */
-export function shareAlong(path: Point[], point: Point): number {
+function shareAlong(path: Point[], point: Point): number {
   let total = 0,
     best = { distance: Infinity, at: 0 };
   const lengths = path.slice(1).map((p, i) => Math.hypot(p.x - path[i].x, p.y - path[i].y));
@@ -326,7 +326,7 @@ export function shareAlong(path: Point[], point: Point): number {
 }
 
 /** The point at a share of a path's length. */
-export function pointAlong(path: Point[], share: number): Point {
+function pointAlong(path: Point[], share: number): Point {
   const lengths = path.slice(1).map((p, i) => Math.hypot(p.x - path[i].x, p.y - path[i].y));
   let left = share * lengths.reduce((a, b) => a + b, 0);
   for (let i = 0; i < lengths.length; i++) {
@@ -390,8 +390,8 @@ export function arrowAt(style: Style, end: "start" | "end"): string {
 /** Whether an end of an edge has an arrow head of any kind. */
 export const hasArrow = (style: Style, end: "start" | "end") => arrowAt(style, end) !== "none";
 
-/** Whether an arrow head at an end is filled (`endFill`, on unless 0). */
-export const filledAt = (style: Style, end: "start" | "end") => style.get(`${end}Fill`) !== "0";
+/** How a warning names a cell: its label in quotes, else `fallback`. */
+export const quotedOr = (label: string, fallback: string) => (label ? `“${label}”` : fallback);
 
 /** Whether a vertex is drawn dashed. */
 export const dashed = (style: Style) => isOn(style, "dashed");

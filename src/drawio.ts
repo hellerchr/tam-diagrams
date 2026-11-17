@@ -72,7 +72,7 @@ const NAMES: Record<DrawioKind, string> = {
 };
 
 /** The kind of a source, if draw.io files carry it; throws DrawioError for the other types. */
-export function drawioKind(source: string): DrawioKind {
+function drawioKind(source: string): DrawioKind {
   const uml = detectUml(source);
   if (!uml) return "tam";
   if (uml === "flowchart" || uml === "swimlane" || uml === "state" || uml === "sequence")
@@ -168,25 +168,30 @@ export interface ImportOptions {
  * Throws DrawioError for a file that is no draw.io diagram or a page with nothing to read.
  */
 export async function importDrawio(text: string, options: ImportOptions = {}): Promise<Imported> {
-  const pages = await readDrawio(text);
-  const page =
-    typeof options.page === "string"
-      ? pages.find((item) => item.name === options.page)
-      : pages[options.page ?? 0];
-  if (!page) throw new DrawioError(`The file has no page ${JSON.stringify(options.page)}.`);
+  const page = pageOf(await readDrawio(text), options.page);
   const drawing = new Drawing(page);
   if (!drawing.parts.length) throw new DrawioError(`The page “${page.name}” is empty.`);
   const said = drawing.data.tamDiagram as DrawioKind | undefined;
-  let kind = options.kind ?? (said && said in NAMES ? said : undefined);
-  if (!kind) {
-    const scored = TYPES.map((type) => ({ type, score: type.likeness(drawing) })).toSorted(
-      (a, b) => b.score - a.score,
+  const kind = options.kind ?? (said && said in NAMES ? said : undefined);
+  return (kind ? typeOf(kind) : likeliest(drawing)).read(drawing);
+}
+
+/** The page asked for, by its index or its name; the first by default. */
+function pageOf(pages: Page[], wanted: number | string | undefined): Page {
+  const page =
+    typeof wanted === "string" ? pages.find((item) => item.name === wanted) : pages[wanted ?? 0];
+  if (!page) throw new DrawioError(`The file has no page ${JSON.stringify(wanted)}.`);
+  return page;
+}
+
+/** The type a page that does not say looks most like. */
+function likeliest(drawing: Drawing): DrawioType {
+  const scored = TYPES.map((type) => ({ type, score: type.likeness(drawing) })).toSorted(
+    (a, b) => b.score - a.score,
+  );
+  if (!scored[0].score)
+    throw new DrawioError(
+      `Nothing on the page “${drawing.name}” reads as a TAM block, activity, state machine or sequence diagram.`,
     );
-    if (!scored[0].score)
-      throw new DrawioError(
-        `Nothing on the page “${page.name}” reads as a TAM block, activity, state machine or sequence diagram.`,
-      );
-    return scored[0].type.read(drawing);
-  }
-  return typeOf(kind).read(drawing);
+  return scored[0].type;
 }
