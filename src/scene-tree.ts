@@ -1,6 +1,6 @@
 /** What holds what in a scene, read from its geometry: the scene model has no parents. */
 
-import { type Box, inside, type Scene, type SceneShape, type SceneText } from "./scene.ts";
+import { type Box, inside, type Scene, type SceneShape } from "./scene.ts";
 
 /** What holds what in a scene: the container around each shape, and the shapes in each container. */
 export interface SceneTree {
@@ -9,6 +9,12 @@ export interface SceneTree {
 }
 
 const area = (box: Box) => box.width * box.height;
+
+/** Whether `outer` holds `inner` at any depth, in a tree whose parts know their parent. */
+export function holdsDeep<T extends { parent?: T | null }>(outer: T, inner: T): boolean {
+  for (let up = inner.parent; up; up = up.parent) if (up === outer) return true;
+  return false;
+}
 
 /**
  * The containers of a scene as a tree. A scene has no parents: a shape belongs to the smallest
@@ -41,13 +47,4 @@ export function chainOf(tree: SceneTree, id: string): string[] {
   for (let at: string | undefined = id; at !== undefined && !chain.includes(at);)
     (chain.push(at), (at = tree.parent.get(at)));
   return chain;
-}
-
-/** Moves texts with their boxes. */
-export function shiftTexts(texts: SceneText[], dx: number, dy: number) {
-  for (const text of texts) {
-    text.x += dx;
-    text.y += dy;
-    text.box = { ...text.box, x: text.box.x + dx, y: text.box.y + dy };
-  }
 }

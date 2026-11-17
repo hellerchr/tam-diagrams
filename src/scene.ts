@@ -185,6 +185,13 @@ export const centerOf = (box: Box): Point => ({
   y: box.y + box.height / 2,
 });
 
+/** How far apart the middles of two boxes are, along x and y together. */
+export function middlesApart(a: Box, b: Box): number {
+  const ca = centerOf(a),
+    cb = centerOf(b);
+  return Math.abs(ca.x - cb.x) + Math.abs(ca.y - cb.y);
+}
+
 /** A box grown by `by` on every side (shrunk when negative). */
 export const grow = (box: Box, by: number): Box => ({
   x: box.x - by,

@@ -59,6 +59,7 @@ import {
   type TamEdge,
   type TamNode,
 } from "./tam.ts";
+import { holdsDeep } from "./scene-tree.ts";
 import { holder } from "./tam-edit.ts";
 import { SMALL } from "./text.ts";
 
@@ -1504,8 +1505,8 @@ class TamPage {
 
   /** A delegation: a line between an element and one of its parts, at any depth. */
   private readDelegation({ role, from, to, label }: Line) {
-    if (role !== "delegates" && !nested(from, to) && !nested(to, from)) return false;
-    const [outer, inner] = nested(to, from) ? [to, from] : [from, to];
+    if (role !== "delegates" && !holdsDeep(from, to) && !holdsDeep(to, from)) return false;
+    const [outer, inner] = holdsDeep(to, from) ? [to, from] : [from, to];
     this.connections.push({
       text: `${this.idOf(outer)} -- delegates${label ? `: ${inArrow(label)}` : ""} --> ${this.idOf(inner)}`,
     });
@@ -1899,12 +1900,6 @@ type Dots = { box: Box; in?: Element };
 
 /** A number as the source writes a position. */
 const round = (value: number) => String(Math.round(value));
-
-/** Whether `inner` stands in `outer`, at any depth. */
-function nested(outer: Element, inner: Element): boolean {
-  for (let up = inner.parent; up; up = up.parent) if (up === outer) return true;
-  return false;
-}
 
 /**
  * Which access a line is part of. The two arcs of a modifying access are one access; so are two

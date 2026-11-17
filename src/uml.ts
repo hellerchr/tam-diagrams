@@ -176,18 +176,33 @@ export function labelText(raw: string): string {
   return decodeEntities(text).replace(/\\n/g, "<br>").trim();
 }
 
+/** A coding of text for the parser: a pattern, and what each match of it is written as. */
+export type Coding = [RegExp, (match: string, ...groups: string[]) => string];
+
+/** A tag's opening `<` as its entity code, so the parser does not read a tag; `<br>` stays. */
+export const TAG_CODING: Coding = [/<(?=\/?[a-z])(?!br\s*\/?>)/gi, () => "#lt;"];
+
+/** Line breaks, with the white space around them, as `<br>`. */
+export const BREAK_CODING: Coding = [/\s*\n\s*/g, () => "<br>"];
+
+/** A label trimmed, with each coding applied to it in turn. */
+export const codedWith = (label: string, codings: Coding[]) =>
+  codings.reduce((text, [pattern, code]) => text.replace(pattern, code), label.trim());
+
+/** What a Mermaid label codes: an entity, a tag, a quote, markdown and line breaks. */
+const LABEL_CODINGS: Coding[] = [
+  [/[#&](?=\w+;)/g, (mark) => (mark === "#" ? "#35;" : "#amp;")],
+  TAG_CODING,
+  [/"/g, () => "#quot;"],
+  [/^`(?=[\s\S]*`$)/, () => "#96;"],
+  BREAK_CODING,
+];
+
 /**
  * Text as a Mermaid label holds it: line breaks as `<br>`, and as entity codes what the parser would
  * read as an entity, a tag, a quote or markdown.
  */
-export const escapeLabel = (label: string) =>
-  label
-    .trim()
-    .replace(/[#&](?=\w+;)/g, (mark) => (mark === "#" ? "#35;" : "#amp;"))
-    .replace(/<(?=\/?[a-z])(?!br\s*\/?>)/gi, "#lt;")
-    .replace(/"/g, "#quot;")
-    .replace(/^`(?=[\s\S]*`$)/, "#96;")
-    .replace(/\s*\n\s*/g, "<br>");
+export const escapeLabel = (label: string) => codedWith(label, LABEL_CODINGS);
 
 /** Statements that only style the picture (colors, classes, links, tooltips); the renderer ignores them. */
 export const STYLING =

@@ -171,7 +171,7 @@ export function hugLabels(scene: Scene) {
 }
 
 /** Moves texts and their boxes by (dx, dy). */
-function moveTexts(texts: SceneText[], dx: number, dy: number) {
+export function moveTexts(texts: SceneText[], dx: number, dy: number) {
   for (const text of texts) {
     text.x += dx;
     text.y += dy;

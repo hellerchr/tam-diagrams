@@ -10,6 +10,7 @@
  * layout that follows the places is uml-placed.ts.
  */
 
+import { endedLines } from "./uml-edit-text.ts";
 import type { Point } from "./scene.ts";
 import type { Structure } from "./structure.ts";
 
@@ -35,13 +36,6 @@ export type Places = ReadonlyMap<string, Point> | Readonly<Record<string, Point>
 const entriesOf = (places: Places): [string, Point][] =>
   places instanceof Map ? [...places] : Object.entries(places as Record<string, Point>);
 
-/** A source as lines, and whether it ends with a line break. */
-function linesOf(source: string) {
-  const text = source.replace(/\r\n?/g, "\n"),
-    ended = text.endsWith("\n");
-  return { lines: (ended ? text.slice(0, -1) : text).split("\n"), ended };
-}
-
 /** Whether a line is one of the block: a place, a label's place or a lane's width. */
 const isMark = (line: string) => PLACE.test(line) || LANE.test(line);
 
@@ -59,7 +53,7 @@ const blockOf = ({ places, labels, lanes }: Marks) => [
 function readMarks(source: string): Marks {
   const marks: Marks = { places: new Map(), labels: new Map(), lanes: new Map() };
   if (!/^[ \t]*%%[ \t]*@\S/m.test(source)) return marks;
-  for (const line of linesOf(source).lines) {
+  for (const line of endedLines(source).lines) {
     const lane = line.match(LANE);
     if (lane) {
       marks.lanes.set(lane[1], Number(lane[2]));
@@ -79,7 +73,7 @@ function readMarks(source: string): Marks {
  * Without marks the source ends as it did before it had any.
  */
 function withMarks(source: string, marks: Marks): string {
-  const { lines, ended } = linesOf(source);
+  const { lines, ended } = endedLines(source);
   const rest = lines.filter((line) => !isMark(line)),
     block = blockOf(marks);
   if (rest.length === lines.length && !block.length) return source;

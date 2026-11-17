@@ -8,7 +8,7 @@
  */
 
 import { crossesBox, crossesShape } from "./audit.ts";
-import { dodgeTitles } from "./labels.ts";
+import { dodgeTitles, moveTexts } from "./labels.ts";
 import { markerBounds, type MarkerKind } from "./markers.ts";
 import { clipToOutline, entryPoint, outlineOf } from "./outline.ts";
 import { outline } from "./route.ts";
@@ -28,8 +28,9 @@ import {
   simplifyPath,
   straddles,
   unit,
+  middlesApart,
 } from "./scene.ts";
-import { chainOf, type SceneTree, shiftTexts } from "./scene-tree.ts";
+import { chainOf, type SceneTree } from "./scene-tree.ts";
 import { lies, type Side, sidePoint } from "./tam-placed.ts";
 import { detour, type Line } from "./tam-placed-detour.ts";
 import {
@@ -232,7 +233,7 @@ const markersOf = (scene: Scene, wire: SceneWire) =>
 /** Moves markers and texts a wire carries by `dx`, `dy`. */
 function moveCarried(markers: SceneMarker[], texts: SceneText[], dx: number, dy: number) {
   for (const marker of markers) marker.tip = { x: marker.tip.x + dx, y: marker.tip.y + dy };
-  shiftTexts(texts, dx, dy);
+  moveTexts(texts, dx, dy);
 }
 
 const shifted = (points: Point[], dx: number, dy: number) =>
@@ -678,11 +679,7 @@ function lay(router: Router, route: Route, line: Line) {
 }
 
 /** How far apart the middles of a route's ends lie, along x and y. */
-function span(route: Route) {
-  const ca = centerOf(route.a.box),
-    cb = centerOf(route.b.box);
-  return Math.abs(ca.x - cb.x) + Math.abs(ca.y - cb.y);
-}
+const span = (route: Route) => middlesApart(route.a.box, route.b.box);
 
 /** A route's line with every end on the outline of its shape: round corners, slanted sides. */
 function outlined(route: Route): Point[] {
@@ -796,7 +793,7 @@ function settle(scene: Scene, wire: SceneWire, texts: SceneText[], spots: Box[])
     spots.reduce((best, item) =>
       crowding(scene, wire, item) < crowding(scene, wire, best) ? item : best,
     );
-  shiftTexts(texts, spot.x - box.x, spot.y - box.y);
+  moveTexts(texts, spot.x - box.x, spot.y - box.y);
   scene.texts.push(...texts);
 }
 
@@ -901,7 +898,7 @@ function putEnds(scene: Scene, job: Job, wire: SceneWire) {
   for (const { text, first } of job.ends) {
     const then = first ? job.was.points[0] : job.was.points.at(-1)!,
       now = first ? wire.points[0] : wire.points.at(-1)!;
-    shiftTexts([text], now.x - then.x, now.y - then.y);
+    moveTexts([text], now.x - then.x, now.y - then.y);
     scene.texts.push(text);
   }
 }

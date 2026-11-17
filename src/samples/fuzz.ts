@@ -4,6 +4,8 @@
  * and flowchart sources (every transition and edge kind, nesting, long and unicode names, both directions).
  */
 
+import { holdsDeep } from "../scene-tree.ts";
+
 /** Small deterministic PRNG (mulberry32). */
 export function random(seed: number) {
   let state = seed >>> 0;
@@ -264,12 +266,6 @@ const talks = (elements: Element[], element: Element): boolean =>
       .filter((item) => item.parent === element)
       .every((item) => item.kind === "storage" || talks(elements, item)));
 
-/** Whether `a` holds `b`, at any depth. */
-function ancestor(a: Element, b: Element) {
-  for (let p = b.parent; p; p = p.parent) if (p === a) return true;
-  return false;
-}
-
 /** Connections between named elements, chosen to be valid TAM. */
 function connect(tam: Tam) {
   const { r } = tam;
@@ -312,14 +308,14 @@ function wordsOf(r: Random): Words {
 
 /** Only a delegation connects a container to its part, in a design diagram. */
 const delegation = (tam: Tam, a: Element, b: Element) =>
-  tam.design && active(a) && active(b) && ancestor(a, b) && a.kind !== "human"
+  tam.design && active(a) && active(b) && holdsDeep(a, b) && a.kind !== "human"
     ? `${a.id} -- delegates --> ${b.id}`
     : null;
 
 /** A connection between two elements, the `i`th tried, or null where none fits them. */
 function connection(tam: Tam, a: Element, b: Element, i: number): string | null {
   const { r } = tam;
-  const nested = ancestor(a, b) || ancestor(b, a);
+  const nested = holdsDeep(a, b) || holdsDeep(b, a);
   const words = wordsOf(r);
   if (nested) return delegation(tam, a, b);
   if (active(a) && active(b)) return activeConnection(tam, a, b, i, words);

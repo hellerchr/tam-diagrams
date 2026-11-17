@@ -7,7 +7,7 @@
  * on its wire gets another line.
  */
 
-import { around, type Box, centerOf, grow, type Point } from "./scene.ts";
+import { around, type Box, centerOf, grow, middlesApart, type Point } from "./scene.ts";
 import type { TamEdge } from "./tam.ts";
 import type { Measure } from "./text.ts";
 import { outline } from "./route.ts";
@@ -805,11 +805,7 @@ function lay(wiring: Wiring, item: Bundle, line: Line) {
 }
 
 /** How far apart the middles of a bundle's two elements are. */
-function span(item: Bundle) {
-  const ca = centerOf(item.a.box),
-    cb = centerOf(item.b.box);
-  return Math.abs(ca.x - cb.x) + Math.abs(ca.y - cb.y);
-}
+const span = (item: Bundle) => middlesApart(item.a.box, item.b.box);
 
 /**
  * Each bundle takes the cheapest line. The pairs a straight line joins choose first, so no other

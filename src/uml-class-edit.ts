@@ -32,6 +32,7 @@ import {
   indentOf,
   linesOf,
   listed,
+  oneLine,
   renamedOnly,
   rootEnd,
   stepOf,
@@ -831,7 +832,7 @@ function addClassPiece(
 }
 
 /** A name a piece is added with, on one line. */
-const nameOf = (label: string | undefined) => (label ?? "").replace(/\s*\n\s*/g, " ").trim();
+const nameOf = (label: string | undefined) => oneLine(label ?? "");
 
 /** The statements of a new part of a kind and the id of its shape; a note's id is known once it stands. */
 function newPart(
@@ -979,7 +980,7 @@ const noteText = (statement: string, label: string) =>
 
 /** The source with a lollipop interface under another name, on the relation that draws it. */
 function renameBall(source: string, index: number, label: string): string {
-  const name = label.replace(/\s*\n\s*/g, " ").trim(),
+  const name = oneLine(label),
     lines = linesOf(source);
   if (!name) return source;
   lines[index] = relationLine(lines[index], {
@@ -1590,7 +1591,7 @@ export function addLollipop(
   const diagram = parseClassDiagram(source),
     outline = outlineOf(source),
     { lines } = outline,
-    label = name.replace(/\s*\n\s*/g, " ").trim() || "Interface",
+    label = oneLine(name) || "Interface",
     none = { source, id: "" };
   if (!diagram.classes.has(classId)) return none;
   const at = rootEnd(lines);

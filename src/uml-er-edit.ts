@@ -37,6 +37,7 @@ import {
   freshId,
   indentOf,
   linesOf,
+  oneLine,
   renamedOnly,
   rootEnd,
   stepOf,
@@ -528,7 +529,7 @@ function addErPiece(
   const diagram = parseErDiagram(source),
     outline = outlineOf(source),
     { lines } = outline,
-    label = (piece.label ?? "").replace(/\s*\n\s*/g, " ").trim(),
+    label = oneLine(piece.label ?? ""),
     id = freshId((name) => diagram.entities.has(name), baseOf(diagram), wordOf(label)),
     ends = [...outline.entities.values()].flatMap((item) =>
       item.declarations.map(({ index, body }) => (body ? body.close : index)),

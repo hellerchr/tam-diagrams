@@ -6,6 +6,16 @@
 /** A source as its lines, whatever line breaks it uses. */
 export const linesOf = (source: string) => source.replace(/\r\n?/g, "\n").split("\n");
 
+/** A source as lines without the empty one after a last line break, and whether it ends with one. */
+export function endedLines(source: string) {
+  const text = source.replace(/\r\n?/g, "\n"),
+    ended = text.endsWith("\n");
+  return { lines: (ended ? text.slice(0, -1) : text).split("\n"), ended };
+}
+
+/** A text on one line: its line breaks as spaces, trimmed. */
+export const oneLine = (text: string) => text.replace(/\s*\n\s*/g, " ").trim();
+
 /** The white space a line starts with. */
 export const indentOf = (line: string) => line.match(/^\s*/)![0];
 
@@ -26,11 +36,7 @@ export const entityCoded = (text: string, breaks = "<br>") =>
     .replace(/\s*\n\s*/g, breaks);
 
 /** A text as a line of a block, such as a member or an attribute: one line, which a closing brace does not end. */
-export const blockLineText = (text: string) =>
-  text
-    .replace(/\s*\n\s*/g, " ")
-    .trim()
-    .replace(/[\s}]+$/, "");
+export const blockLineText = (text: string) => oneLine(text).replace(/[\s}]+$/, "");
 
 /** Where a statement is added at the end: after the last line with text. */
 export function rootEnd(lines: string[]): number {

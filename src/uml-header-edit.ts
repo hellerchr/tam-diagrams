@@ -7,6 +7,7 @@
  * parser gives.
  */
 
+import { endedLines } from "./uml-edit-text.ts";
 import type { Direction } from "./elk.ts";
 import { overlaps, type Point } from "./scene.ts";
 import { type Level, scan, UmlError, type UmlKind, detectUml } from "./uml.ts";
@@ -110,13 +111,6 @@ function yamlTitle(name: string): string {
   return !/["\\]/.test(name) ? `"${name}"` : `'${name.replace(/'/g, "''")}'`;
 }
 
-/** A source as lines, and whether it ends with a line break. */
-function linesOf(source: string) {
-  const text = source.replace(/\r\n?/g, "\n"),
-    ended = text.endsWith("\n");
-  return { lines: (ended ? text.slice(0, -1) : text).split("\n"), ended };
-}
-
 /** The frontmatter block at the start of a source: the indexes of its two `---` lines. */
 function frontmatter(lines: string[]): { open: number; close: number } | undefined {
   const open = lines.findIndex((text) => text.trim());
@@ -133,7 +127,7 @@ function frontmatter(lines: string[]): { open: number; close: number } | undefin
  */
 export function withTitle(source: string, title: string): string {
   const name = title.trim().replace(/\s+/g, " "),
-    { lines, ended } = linesOf(source),
+    { lines, ended } = endedLines(source),
     front = frontmatter(lines),
     line = name && `title: ${yamlTitle(name)}`;
   if (front) retitleFront(lines, front, line);
@@ -174,7 +168,7 @@ const ORDER = ["title", "direction", "level", "autonumber"] as const;
 
 /** A source's lines, read for an edit of its settings. */
 function linesAround(source: string, kind: UmlKind): SettingLines {
-  const { lines, ended } = linesOf(source),
+  const { lines, ended } = endedLines(source),
     top = topLevel(source);
   return {
     lines,
@@ -309,7 +303,7 @@ function redirect(source: string, kind: UmlKind, direction: Direction, usual: Di
 
 /** Whether a source's frontmatter says a title. */
 function frontTitle(source: string): boolean {
-  const { lines } = linesOf(source),
+  const { lines } = endedLines(source),
     front = frontmatter(lines);
   return !!front && lines.slice(front.open + 1, front.close).some((text) => /^title:/.test(text));
 }

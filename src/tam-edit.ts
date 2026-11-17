@@ -5,6 +5,7 @@
  * a rule of the notation shows when the result is parsed.
  */
 
+import { rootEnd } from "./uml-edit-text.ts";
 import {
   COLORS,
   type Connection,
@@ -518,66 +519,66 @@ const CONNECTION_NAMES: Record<string, string> = {
 export interface Fitted {
   from: string;
   to: string;
-  change: Partial<Omit<Connection, "from" | "to">>;
+  change: Wording;
   /** Why the word asked for was not drawn, and what was drawn instead; none when it was. */
   replaced?: string;
+}
+
+/** A connection's word with its label and direction, without its ends. */
+type Wording = Partial<Omit<Connection, "from" | "to">>;
+
+/** Why the parser refuses a connection drawn between two elements; undefined where it takes it. */
+function refusalOf(source: string, from: string, to: string, change: Wording) {
+  try {
+    parseTam(connect(source, from, to, change));
+    return undefined;
+  } catch (error) {
+    return error instanceof Error ? error.message.replace(/^Line \d+: /, "") : String(error);
+  }
+}
+
+/** A connection's name in a sentence: "a write access", "a «use» dependency". */
+const nameOf = (change: Wording) =>
+  change.word === "dependency"
+    ? `a «${change.label}» dependency`
+    : (CONNECTION_NAMES[change.word ?? ""] ?? "the connection that fits");
+
+/** The connection two elements take (`defaultConnection`), where the parser takes it. */
+function bestFit(source: string, from: string, to: string): Fitted | undefined {
+  const diagram = parseTam(source),
+    best = defaultConnection(diagram, from, to);
+  // Delegation belongs to the design level: a plain block diagram does not take it.
+  if (best.word === "delegates" && !usesDesign(diagram)) return undefined;
+  const change = { word: best.word, both: best.both, ...(best.label ? { label: best.label } : {}) };
+  if (refusalOf(source, best.from, best.to, change)) return undefined;
+  return { from: best.from, to: best.to, change };
 }
 
 /**
  * The connection to draw from one element to another: the word asked for as drawn, or turned round
  * when it is written from the other end (an access is written from the agent), or else the one
- * that fits the two (`defaultConnection`), with the reason the word asked for was left. Undefined
- * when the two take no connection at all.
+ * that fits the two, with the reason the word asked for was left. Undefined when the two take no
+ * connection at all.
  */
 export function fitConnection(
   source: string,
   from: string,
   to: string,
-  asked?: Partial<Omit<Connection, "from" | "to">>,
+  asked?: Wording,
 ): Fitted | undefined {
-  const fits = (a: string, b: string, change: Partial<Omit<Connection, "from" | "to">>) => {
-    try {
-      parseTam(connect(source, a, b, change));
-      return undefined;
-    } catch (error) {
-      return error instanceof Error ? error.message.replace(/^Line \d+: /, "") : String(error);
-    }
-  };
-  const refused = asked && fits(from, to, asked);
-  if (asked && !refused) return { from, to, change: asked };
-  if (asked && !fits(to, from, asked)) return { from: to, to: from, change: asked };
-  const diagram = parseTam(source),
-    best = defaultConnection(diagram, from, to);
-  // Delegation belongs to the design level: a plain block diagram does not take it.
-  if (best.word === "delegates" && !usesDesign(diagram)) return undefined;
-  const change = {
-    word: best.word,
-    both: best.both,
-    ...(best.label ? { label: best.label } : {}),
-  };
-  if (fits(best.from, best.to, change)) return undefined;
-  const name =
-    best.word === "dependency"
-      ? `a «${best.label}» dependency`
-      : (CONNECTION_NAMES[best.word] ?? "the connection that fits");
-  return {
-    from: best.from,
-    to: best.to,
-    change,
-    ...(refused ? { replaced: `${refused} Drawn as ${name} instead.` } : {}),
-  };
+  if (!asked) return bestFit(source, from, to);
+  const refused = refusalOf(source, from, to, asked);
+  if (!refused) return { from, to, change: asked };
+  if (!refusalOf(source, to, from, asked)) return { from: to, to: from, change: asked };
+  const best = bestFit(source, from, to);
+  return best && { ...best, replaced: `${refused} Drawn as ${nameOf(best.change)} instead.` };
 }
 
 /**
  * Connects two elements; without a word, with the one that fits them. A word given is written from
  * `from` to `to` as they are: an access from a storage is not turned round but refused when parsed.
  */
-export function connect(
-  source: string,
-  from: string,
-  to: string,
-  change: Partial<Omit<Connection, "from" | "to">> = {},
-): string {
+export function connect(source: string, from: string, to: string, change: Wording = {}): string {
   const diagram = parseTam(source),
     lines = linesOf(source);
   const connection: Connection = change.word
@@ -592,7 +593,7 @@ export function connect(
     lines[node!.line - 1] = write({ ...declaration, id });
     connection[end] = id;
   }
-  lines.splice(statementsEnd(lines), 0, writeConnection(connection));
+  lines.splice(rootEnd(lines), 0, writeConnection(connection));
   return lines.join("\n");
 }
 
@@ -651,7 +652,7 @@ export function addInterface(
     lines = linesOf(source),
     text = cleanLabel(name).replace(/<br>/g, " ");
   if (!isElement(node) || !text) return source;
-  lines.splice(statementsEnd(lines), 0, `${node.id} ${offers} ${text}`);
+  lines.splice(rootEnd(lines), 0, `${node.id} ${offers} ${text}`);
   return lines.join("\n");
 }
 
@@ -1016,7 +1017,7 @@ export function paste(
   if (options.placed !== false) pasting.offset = offset;
   for (const line of linesOf(fragment)) pasteLine(pasting, line);
   lines.splice(afterElements(lines), 0, ...pasting.declarations);
-  lines.splice(statementsEnd(lines), 0, ...pasting.statements);
+  lines.splice(rootEnd(lines), 0, ...pasting.statements);
   return { source: lines.join("\n"), ids: pasting.made };
 }
 
@@ -1107,13 +1108,6 @@ const withEnds = (connection: Connection, rename: (id: string) => string): Conne
   from: rename(connection.from),
   to: rename(connection.to),
 });
-
-/** Where statements added to a source go: after the last one, before blank lines at its end. */
-function statementsEnd(lines: string[]): number {
-  let end = lines.length;
-  while (end > 0 && !lines[end - 1].trim()) end--;
-  return end;
-}
 
 /** Sets the title, the direction or the level; an empty title or level removes its line. */
 export function setHeader(

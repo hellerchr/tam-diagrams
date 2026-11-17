@@ -14,6 +14,7 @@ import {
   syntaxDialog,
 } from "./dialogs.ts";
 import { h, icon, iconButton, isOff, prose, setOff, tipped } from "./dom.ts";
+import { isTyping } from "./keys.ts";
 import type { Editor, Tool, TreeItem } from "./editor.ts";
 import type { IconName } from "./icons.ts";
 import { Inspector } from "./inspector.ts";
@@ -110,20 +111,12 @@ function bound(binding: Binding, event: KeyboardEvent, key: string, held: string
 
 /** A key of the canvas is the dialog's, the menu's or the field's while one has the focus. */
 function keptFromCanvas(binding: Binding, event: KeyboardEvent): boolean {
-  return !!binding.canvas && (typing(event.target) || dialogOpen() || menuOpen());
+  return !!binding.canvas && (isTyping(event.target) || dialogOpen() || menuOpen());
 }
 
 /** The list of commands closes by its own key; no other key acts under a dialog. */
 function actsUnderDialog(key: string): boolean {
   return !dialogOpen() || (key === "k" && !!document.querySelector("dialog.commands"));
-}
-
-/** Whether the key goes to a field that takes typing. */
-function typing(target: EventTarget | null): boolean {
-  const element = target as HTMLElement | null;
-  return (
-    !!element && (element.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(element.tagName))
-  );
 }
 
 /** Under a dialog every key is the dialog's, wherever the focus went: true when it was kept for it. */

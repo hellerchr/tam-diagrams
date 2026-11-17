@@ -17,7 +17,8 @@ import {
   type SceneShape,
   type SceneText,
 } from "./scene.ts";
-import { chainOf, sceneTree, type SceneTree, shiftTexts } from "./scene-tree.ts";
+import { chainOf, sceneTree, type SceneTree } from "./scene-tree.ts";
+import { moveTexts } from "./labels.ts";
 import { finishBounds, type Measure, textGroupBox } from "./text.ts";
 import { type LineStyle, rewire } from "./uml-placed-wires.ts";
 import { readPlaces, unplaced } from "./uml-places.ts";
@@ -359,7 +360,7 @@ function moveParts(
     if (!dx && !dy) continue;
     changed = true;
     shiftShape(shapes.get(id)!, dx, dy);
-    shiftTexts(
+    moveTexts(
       scene.texts.filter((text) => text.owner === id),
       dx,
       dy,
@@ -425,7 +426,7 @@ function fitContainer(scene: Scene, shape: SceneShape, was: Box, box: Box) {
         : middle < 0
           ? box.x - was.x
           : box.x + box.width - was.x - was.width;
-    shiftTexts(titles, dx, box.y - was.y);
+    moveTexts(titles, dx, box.y - was.y);
   }
   if (shape.dividers) shape.dividers = shape.dividers.map((y) => y + box.y - was.y);
   shape.box = box;

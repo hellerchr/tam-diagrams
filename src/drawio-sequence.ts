@@ -14,6 +14,7 @@
  * draw.io's own UML Lifeline, Actor, Frame and Destroy shapes, as people draw them by hand.
  */
 
+import { oneLine } from "./uml-edit-text.ts";
 import {
   type Cell,
   type Drawing,
@@ -1264,9 +1265,7 @@ function frameLabel(label: string): { kind: string; text: string } {
 
 /** A condition without its brackets. */
 const bare = (text: string) =>
-  text
-    .replace(/\s*\n\s*/g, " ")
-    .trim()
+  oneLine(text)
     .replace(/^\[([\s\S]*)\]$/, "$1")
     .trim();
 

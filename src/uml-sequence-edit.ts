@@ -17,7 +17,7 @@
  */
 
 import type { Structure, StructureEdge, StructureNode } from "./structure.ts";
-import { scan } from "./uml.ts";
+import { BREAK_CODING, type Coding, codedWith, scan, TAG_CODING } from "./uml.ts";
 import { dedent, indentOf, linesOf, numberedId, rootEnd } from "./uml-edit-text.ts";
 import { type MessageEvent, parseSequenceDiagram, type SequenceDiagram } from "./uml-sequence.ts";
 
@@ -127,18 +127,20 @@ const RESERVED = new Set(
 const canBeId = (id: string) =>
   /^[\p{L}_][\p{L}\p{N}_]*$/u.test(id) && !RESERVED.has(id.toLowerCase());
 
+/** What a sequence diagram's text codes: an entity, the end of a statement, breaks, a tag, quotes. */
+const MESSAGE_CODINGS: Coding[] = [
+  [/[#;]/g, (character) => (character === "#" ? "#35;" : "#59;")],
+  [/&(?=\w+#59;)/g, () => "#amp;"],
+  BREAK_CODING,
+  TAG_CODING,
+  [/^"([\s\S]*)"$/, (_, inner) => `#quot;${inner}#quot;`],
+];
+
 /**
  * A text as a message, an alias, a box or a note holds it: line breaks as `<br>`, and as entity
  * codes what the parser would read as an entity, a tag, the end of a statement or surrounding quotes.
  */
-export const textOf = (label: string) =>
-  label
-    .trim()
-    .replace(/[#;]/g, (character) => (character === "#" ? "#35;" : "#59;"))
-    .replace(/&(?=\w+#59;)/g, "#amp;")
-    .replace(/\s*\n\s*/g, "<br>")
-    .replace(/<(?=\/?[a-z])(?!br\s*\/?>)/gi, "#lt;")
-    .replace(/^"([\s\S]*)"$/, "#quot;$1#quot;");
+export const textOf = (label: string) => codedWith(label, MESSAGE_CODINGS);
 
 /** The id of the participant a node id stands for, when the diagram has it. */
 function participantOf(diagram: SequenceDiagram, node: string): string | null {
