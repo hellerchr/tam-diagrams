@@ -107,17 +107,27 @@ export class ServedFile {
     this.name = name;
     this.crlf = !!text?.includes("\r\n");
     this.bom = !!text?.startsWith("\uFEFF");
-    if (text === null || !text.trim()) {
-      this.form = formOf(name);
-      const notice =
-        text === null ? `${name} is new: the first save writes it.` : `${name} is empty.`;
-      return { source: "", notice, warnings: [] };
-    }
-    if (isDrawio(text)) {
-      this.form = isSvg(text) ? "drawio-svg" : "drawio";
-      const { source, warnings } = await importDrawio(text);
-      return { source, notice: `Opened ${name} from draw.io.`, warnings };
-    }
+    if (text === null || !text.trim()) return this.blank(name, text);
+    if (isDrawio(text)) return this.openDrawio(name, text);
+    return this.openText(name, text);
+  }
+
+  /** A file that does not exist yet, or holds nothing: its form is told by its name. */
+  private blank(name: string, text: string | null): Opening {
+    this.form = formOf(name);
+    const notice =
+      text === null ? `${name} is new: the first save writes it.` : `${name} is empty.`;
+    return { source: "", notice, warnings: [] };
+  }
+
+  private async openDrawio(name: string, text: string): Promise<Opening> {
+    this.form = isSvg(text) ? "drawio-svg" : "drawio";
+    const { source, warnings } = await importDrawio(text);
+    return { source, notice: `Opened ${name} from draw.io.`, warnings };
+  }
+
+  /** A source, or a Markdown text whose fence of the diagram is kept to be written back into. */
+  private openText(name: string, text: string): Opening {
     const found = diagramIn(name, text);
     if ("refusal" in found) throw new Error(found.refusal);
     this.form = found.fenced ? "markdown" : "source";
