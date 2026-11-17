@@ -442,9 +442,86 @@ export function defaultConnection(diagram: TamDiagram, from: string, to: string)
     return connection("anchor", undefined, a.kind !== "note");
   if (a.kind === "package" || b.kind === "package") return connection("dependency", "use");
   if (isStorage(a) && isStorage(b)) return connection("dependency", "pointer");
-  if (isStorage(a) || isStorage(b)) return connection("reads/writes", undefined, isStorage(a));
+  // The drag says where the data goes: an agent drawn to a storage writes it, a storage drawn to an
+  // agent is read by it. The access is written from the agent either way.
+  if (isStorage(b)) return connection("writes");
+  if (isStorage(a)) return connection("reads", undefined, true);
   if (holds(a, b) || holds(b, a)) return connection("delegates", undefined, holds(b, a));
   return connection("calls");
+}
+
+/** Whether a diagram is of the design level: it says so, or holds an element only that level has. */
+const usesDesign = (diagram: TamDiagram) =>
+  diagram.level === "design" ||
+  [...diagram.nodes.values()].some((node) =>
+    ["component", "subsystem", "class", "package", "interface"].includes(node.kind),
+  );
+
+/** What a connection is, as a sentence about it says it: "drawn as a write access". */
+const CONNECTION_NAMES: Record<string, string> = {
+  calls: "a request channel",
+  "sends data": "a data flow channel",
+  "---": "a channel",
+  reads: "a read access",
+  writes: "a write access",
+  "reads/writes": "a modifying access",
+  delegates: "a delegation",
+  requires: "an assembly",
+  anchor: "a note's line",
+};
+
+/** The best connection from one element to another, and why it is not the one asked for. */
+export interface Fitted {
+  from: string;
+  to: string;
+  change: Partial<Omit<Connection, "from" | "to">>;
+  /** Why the word asked for was not drawn, and what was drawn instead; none when it was. */
+  replaced?: string;
+}
+
+/**
+ * The connection to draw from one element to another: the word asked for as drawn, or turned round
+ * when it is written from the other end (an access is written from the agent), or else the one
+ * that fits the two (`defaultConnection`), with the reason the word asked for was left. Undefined
+ * when the two take no connection at all.
+ */
+export function fitConnection(
+  source: string,
+  from: string,
+  to: string,
+  asked?: Partial<Omit<Connection, "from" | "to">>,
+): Fitted | undefined {
+  const fits = (a: string, b: string, change: Partial<Omit<Connection, "from" | "to">>) => {
+    try {
+      parseTam(connect(source, a, b, change));
+      return undefined;
+    } catch (error) {
+      return error instanceof Error ? error.message.replace(/^Line \d+: /, "") : String(error);
+    }
+  };
+  const refused = asked && fits(from, to, asked);
+  if (asked && !refused) return { from, to, change: asked };
+  if (asked && !fits(to, from, asked)) return { from: to, to: from, change: asked };
+  const diagram = parseTam(source),
+    best = defaultConnection(diagram, from, to);
+  // Delegation belongs to the design level: a plain block diagram does not take it.
+  if (best.word === "delegates" && !usesDesign(diagram)) return undefined;
+  const change = {
+    word: best.word,
+    both: best.both,
+    ...(best.label ? { label: best.label } : {}),
+  };
+  if (fits(best.from, best.to, change)) return undefined;
+  const name =
+    best.word === "dependency"
+      ? `a «${best.label}» dependency`
+      : (CONNECTION_NAMES[best.word] ?? "the connection that fits");
+  return {
+    from: best.from,
+    to: best.to,
+    change,
+    ...(refused ? { replaced: `${refused} Drawn as ${name} instead.` } : {}),
+  };
 }
 
 /**

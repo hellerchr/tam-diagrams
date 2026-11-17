@@ -6,6 +6,7 @@ import {
   connect,
   connectionOf,
   duplicate,
+  fitConnection,
   moveInto,
   place,
   remove,
@@ -70,8 +71,10 @@ describe("editing a TAM source as text", () => {
   it("connects elements with the word that fits them", () => {
     const words = (source: string) => source.trimEnd().split("\n").at(-1);
     expect(words(connect(SHOP, "customer", "api"))).toBe("customer -- calls --> api");
-    // Only the agent acts: an access is written from it, whichever end the line was drawn from.
-    expect(words(connect(SHOP, "db", "customer"))).toBe("customer -- reads/writes --> db");
+    // Only the agent acts: an access is written from it. The drag says where the data goes: drawn
+    // to a storage it writes, drawn from one it reads.
+    expect(words(connect(SHOP, "customer", "db"))).toBe("customer -- writes --> db");
+    expect(words(connect(SHOP, "db", "customer"))).toBe("customer -- reads --> db");
     expect(words(connect(SHOP, "cart", "db"))).toBe("cart -. pointer .-> db");
     expect(words(connect(SHOP, "api", "db", { word: "reads", label: "peek" }))).toBe(
       "api -- reads: peek --> db",
@@ -81,6 +84,35 @@ describe("editing a TAM source as text", () => {
       ["db", "customer"],
     ])
       expect(() => parseTam(connect(SHOP, from, to))).not.toThrow();
+  });
+
+  it("fits a connection to the two elements: as asked, turned round, or the one they take", () => {
+    // The word asked for fits as drawn.
+    expect(fitConnection(SHOP, "customer", "api", { word: "sends data" })).toEqual({
+      from: "customer",
+      to: "api",
+      change: { word: "sends data" },
+    });
+    // An access drawn from the storage is written from the agent.
+    expect(fitConnection(SHOP, "db", "customer", { word: "writes" })).toEqual({
+      from: "customer",
+      to: "db",
+      change: { word: "writes" },
+    });
+    // A request to a storage becomes the access the drag means, and says why.
+    const fitted = fitConnection(SHOP, "customer", "db", { word: "calls" })!;
+    expect([fitted.from, fitted.to, fitted.change.word]).toEqual(["customer", "db", "writes"]);
+    expect(fitted.replaced).toMatch(/storage.*Drawn as a write access instead\.$/);
+    // Without a word asked for: the one they take, and nothing to say.
+    expect(fitConnection(SHOP, "cart", "db")).toMatchObject({
+      change: { word: "dependency", label: "pointer" },
+    });
+    expect(fitConnection(SHOP, "cart", "db")!.replaced).toBeUndefined();
+    // A container and its own part take only a delegation, which belongs to the design level: a
+    // diagram with an interface takes it, a plain one takes no connection there.
+    expect(fitConnection(SHOP, "shop", "api", { word: "calls" })!.change.word).toBe("delegates");
+    const plain = "agent shop[Shop] {\n  agent api[API]\n}\n";
+    expect(fitConnection(plain, "shop", "api", { word: "calls" })).toBeUndefined();
   });
 
   it("connects with a word given as drawn, and leaves a pair the word does not fit to the parser", () => {

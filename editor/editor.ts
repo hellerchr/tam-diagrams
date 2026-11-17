@@ -20,6 +20,7 @@ import {
   addElement,
   addInterface,
   connect,
+  fitConnection,
   connectionOf,
   copyOf,
   type ConnectionChange,
@@ -969,9 +970,16 @@ export class Editor {
     return fits;
   }
 
-  /** Why two elements may not be connected with the kind of connection picked; undefined when they may. */
+  /**
+   * Why two elements may not be connected; undefined when they may. The kind picked is not a
+   * condition: a pair it does not fit is connected with what fits them (fitConnection).
+   */
   private connectRefusal(from: string, to: string): string | undefined {
-    return this.refusal((source) => connect(source, from, to, this.linkChange));
+    return this.refusal((source) => {
+      const fitted = fitConnection(source, from, to, this.linkChange);
+      if (!fitted) throw new Error("These two elements take no connection.");
+      return connect(source, fitted.from, fitted.to, fitted.change);
+    });
   }
 
   /** Whether a connection may change this way, between the elements it joins. */
@@ -2690,11 +2698,20 @@ export class Editor {
         });
       return;
     }
-    const change = this.linkChange;
-    if (!this.edit((source) => connect(source, from, to, change))) return;
+    // The connection that fits the two: the kind picked where it fits, else the one they take.
+    const asked = this.linkChange;
+    let replaced: string | undefined;
+    const done = this.edit((source) => {
+      const fitted = fitConnection(source, from, to, asked);
+      if (!fitted) throw new Error("These two elements take no connection.");
+      replaced = fitted.replaced;
+      return connect(source, fitted.from, fitted.to, fitted.change);
+    });
+    if (!done) return;
     const made = parseTam(this.doc.source).edges.findLast((edge) => !edge.id.includes("#"));
     this.tool = "select";
     if (made) this.select([{ type: "wire", id: made.id }]);
+    if (replaced) this.notify(replaced);
   }
 
   /**
@@ -2811,11 +2828,8 @@ export class Editor {
           at: dropPlace(kind, at, false),
         });
         made = added.id;
-        try {
-          return connect(added.source, from, made, change);
-        } catch {
-          return added.source;
-        }
+        const fitted = fitConnection(added.source, from, made, change);
+        return fitted ? connect(added.source, fitted.from, fitted.to, fitted.change) : added.source;
       })(),
     );
     if (!done) return;

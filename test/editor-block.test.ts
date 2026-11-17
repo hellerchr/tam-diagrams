@@ -160,16 +160,19 @@ describe("the connections of a block diagram's palette", () => {
     expect(doc.source.trimEnd().split("\n").at(-1)).toBe("web --- api");
   });
 
-  it("refuses a pair the kind does not fit, and says why", async () => {
+  it("connects a pair the kind does not fit with what fits them, and says so", async () => {
     const { doc, editor, drag, notes } = await editorAt(SHOP);
+    const last = () => doc.source.trimEnd().split("\n").at(-1);
+    // A read drawn from the storage is written from the agent, without a word about it.
     editor.setLink("reads");
     await drag(middle(doc.picture!, "db"), middle(doc.picture!, "web"));
-    expect(doc.source).toBe(SHOP);
-    expect(notes.at(-1)).toMatch(/storage and does not act/);
+    expect(last()).toBe("web -- reads --> db");
+    // A request drawn to a storage is the write the drag means.
+    const said = notes.length;
     editor.setLink("calls");
     await drag(middle(doc.picture!, "web"), middle(doc.picture!, "db"));
-    expect(doc.source).toBe(SHOP);
-    expect(notes.at(-1)).toMatch(/storage/);
+    expect(last()).toBe("web -- writes --> db");
+    expect(notes.slice(said).at(-1)).toMatch(/storage.*Drawn as a write access instead\./);
   });
 
   it("leaves the selected connection as it is: the one drawn last stays what it was drawn as", async () => {
