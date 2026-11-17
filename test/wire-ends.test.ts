@@ -1,9 +1,10 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
 import { colors, umlColors } from "./fixtures.ts";
-import { arialMeasure, renderTam, renderUml } from "../src/index.ts";
-import { alongSides } from "../src/audit.ts";
+import { arialMeasure, parseTam, renderTam, renderUml } from "../src/index.ts";
+import { alongSides, offOutline } from "../src/audit.ts";
 import { meetsSquare } from "../src/route.ts";
+import { type Scene, STACK } from "../src/scene.ts";
 import { TAM_EXAMPLES } from "../src/samples/tam-examples.ts";
 import * as UML from "../src/samples/uml-examples.ts";
 import { generateTam } from "../src/samples/fuzz.ts";
@@ -80,6 +81,48 @@ describe("a wire's end", () => {
     for (const [name, source] of samples.flat()) {
       const { scene } = await renderUml(source, umlColors, measure);
       found.push(...alongSides(scene).map((finding) => `${name}: ${finding.detail}`));
+    }
+    expect(found).toEqual([]);
+  }, 60_000);
+});
+
+/** How far each end of every reads/writes loop lies from its elements' outlines: the front or back card of a stack. */
+function loopEndsOff(source: string, scene: Scene): string[] {
+  const shapes = new Map(scene.shapes.map((shape) => [shape.id, shape]));
+  const cards = (id: string) => {
+    const shape = shapes.get(id);
+    if (!shape) return [];
+    const back = { ...shape.box, x: shape.box.x + STACK, y: shape.box.y + STACK };
+    return shape.stack ? [shape, { ...shape, box: back }] : [shape];
+  };
+  return parseTam(source)
+    .edges.filter((edge) => edge.kind === "modify")
+    .flatMap((edge) =>
+      scene.wires
+        .filter((wire) => wire.edge === edge.id)
+        .flatMap((wire) => [wire.points[0], wire.points.at(-1)!])
+        .map((end) =>
+          Math.min(
+            ...[edge.source, edge.target].flatMap(cards).map((shape) => offOutline(end, shape)),
+          ),
+        )
+        .filter((off) => off > 1)
+        .map((off) => `${edge.id} ${off.toFixed(1)}px off`),
+    );
+}
+
+describe("a reads/writes access", () => {
+  it("ends both its lines on a stacked storage's front shape, none beside its curve", async () => {
+    const source = generateTam(40);
+    const { scene } = await renderTam(source, colors, measure);
+    expect(loopEndsOff(source, scene)).toEqual([]);
+  });
+
+  it("ends every line on its elements' outlines in the block diagram samples", async () => {
+    const found: string[] = [];
+    for (const [name, source] of TAM_EXAMPLES.filter(([name]) => !name.startsWith("error"))) {
+      const { scene } = await renderTam(source, colors, measure);
+      found.push(...loopEndsOff(source, scene).map((off) => `${name}: ${off}`));
     }
     expect(found).toEqual([]);
   }, 60_000);

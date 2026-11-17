@@ -249,6 +249,14 @@ const small = (drawing: Drawing, value: string, x: number, y: number, options: T
 const lineY = (index: number, count: number, center: number, height = LINE) =>
   center + (index - (count - 1) / 2) * height;
 
+/** The shape an element is drawn as: for several, the front one, without the outline behind it. */
+function frontOf({ prepared, geometry }: Drawing, id: string): Box {
+  const full = geometry.boxes.get(id)!;
+  return prepared.diagram.nodes.get(id)?.stack
+    ? { ...full, width: full.width - SHADOW, height: full.height - SHADOW }
+    : full;
+}
+
 /** Draws an element: its shape, and its name inside it or its title for later. */
 function drawElement(drawing: Drawing, id: string) {
   const { prepared, geometry, scene, measure } = drawing,
@@ -265,9 +273,7 @@ function drawElement(drawing: Drawing, id: string) {
     });
     return;
   }
-  const box = node.stack
-    ? { ...full, width: full.width - SHADOW, height: full.height - SHADOW }
-    : full;
+  const box = frontOf(drawing, id);
   const icon = ICONS[node.kind];
   scene.shapes.push(elementShape(drawing, shape, box, icon));
   if (shape.container) addTitle(drawing, shape, box, icon);
@@ -853,15 +859,45 @@ function plainMarks(carried: Carried, upright: boolean): ChannelMarks {
 function drawModify(drawing: Drawing, edge: TamEdge) {
   const route = drawing.geometry.routes.get(edge.id);
   if (!route) return;
-  const path = simplifyPath(route);
+  const path = loopRoute(drawing, edge, simplifyPath(route));
   if (path.length === 2) drawArcs(drawing, edge, path);
   else drawParallels(drawing, edge, path);
   edgeLabel(drawing, edge);
 }
 
-/** An end on a rounded shape moves along its side onto the curved outline. */
-function meet({ geometry: { round, boxes } }: Drawing, point: Point, toward: Point, end: string) {
-  return round.has(end) ? outline(point, toward, boxes.get(end)!, round.get(end)!) : point;
+/** An end on a rounded shape moves along its side onto the curved outline of its front shape. */
+function meet(drawing: Drawing, point: Point, toward: Point, end: string) {
+  const radius = drawing.geometry.round.get(end);
+  return radius ? outline(point, toward, frontOf(drawing, end), radius) : point;
+}
+
+/** A loop's route with each end fitted to its element's front shape, so both of the loop's sides land on it. */
+function loopRoute(drawing: Drawing, edge: TamEdge, path: Point[]): Point[] {
+  const ended = fitLoopEnd(drawing, path, edge.target);
+  return fitLoopEnd(drawing, ended.toReversed(), edge.source).toReversed();
+}
+
+/**
+ * The last segment of a loop's route that ends on a rounded element or on several: its end back on
+ * the side of the front shape it reaches, and (where the route bends) far enough in that the loop's
+ * outer side, a LOOP_END further out, still lands on the outline rather than beside it.
+ */
+function fitLoopEnd(drawing: Drawing, path: Point[], end: string): Point[] {
+  const radius = drawing.geometry.round.get(end) ?? 0,
+    box = frontOf(drawing, end);
+  if ((!radius && box === drawing.geometry.boxes.get(end)) || path.length < 2) return path;
+  const [before, last] = path.slice(-2),
+    vertical = Math.abs(before.x - last.x) < 0.5;
+  const [slide, across] = vertical ? (["x", "y"] as const) : (["y", "x"] as const),
+    [extent, depth] = vertical ? [box.width, box.height] : [box.height, box.width];
+  const fitted = path.map((point) => ({ ...point }));
+  fitted.at(-1)![across] = box[across] + (before[across] < last[across] ? 0 : depth);
+  if (path.length < 3) return fitted;
+  const reach = Math.min(0.4 * radius + LOOP_END, extent / 2),
+    at = Math.min(Math.max(last[slide], box[slide] + reach), box[slide] + extent - reach);
+  fitted.at(-1)![slide] = at;
+  fitted.at(-2)![slide] = at;
+  return fitted;
 }
 
 /** Straight: two mirror-image circular arcs bulging away from each other, "( )", heads on the arcs' tangents. */
@@ -875,8 +911,11 @@ function drawArcs(drawing: Drawing, edge: TamEdge, path: Point[]) {
   if (fitted < BULGE) fallback("loop-fitted");
   for (const side of [1, -1]) {
     const outward = { x: n.x * side, y: n.y * side };
-    let a = meet(drawing, add(path[0], outward, LOOP_END), add(path[0], d, 1), edge.source),
-      b = meet(drawing, add(path[1], outward, LOOP_END), add(path[1], d, -1), edge.target);
+    // Each side's ends move onto a rounded shape along that side, not along the access's middle.
+    const start = add(path[0], outward, LOOP_END),
+      end = add(path[1], outward, LOOP_END);
+    let a = meet(drawing, start, add(start, d, 1), edge.source),
+      b = meet(drawing, end, add(end, d, -1), edge.target);
     // One side carries data to the target, the other back to the source.
     if (side < 0) [a, b] = [b, a];
     drawArc(drawing, edge, a, b, outward, fitted);
