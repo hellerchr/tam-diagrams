@@ -5,7 +5,7 @@
  */
 
 import type { Direction } from "../src/elk.ts";
-import { COLORS, ELEMENT_KINDS } from "../src/tam.ts";
+import { COLORS, ELEMENT_KINDS, type TamNode } from "../src/tam.ts";
 import type { ElementKind } from "../src/tam-edit.ts";
 import { h, icon, iconButton, setOff, tipped } from "./dom.ts";
 import type { Editor } from "./editor.ts";
@@ -74,12 +74,48 @@ const LEVELS: Partial<Record<string, { any: string; conceptual: string; design: 
 };
 LEVELS.swimlane = LEVELS.flowchart;
 
+/** The words of a connection that is a channel, which goes by a protocol. */
+const CHANNELS = ["calls", "sends data", "---", "requires"];
+
+/** The lines of a list typed in a field, one entry a line. */
+const lines = (text: string) =>
+  text
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+
 /** One of the buttons of a segmented control: a name or an icon, and what its tooltip says. */
 interface Segment<T extends string> {
   value: T;
   name?: string;
   icon?: IconName;
   tip?: string;
+}
+
+/**
+ * Whether Enter types a line break in a text field: in a list, where every line is an entry, Enter
+ * starts the next; in another field of several lines Shift+Enter does.
+ */
+function entersLine(event: KeyboardEvent, multiline: boolean, list: boolean): boolean {
+  return (list && !event.ctrlKey && !event.metaKey) || (multiline && event.shiftKey);
+}
+
+/** The keys of a text field: Enter takes what was typed, Escape puts back what it showed. */
+function textKey(
+  event: KeyboardEvent,
+  field: HTMLInputElement | HTMLTextAreaElement,
+  read: () => string,
+  multiline: boolean,
+  list: boolean,
+) {
+  if (event.key === "Enter") {
+    if (entersLine(event, multiline, list)) return;
+    event.preventDefault();
+    field.blur();
+  } else if (event.key === "Escape") {
+    field.value = read();
+    field.blur();
+  }
 }
 
 export class Inspector {
@@ -95,37 +131,11 @@ export class Inspector {
 
   /** Shows the selection's properties: built again when the selection changed, brought up to date else. */
   update() {
-    const { editor } = this,
-      elements = editor.selectedElements,
-      wires = editor.selectedWires;
-    // What a part is comes with its picture: a part just added is known once it is laid out.
-    const key = [
-      editor.type,
-      ...editor.selection.map(
-        (part) =>
-          `${part.type}:${part.id}:${
-            (part.type === "wire"
-              ? editor.doc.picture?.joins?.get(part.id)?.kind
-              : editor.doc.picture?.parts?.get(part.id)?.kind) ?? ""
-          }`,
-      ),
-    ].join(" ");
+    const key = this.selectionKey();
     if (key !== this.inspected || !this.element.childElementCount) {
       this.inspected = key;
       this.sync = [];
-      this.element.replaceChildren(
-        ...(editor.structural
-          ? this.flowPane(elements, wires)
-          : !editor.editable
-            ? this.textPane()
-            : wires.length === 1 && !elements.length
-              ? this.wirePane(wires[0])
-              : elements.length && !wires.length
-                ? this.elementPane(elements)
-                : editor.selection.length
-                  ? this.manyPane()
-                  : this.diagramPane()),
-      );
+      this.element.replaceChildren(...this.pane());
     }
     // A field reads the source as it is; while that has an error it keeps what it showed.
     for (const sync of this.sync) {
@@ -135,6 +145,32 @@ export class Inspector {
         // The source does not read at the moment.
       }
     }
+  }
+
+  /** What is selected, as a key. What a part is comes with its picture: a part just added is known once it is laid out. */
+  private selectionKey() {
+    const { editor } = this,
+      { picture } = editor.doc,
+      kindOf = (part: Editor["selection"][number]) =>
+        (part.type === "wire"
+          ? picture?.joins?.get(part.id)?.kind
+          : picture?.parts?.get(part.id)?.kind) ?? "";
+    return [
+      editor.type,
+      ...editor.selection.map((part) => `${part.type}:${part.id}:${kindOf(part)}`),
+    ].join(" ");
+  }
+
+  /** The pane for what is selected. */
+  private pane(): HTMLElement[] {
+    const { editor } = this,
+      elements = editor.selectedElements,
+      wires = editor.selectedWires;
+    if (editor.structural) return this.flowPane(elements, wires);
+    if (!editor.editable) return this.textPane();
+    if (wires.length === 1 && !elements.length) return this.wirePane(wires[0]);
+    if (elements.length && !wires.length) return this.elementPane(elements);
+    return editor.selection.length ? this.manyPane() : this.diagramPane();
   }
 
   /** What the pane is about: an icon and a name, above the groups. */
@@ -183,19 +219,9 @@ export class Inspector {
     };
     field.addEventListener("change", commit);
     field.addEventListener("input", fit);
-    field.addEventListener("keydown", (event) => {
-      const key = (event as KeyboardEvent).key;
-      const { shiftKey, ctrlKey, metaKey } = event as KeyboardEvent;
-      // In a list every line is an entry: Enter starts the next, and leaving the field takes them.
-      if (key === "Enter" && list && !ctrlKey && !metaKey) return;
-      if (key === "Enter" && !(multiline && shiftKey)) {
-        event.preventDefault();
-        field.blur();
-      } else if (key === "Escape") {
-        field.value = read();
-        field.blur();
-      }
-    });
+    field.addEventListener("keydown", (event) =>
+      textKey(event as KeyboardEvent, field, read, multiline, list),
+    );
     this.sync.push(() => {
       if (document.activeElement !== field) field.value = read();
       fit();
@@ -338,20 +364,105 @@ export class Inspector {
     );
   }
 
+  /** The nodes of the selected elements, as the picture on show has them. */
+  private nodes(ids: string[]): TamNode[] {
+    const nodes = this.editor.doc.picture?.diagram.nodes;
+    return ids.flatMap((id) => nodes?.get(id) ?? []);
+  }
+
+  /** What the selected elements have in common; undefined where they differ. */
+  private shared<T>(ids: string[], read: (node: TamNode) => T): T | undefined {
+    const values = new Set(this.nodes(ids).map(read));
+    return values.size === 1 ? [...values][0] : undefined;
+  }
+
   private elementPane(ids: string[]): HTMLElement[] {
-    const { editor } = this;
-    const nodes = () =>
-      ids.flatMap((id) => {
-        const node = editor.doc.picture?.diagram.nodes.get(id);
-        return node ? [node] : [];
-      });
-    const shared = <T>(read: (node: ReturnType<typeof nodes>[number]) => T): T | undefined => {
-      const values = new Set(nodes().map(read));
-      return values.size === 1 ? [...values][0] : undefined;
-    };
-    const [id] = ids,
+    const { editor } = this,
+      single = ids.length === 1,
+      // A note is text attached to an element: it has no count, no copy and no interfaces.
+      notes = this.nodes(ids).every((node) => node.kind === "note");
+    return [
+      this.elementSubject(ids),
+      this.elementIdentity(ids, notes),
+      this.group(
+        "Style",
+        this.row("Color", h("div", { class: "swatches" }, ...this.swatches(ids)), "div"),
+        !notes && this.countRow(ids),
+        single && this.copyRow(ids[0]),
+      ),
+      ...(single ? [this.geometry()] : []),
+      this.group(
+        "Arrange",
+        this.arrangement(ids, "Align"),
+        this.arrangement(ids, "Distribute"),
+        this.arrangement(ids, "Size"),
+        h("div", { class: "actions" }, this.layoutThese(single)),
+      ),
+      this.interfaces(ids),
+      h(
+        "div",
+        { class: "actions end" },
+        h(
+          "button",
+          { class: "button outlined", type: "button", onClick: () => editor.duplicateSelection() },
+          "Duplicate",
+        ),
+        this.remove(),
+      ),
+    ];
+  }
+
+  /** What the element pane is about: one element, one note, or several elements. */
+  private elementSubject(ids: string[]) {
+    if (ids.length !== 1) return this.subject("shapes", `${ids.length} elements`);
+    const [first] = this.nodes(ids);
+    if (first?.kind === "note") return this.subject("uml-note", "Note");
+    return this.subject((first?.kind as IconName) ?? "agent", "Element");
+  }
+
+  /** The name, kind and id of the selected elements: one alone has a name and an id to change. */
+  private elementIdentity(ids: string[], notes: boolean) {
+    const { editor } = this,
+      [id] = ids,
       single = ids.length === 1;
-    const colors = ["", ...COLORS].map((color) => {
+    return this.group(
+      "Identity",
+      single &&
+        this.row(
+          notes ? "Text" : "Name",
+          this.text(
+            () => (this.nodes(ids)[0]?.label ?? "").replace(/<br\s*\/?>/gi, "\n"),
+            (label) => editor.setElements({ label }),
+            notes ? "Text" : "Name",
+            true,
+          ),
+        ),
+      this.row(
+        "Kind",
+        this.choice(
+          ELEMENT_KINDS.map((kind) => ({ value: kind, name: kindName(kind) })),
+          () => (this.shared(ids, (node) => node.kind) ?? "") as ElementKind | "",
+          (kind) => editor.setElements({ kind }),
+          // A design level kind stays on show for an element of it, and is offered to no other.
+          (kind) => PLAIN_KINDS.has(kind) && editor.allowsElements({ kind }),
+        ),
+      ),
+      // The id is what the source calls the element: changed in every connection that names it.
+      single &&
+        this.row(
+          "Id",
+          this.text(
+            () => id,
+            (next) => editor.renameElementId(id, next),
+          ),
+        ),
+    );
+  }
+
+  /** A swatch for each color, and one for none, pressed at the color the selected elements share. */
+  private swatches(ids: string[]) {
+    const { editor } = this;
+    return ["", ...COLORS].map((color) => {
       const name = color ? color[0].toUpperCase() + color.slice(1) : "No color";
       const swatch = h("button", {
         class: `swatch ${color || "none"}`,
@@ -362,20 +473,76 @@ export class Inspector {
       this.sync.push(() =>
         swatch.setAttribute(
           "aria-pressed",
-          String((shared((node) => node.color ?? "") ?? "?") === color),
+          String((this.shared(ids, (node) => node.color ?? "") ?? "?") === color),
         ),
       );
       return swatch;
     });
-    const multiple = (node: ReturnType<typeof nodes>[number]) =>
-      node.stack
-        ? "stack"
-        : editor.doc.picture?.diagram.nodes.has(`${node.id}#2`)
-          ? "several"
-          : "one";
-    // Where the element stands and how large it is, to the pixel.
-    const number = (name: "x" | "y" | "width" | "height", label: string) => {
-      const field = this.text(
+  }
+
+  /** How many an element stands for: one, a stack, or two with dots between. */
+  private countRow(ids: string[]) {
+    const { editor } = this,
+      nodes = editor.doc.picture?.diagram.nodes,
+      multiple = (node: TamNode) =>
+        node.stack ? "stack" : nodes?.has(`${node.id}#2`) ? "several" : "one",
+      change = (value: string) => ({ stack: value === "stack", multiple: value === "several" });
+    return this.row(
+      "Count",
+      this.segments(
+        [
+          { value: "one", name: "One" },
+          { value: "stack", name: "Stack", tip: "Several, drawn as a stack" },
+          { value: "several", name: "A … B", tip: "Several, drawn as two with dots between" },
+        ],
+        () => this.shared(ids, multiple),
+        (value) => editor.setElements(change(value)),
+        (value) => editor.elementsRefusal(change(value)),
+      ),
+      "div",
+    );
+  }
+
+  /** Shown as two with dots between, the copy stands beside or below; dragging it puts it anywhere. */
+  private copyRow(id: string) {
+    const { editor } = this,
+      copyRow = this.row(
+        "Copy",
+        this.segments<"beside" | "below">(
+          [
+            { value: "beside", name: "Beside", tip: "A … B, side by side" },
+            { value: "below", name: "Below", tip: "A … B, one above the other" },
+          ],
+          () => editor.copySide(id),
+          (side) => editor.placeCopy(id, side),
+        ),
+        "div",
+      );
+    this.sync.push(() => {
+      copyRow.hidden = !editor.doc.picture?.diagram.nodes.has(`${id}#2`);
+    });
+    return copyRow;
+  }
+
+  /** Where the element stands and how large it is, to the pixel. */
+  private geometry() {
+    return this.group(
+      "Geometry",
+      h(
+        "div",
+        { class: "numbers" },
+        this.number("x", "X"),
+        this.number("y", "Y"),
+        this.number("width", "W"),
+        this.number("height", "H"),
+      ),
+    );
+  }
+
+  /** A field of the geometry: one number of the selected element's box. */
+  private number(name: "x" | "y" | "width" | "height", label: string) {
+    const { editor } = this,
+      field = this.text(
         () => {
           const box = editor.selectedBox;
           return box ? String(Math.round(box[name] * 10) / 10) : "";
@@ -385,57 +552,56 @@ export class Inspector {
           if (value.trim() && Number.isFinite(next)) editor.setBox({ [name]: next });
         },
       );
-      field.setAttribute("inputmode", "decimal");
-      field.setAttribute("aria-label", label);
-      return h("label", { class: "number" }, h("span", {}, label), field);
-    };
-    // Aligning and spreading need several elements; sizes can be made one, or left to the contents.
-    const arrangement = (group: (typeof ARRANGE)[number]["group"]) =>
-      this.row(
-        group,
-        h(
-          "div",
-          { class: "icons" },
-          ...ARRANGE.filter((action) => action.group === group).map((action) => {
-            const control = iconButton(
-              action.icon,
-              { tip: action.name },
-              () => action.run(editor),
-              "button small",
-            );
-            setOff(control, arrangeRefusal(action, ids.length));
-            return control;
-          }),
-        ),
+    field.setAttribute("inputmode", "decimal");
+    field.setAttribute("aria-label", label);
+    return h("label", { class: "number" }, h("span", {}, label), field);
+  }
+
+  /** Aligning and spreading need several elements; sizes can be made one, or left to the contents. */
+  private arrangement(ids: string[], group: (typeof ARRANGE)[number]["group"]) {
+    const { editor } = this;
+    return this.row(
+      group,
+      h(
         "div",
-      );
-    // Only what is selected is laid out: the parts of a container, or several elements among themselves.
-    const layoutThese = h(
-      "button",
-      { class: "button outlined", type: "button", onClick: () => void editor.layoutSelection() },
-      icon("layout"),
-      h("span", {}, single ? "Auto layout inside" : "Auto layout these"),
-    );
-    this.sync.push(() =>
-      setOff(layoutThese, !editor.canLayoutSelection && "This element holds no others to lay out"),
-    );
-    // Shown as two with dots between, the copy stands beside or below; dragging it puts it anywhere.
-    const copyRow = this.row(
-      "Copy",
-      this.segments<"beside" | "below">(
-        [
-          { value: "beside", name: "Beside", tip: "A … B, side by side" },
-          { value: "below", name: "Below", tip: "A … B, one above the other" },
-        ],
-        () => editor.copySide(id),
-        (side) => editor.placeCopy(id, side),
+        { class: "icons" },
+        ...ARRANGE.filter((action) => action.group === group).map((action) => {
+          const control = iconButton(
+            action.icon,
+            { tip: action.name },
+            () => action.run(editor),
+            "button small",
+          );
+          setOff(control, arrangeRefusal(action, ids.length));
+          return control;
+        }),
       ),
       "div",
     );
-    this.sync.push(() => {
-      copyRow.hidden = !editor.doc.picture?.diagram.nodes.has(`${id}#2`);
-    });
-    // An interface is named, then added as one the element provides or requires.
+  }
+
+  /** Only what is selected is laid out: the parts of a container, or several elements among themselves. */
+  private layoutThese(single: boolean) {
+    const { editor } = this,
+      button = h(
+        "button",
+        { class: "button outlined", type: "button", onClick: () => void editor.layoutSelection() },
+        icon("layout"),
+        h("span", {}, single ? "Auto layout inside" : "Auto layout these"),
+      );
+    this.sync.push(() =>
+      setOff(button, !editor.canLayoutSelection && "This element holds no others to lay out"),
+    );
+    return button;
+  }
+
+  /**
+   * An interface is named, then added as one the element provides or requires. Interfaces belong
+   * to the design level: only a diagram that has it already offers them, at elements that act.
+   */
+  private interfaces(ids: string[]) {
+    const { editor } = this,
+      [id] = ids;
     let offers: "provides" | "requires" = "provides";
     const name = h("input", {
       class: "field",
@@ -474,209 +640,142 @@ export class Inspector {
         h("button", { class: "button outlined", type: "button", onClick: add }, "Add"),
       ),
     );
-    // Interfaces belong to the design level: only a diagram that has it already offers them, at
-    // elements that act.
     this.sync.push(() => {
-      interfaces.hidden = !single || !editor.designLevel || !editor.allowsInterface(id);
+      interfaces.hidden = ids.length !== 1 || !editor.designLevel || !editor.allowsInterface(id);
     });
-    const first = nodes()[0],
-      // A note is text attached to an element: it has no count, no copy and no interfaces.
-      notes = nodes().every((node) => node.kind === "note");
-    return [
-      single
-        ? first?.kind === "note"
-          ? this.subject("uml-note", "Note")
-          : this.subject((first?.kind as IconName) ?? "agent", "Element")
-        : this.subject("shapes", `${ids.length} elements`),
-      this.group(
-        "Identity",
-        single &&
-          this.row(
-            notes ? "Text" : "Name",
-            this.text(
-              () => (nodes()[0]?.label ?? "").replace(/<br\s*\/?>/gi, "\n"),
-              (label) => editor.setElements({ label }),
-              notes ? "Text" : "Name",
-              true,
-            ),
-          ),
-        this.row(
-          "Kind",
-          this.choice(
-            ELEMENT_KINDS.map((kind) => ({ value: kind, name: kindName(kind) })),
-            () => (shared((node) => node.kind) ?? "") as ElementKind | "",
-            (kind) => editor.setElements({ kind }),
-            // A design level kind stays on show for an element of it, and is offered to no other.
-            (kind) => PLAIN_KINDS.has(kind) && editor.allowsElements({ kind }),
-          ),
-        ),
-        // The id is what the source calls the element: changed in every connection that names it.
-        single &&
-          this.row(
-            "Id",
-            this.text(
-              () => id,
-              (next) => editor.renameElementId(id, next),
-            ),
-          ),
-      ),
-      this.group(
-        "Style",
-        this.row("Color", h("div", { class: "swatches" }, ...colors), "div"),
-        !notes &&
-          this.row(
-            "Count",
-            this.segments(
-              [
-                { value: "one", name: "One" },
-                { value: "stack", name: "Stack", tip: "Several, drawn as a stack" },
-                { value: "several", name: "A … B", tip: "Several, drawn as two with dots between" },
-              ],
-              () => shared(multiple),
-              (value) =>
-                editor.setElements({ stack: value === "stack", multiple: value === "several" }),
-              (value) =>
-                editor.elementsRefusal({ stack: value === "stack", multiple: value === "several" }),
-            ),
-            "div",
-          ),
-        single && copyRow,
-      ),
-      ...(single
-        ? [
-            this.group(
-              "Geometry",
-              h(
-                "div",
-                { class: "numbers" },
-                number("x", "X"),
-                number("y", "Y"),
-                number("width", "W"),
-                number("height", "H"),
-              ),
-            ),
-          ]
-        : []),
-      this.group(
-        "Arrange",
-        arrangement("Align"),
-        arrangement("Distribute"),
-        arrangement("Size"),
-        h("div", { class: "actions" }, layoutThese),
-      ),
-      interfaces,
-      h(
-        "div",
-        { class: "actions end" },
-        h(
-          "button",
-          { class: "button outlined", type: "button", onClick: () => editor.duplicateSelection() },
-          "Duplicate",
-        ),
-        this.remove(),
-      ),
-    ];
+    return interfaces;
   }
 
   private wirePane(id: string): HTMLElement[] {
+    if (!this.editor.connection(id)) return this.interfacePane();
+    return [
+      this.subject("connect", "Connection"),
+      this.group(
+        "Identity",
+        this.row("Kind", this.wireKind(id)),
+        ...this.wireEnds(id),
+        this.bothWays(id),
+      ),
+      this.wireText(id),
+      h("div", { class: "actions end" }, this.reverse(id), this.remove()),
+    ];
+  }
+
+  /** The ids of the elements a connection joins. */
+  private wireEnds(id: string) {
     const { editor } = this,
-      read = () => editor.connection(id);
-    if (!read())
-      return [
-        this.subject("link", "Interface"),
-        h(
-          "p",
-          { class: "note" },
-          "A provided or required interface of an element. Its name is set in the source.",
+      from = h("code", { class: "id" }),
+      to = h("code", { class: "id" });
+    this.sync.push(() => {
+      const connection = editor.connection(id);
+      from.textContent = connection?.from ?? "";
+      to.textContent = connection?.to ?? "";
+    });
+    return [this.row("From", from, "div"), this.row("To", to, "div")];
+  }
+
+  /** Whether a connection goes both ways, where it may. The line that attaches a note has no way. */
+  private bothWays(id: string) {
+    const { editor } = this,
+      both = h("input", {
+        type: "checkbox",
+        onChange: () => editor.setWire(id, { both: both.checked }),
+      }) as HTMLInputElement,
+      row = h("label", { class: "row check" }, h("span", {}, "Both ways"), both);
+    this.sync.push(() => {
+      const connection = editor.connection(id);
+      both.checked = !!connection?.both;
+      row.hidden =
+        connection?.word === "anchor" ||
+        (!connection?.both && !editor.allowsWire(id, { both: true }));
+    });
+    return row;
+  }
+
+  /** Turns a connection the other way, where it may go so. */
+  private reverse(id: string) {
+    const { editor } = this,
+      button = this.action("Reverse", () => editor.setWire(id, { reverse: true }));
+    this.sync.push(() =>
+      setOff(
+        button,
+        !editor.allowsWire(id, { reverse: true }) && "This connection only goes this way",
+      ),
+    );
+    return button;
+  }
+
+  /**
+   * What a connection says: its label, and the protocol of a channel. A dependency says its
+   * keyword, and the line that attaches a note says nothing.
+   */
+  private wireText(id: string) {
+    const { editor } = this,
+      label = this.wireLabel(id),
+      protocol = this.row(
+        "Protocol",
+        this.text(
+          () => editor.connection(id)?.protocol ?? "",
+          (text) => editor.setWire(id, { protocol: text }),
+          "HTTPS, RFC, …",
         ),
-        h("div", { class: "actions end" }, this.remove()),
-      ];
-    const channel = () => ["calls", "sends data", "---", "requires"].includes(read()?.word ?? "");
-    const both = h("input", {
-      type: "checkbox",
-      onChange: () => editor.setWire(id, { both: both.checked }),
-    }) as HTMLInputElement;
-    const bothRow = h("label", { class: "row check" }, h("span", {}, "Both ways"), both);
-    const label = this.row(
+      ),
+      text = this.group("Text", label, protocol);
+    this.sync.push(() => {
+      const word = editor.connection(id)?.word ?? "";
+      label.hidden = word === "dependency" || word === "anchor";
+      text.hidden = word === "anchor";
+      protocol.hidden = !CHANNELS.includes(word);
+    });
+    return text;
+  }
+
+  /** A provided or required interface, which the source names: it is only removed here. */
+  private interfacePane(): HTMLElement[] {
+    return [
+      this.subject("link", "Interface"),
+      h(
+        "p",
+        { class: "note" },
+        "A provided or required interface of an element. Its name is set in the source.",
+      ),
+      h("div", { class: "actions end" }, this.remove()),
+    ];
+  }
+
+  /** The label of a connection: what is sent or asked. A dependency's is its keyword, not shown here. */
+  private wireLabel(id: string) {
+    const { editor } = this;
+    return this.row(
       "Label",
       this.text(
-        () =>
-          (read()?.word === "dependency" ? "" : (read()?.label ?? "")).replace(
+        () => {
+          const connection = editor.connection(id);
+          return (connection?.word === "dependency" ? "" : (connection?.label ?? "")).replace(
             /<br\s*\/?>/gi,
             "\n",
-          ),
+          );
+        },
         (text) => editor.setWire(id, { label: text }),
         "What is sent or asked",
         true,
       ),
     );
-    const protocol = this.row(
-      "Protocol",
-      this.text(
-        () => read()?.protocol ?? "",
-        (text) => editor.setWire(id, { protocol: text }),
-        "HTTPS, RFC, …",
-      ),
-    );
-    const from = h("code", { class: "id" }),
-      to = h("code", { class: "id" }),
-      text = this.group("Text", label, protocol);
-    const reverse = h(
-      "button",
-      {
-        class: "button outlined",
-        type: "button",
-        onClick: () => editor.setWire(id, { reverse: true }),
+  }
+
+  /** The kind of a connection. A kind of the design level stays on show for a connection of it, and is offered to no other. */
+  private wireKind(id: string) {
+    const { editor } = this,
+      kindOf = (value: string) => WIRES.find((item) => item.value === value)!;
+    return this.choice(
+      WIRES,
+      () => {
+        const connection = editor.connection(id);
+        return connection ? wireValue(connection) : "";
       },
-      "Reverse",
+      (value) => editor.setWire(id, wireChange(kindOf(value))),
+      (value) => !kindOf(value).design && editor.allowsWire(id, wireChange(kindOf(value))),
     );
-    this.sync.push(() => {
-      const connection = read();
-      both.checked = !!connection?.both;
-      bothRow.hidden =
-        connection?.word === "anchor" ||
-        (!connection?.both && !editor.allowsWire(id, { both: true }));
-      setOff(
-        reverse,
-        !editor.allowsWire(id, { reverse: true }) && "This connection only goes this way",
-      );
-      // A dependency says its keyword, and the line that attaches a note says nothing.
-      label.hidden = connection?.word === "dependency" || connection?.word === "anchor";
-      text.hidden = connection?.word === "anchor";
-      protocol.hidden = !channel();
-      from.textContent = connection?.from ?? "";
-      to.textContent = connection?.to ?? "";
-    });
-    return [
-      this.subject("connect", "Connection"),
-      this.group(
-        "Identity",
-        this.row(
-          "Kind",
-          this.choice(
-            WIRES,
-            () => {
-              const connection = read();
-              return connection ? wireValue(connection) : "";
-            },
-            (value) => {
-              const kind = WIRES.find((item) => item.value === value)!;
-              editor.setWire(id, wireChange(kind));
-            },
-            // A kind of the design level stays on show for a connection of it, and is offered to no other.
-            (value) => {
-              const kind = WIRES.find((item) => item.value === value)!;
-              return !kind.design && editor.allowsWire(id, wireChange(kind));
-            },
-          ),
-        ),
-        this.row("From", from, "div"),
-        this.row("To", to, "div"),
-        bothRow,
-      ),
-      text,
-      h("div", { class: "actions end" }, reverse, this.remove()),
-    ];
   }
 
   /** Elements and connections selected together: only what both take. */
@@ -695,172 +794,9 @@ export class Inspector {
 
   /** A part or a join of a diagram with a structure: its name or label, its kind, and its removal. */
   private flowPane(elements: string[], wires: string[]): HTMLElement[] {
-    const { editor } = this,
-      info = typeInfo(editor.type),
-      structure = editor.structure!,
-      parts = () => editor.doc.picture?.parts;
-    if (elements.length === 1 && !wires.length) {
-      // The id as the source writes it: the scene's has a prefix where a shape needs one.
-      const shown = (id: string) => id.replace(/^(head|ns):/, "");
-      const [id] = elements,
-        kind = parts()?.get(id)?.kind ?? "",
-        piece = structure.pieces.find((item) => item.kind === kind);
-      const rows: (HTMLElement | false)[] = [
-        this.subject(pieceIcon(kind), piece?.name ?? "Part"),
-        this.group(
-          "Identity",
-          editor.nameable(id) &&
-            this.row(
-              "Name",
-              this.text(
-                () => (parts()?.get(id)?.label ?? "").replace(/<br\s*\/?>/gi, "\n"),
-                (label) => editor.relabel(id, label),
-                "Name",
-                true,
-              ),
-            ),
-          // The id is what the source calls the part: changed at every mention where the type can.
-          editor.can("reid") && editor.nameable(id)
-            ? this.row(
-                "Id",
-                this.text(
-                  () => shown(id),
-                  (next) => editor.renameId(id, next),
-                ),
-              )
-            : this.row("Id", h("code", {}, shown(id)), "div"),
-          editor.type === "class" &&
-            editor.members(id) !== undefined &&
-            this.row(
-              "Stereotype",
-              this.text(
-                () => classStereotype(editor.doc.source, id),
-                (text) => editor.amend((source) => setClassStereotype(source, id, text)),
-                "interface, abstract, …",
-              ),
-            ),
-          editor.type === "state" &&
-            kind === "state" &&
-            this.row(
-              "Does",
-              this.text(
-                () => stateDescription(editor.doc.source, id),
-                (text) => editor.amend((source) => setStateDescription(source, id, text)),
-                "entry / do something",
-                true,
-              ),
-            ),
-        ),
-        // A class lists its attributes and methods, one a line.
-        editor.members(id) !== undefined &&
-          this.group(
-            "Members",
-            this.text(
-              () => (editor.members(id) ?? []).join("\n"),
-              (text) =>
-                editor.setMembers(
-                  id,
-                  text
-                    .split("\n")
-                    .map((line) => line.trim())
-                    .filter(Boolean),
-                ),
-              "+name: type\n+method()",
-              true,
-              true,
-            ),
-          ),
-        // An entity lists its attributes, one a line: a type, a name, keys and a comment.
-        editor.type === "er" &&
-          kind === "entity" &&
-          this.group(
-            "Attributes",
-            this.text(
-              () => erAttributes(editor.doc.source, id).join("\n"),
-              (text) =>
-                editor.amend((source) =>
-                  setErAttributes(
-                    source,
-                    id,
-                    text
-                      .split("\n")
-                      .map((line) => line.trim())
-                      .filter(Boolean),
-                  ),
-                ),
-              'int id PK\nstring name "a comment"',
-              true,
-              true,
-            ),
-          ),
-        h(
-          "p",
-          { class: "note" },
-          "Click a shape on the left to add it at this one, or drag a dot beside it to another.",
-        ),
-        h(
-          "div",
-          { class: "actions end" },
-          editor.can("copy") &&
-            !parts()?.get(id)?.group &&
-            this.action("Duplicate", () => editor.duplicateSelection()),
-          editor.can("ungroup") &&
-            !!parts()?.get(id)?.group &&
-            this.action("Ungroup", () => editor.ungroup(id)),
-          this.remove(),
-        ),
-      ];
-      return rows.filter((row) => row !== false);
-    }
-    if (wires.length === 1 && !elements.length) {
-      const [id] = wires;
-      return [
-        this.subject("connect", "Connection"),
-        this.group(
-          "Identity",
-          // A join of a kind that is only read has none to choose.
-          // A relationship whose two cardinalities are no usual pair still takes one.
-          (structure.links.some((link) => link.kind === editor.linkKind(id)) ||
-            editor.type === "er") &&
-            structure.links.length > 1 &&
-            this.row(
-              "Kind",
-              this.choice(
-                structure.links.map((link) => ({ value: link.kind, name: link.name })),
-                () => {
-                  const kind = editor.linkKind(id) ?? "";
-                  return structure.links.some((link) => link.kind === kind) ? kind : "";
-                },
-                (kind) => editor.relink(id, kind),
-                () => true,
-                "Other",
-              ),
-            ),
-          !!editor.wireLabel(id) &&
-            this.row(
-              "Label",
-              this.text(
-                () => (editor.wireLabel(id)?.text ?? "").replace(/<br\s*\/?>/gi, "\n"),
-                (label) => editor.wireLabel(id)?.set(label),
-                "What it says",
-                true,
-              ),
-            ),
-          ...(editor.type === "class" ? this.multiplicities(id) : []),
-          ...(editor.type === "er" ? this.cardinalities(id) : []),
-        ),
-        h(
-          "div",
-          { class: "actions end" },
-          editor.can("reverse") && this.action("Reverse", () => editor.reverseJoin(id)),
-          editor.type === "sequence" &&
-            this.action("Reply", () => editor.amend((source) => replyTo(source, id).source)),
-          editor.type === "sequence" &&
-            this.action("Activation", () => editor.amend((source) => toggleActivation(source, id))),
-          this.remove(),
-        ),
-      ];
-    }
+    const { editor } = this;
+    if (elements.length === 1 && !wires.length) return this.partPane(elements[0]);
+    if (wires.length === 1 && !elements.length) return this.joinPane(wires[0]);
     if (editor.selection.length)
       return [
         this.subject("shapes", `${editor.selection.length} selected`),
@@ -868,13 +804,206 @@ export class Inspector {
       ];
     return [
       ...this.diagramPane(),
-      h("p", { class: "note" }, `${info.about}.`),
+      h("p", { class: "note" }, `${typeInfo(editor.type).about}.`),
       h(
         "p",
         { class: "note" },
         "Click a shape on the left to add it, or drag it onto a part to join it there. Drag from a dot beside a part to connect. Double-click to name. The layout is automatic.",
       ),
     ];
+  }
+
+  /** A part of the structure on show. */
+  private part(id: string) {
+    return this.editor.doc.picture?.parts?.get(id);
+  }
+
+  /** One part of a diagram with a structure. */
+  private partPane(id: string): HTMLElement[] {
+    const { editor } = this,
+      kind = this.part(id)?.kind ?? "",
+      piece = editor.structure!.pieces.find((item) => item.kind === kind);
+    const rows: (HTMLElement | false)[] = [
+      this.subject(pieceIcon(kind), piece?.name ?? "Part"),
+      this.partIdentity(id, kind),
+      this.members(id),
+      this.attributes(id, kind),
+      h(
+        "p",
+        { class: "note" },
+        "Click a shape on the left to add it at this one, or drag a dot beside it to another.",
+      ),
+      this.partActions(id),
+    ];
+    return rows.filter((row) => row !== false);
+  }
+
+  /** What is done to a part: a copy of one that is no group, the ungrouping of a group, its removal. */
+  private partActions(id: string) {
+    const { editor } = this,
+      group = !!this.part(id)?.group;
+    return h(
+      "div",
+      { class: "actions end" },
+      editor.can("copy") && !group && this.action("Duplicate", () => editor.duplicateSelection()),
+      editor.can("ungroup") && group && this.action("Ungroup", () => editor.ungroup(id)),
+      this.remove(),
+    );
+  }
+
+  /** The name and the id of a part, and what its type adds: a class's stereotype, what a state does. */
+  private partIdentity(id: string, kind: string) {
+    const { editor } = this;
+    return this.group(
+      "Identity",
+      editor.nameable(id) &&
+        this.row(
+          "Name",
+          this.text(
+            () => (this.part(id)?.label ?? "").replace(/<br\s*\/?>/gi, "\n"),
+            (label) => editor.relabel(id, label),
+            "Name",
+            true,
+          ),
+        ),
+      this.partId(id),
+      editor.type === "class" &&
+        editor.members(id) !== undefined &&
+        this.row(
+          "Stereotype",
+          this.text(
+            () => classStereotype(editor.doc.source, id),
+            (text) => editor.amend((source) => setClassStereotype(source, id, text)),
+            "interface, abstract, …",
+          ),
+        ),
+      editor.type === "state" &&
+        kind === "state" &&
+        this.row(
+          "Does",
+          this.text(
+            () => stateDescription(editor.doc.source, id),
+            (text) => editor.amend((source) => setStateDescription(source, id, text)),
+            "entry / do something",
+            true,
+          ),
+        ),
+    );
+  }
+
+  /**
+   * The id is what the source calls the part: changed at every mention where the type can. It
+   * shows as the source writes it: the scene's has a prefix where a shape needs one.
+   */
+  private partId(id: string) {
+    const { editor } = this,
+      shown = id.replace(/^(head|ns):/, "");
+    if (!editor.can("reid") || !editor.nameable(id))
+      return this.row("Id", h("code", {}, shown), "div");
+    return this.row(
+      "Id",
+      this.text(
+        () => shown,
+        (next) => editor.renameId(id, next),
+      ),
+    );
+  }
+
+  /** A class lists its attributes and methods, one a line. */
+  private members(id: string) {
+    const { editor } = this;
+    if (editor.members(id) === undefined) return false;
+    return this.group(
+      "Members",
+      this.text(
+        () => (editor.members(id) ?? []).join("\n"),
+        (text) => editor.setMembers(id, lines(text)),
+        "+name: type\n+method()",
+        true,
+        true,
+      ),
+    );
+  }
+
+  /** An entity lists its attributes, one a line: a type, a name, keys and a comment. */
+  private attributes(id: string, kind: string) {
+    const { editor } = this;
+    if (editor.type !== "er" || kind !== "entity") return false;
+    return this.group(
+      "Attributes",
+      this.text(
+        () => erAttributes(editor.doc.source, id).join("\n"),
+        (text) => editor.amend((source) => setErAttributes(source, id, lines(text))),
+        'int id PK\nstring name "a comment"',
+        true,
+        true,
+      ),
+    );
+  }
+
+  /** One join of a diagram with a structure. */
+  private joinPane(id: string): HTMLElement[] {
+    const { editor } = this,
+      sequence = editor.type === "sequence";
+    return [
+      this.subject("connect", "Connection"),
+      this.group(
+        "Identity",
+        this.linkKind(id),
+        this.joinLabel(id),
+        ...(editor.type === "class" ? this.multiplicities(id) : []),
+        ...(editor.type === "er" ? this.cardinalities(id) : []),
+      ),
+      h(
+        "div",
+        { class: "actions end" },
+        editor.can("reverse") && this.action("Reverse", () => editor.reverseJoin(id)),
+        sequence &&
+          this.action("Reply", () => editor.amend((source) => replyTo(source, id).source)),
+        sequence &&
+          this.action("Activation", () => editor.amend((source) => toggleActivation(source, id))),
+        this.remove(),
+      ),
+    ];
+  }
+
+  /**
+   * The kind of a join. A join of a kind that is only read has none to choose; a relationship
+   * whose two cardinalities are no usual pair still takes one.
+   */
+  private linkKind(id: string) {
+    const { editor } = this,
+      { links } = editor.structure!,
+      known = (kind: string | undefined) => links.some((link) => link.kind === kind);
+    if (links.length < 2 || !(known(editor.linkKind(id)) || editor.type === "er")) return false;
+    return this.row(
+      "Kind",
+      this.choice(
+        links.map((link) => ({ value: link.kind, name: link.name })),
+        () => {
+          const kind = editor.linkKind(id) ?? "";
+          return known(kind) ? kind : "";
+        },
+        (kind) => editor.relink(id, kind),
+        () => true,
+        "Other",
+      ),
+    );
+  }
+
+  /** The label of a join, where its kind has one. */
+  private joinLabel(id: string) {
+    const { editor } = this;
+    if (!editor.wireLabel(id)) return false;
+    return this.row(
+      "Label",
+      this.text(
+        () => (editor.wireLabel(id)?.text ?? "").replace(/<br\s*\/?>/gi, "\n"),
+        (label) => editor.wireLabel(id)?.set(label),
+        "What it says",
+        true,
+      ),
+    );
   }
 
   /** A diagram edited as text has its other properties in the source. */
@@ -894,21 +1023,11 @@ export class Inspector {
 
   /**
    * The properties of the whole diagram: its title, and those of the direction, the level and the
-   * numbering of messages its type has. A level the diagram refuses is off and says why.
+   * numbering of messages its type has.
    */
   private diagramPane(): HTMLElement[] {
     const { editor } = this,
-      info = typeInfo(editor.type),
-      settings = editor.settings,
-      header = () => editor.header,
-      levels = LEVELS[editor.type] ?? LEVELS.tam!;
-    const numbered = h("input", {
-      type: "checkbox",
-      onChange: () => editor.setHeader({ numbered: numbered.checked }),
-    }) as HTMLInputElement;
-    this.sync.push(() => {
-      numbered.checked = !!header()?.numbered;
-    });
+      info = typeInfo(editor.type);
     return [
       editor.editable
         ? this.subject("logo", "Diagram")
@@ -918,57 +1037,75 @@ export class Inspector {
         this.row(
           "Title",
           this.text(
-            () => header()?.title ?? "",
+            () => editor.header?.title ?? "",
             (title) => editor.setHeader({ title }),
             "Untitled",
           ),
         ),
       ),
-      (settings.direction || settings.level) &&
-        this.group(
-          "Layout",
-          settings.direction &&
-            this.row(
-              "Direction",
-              this.segments<Direction>(
-                [
-                  { value: "TB", icon: "arrow-down", tip: "Top to bottom" },
-                  { value: "LR", icon: "arrow-right", tip: "Left to right" },
-                ],
-                () => header()?.direction,
-                (direction) => editor.setHeader({ direction }),
-              ),
-              "div",
-            ),
-          settings.level &&
-            this.row(
-              "Level",
-              this.segments<"" | "conceptual" | "design">(
-                [
-                  { value: "", name: "Any", tip: levels.any },
-                  { value: "conceptual", name: "Conceptual", tip: levels.conceptual },
-                  { value: "design", name: "Design", tip: levels.design },
-                ],
-                () => header()?.level ?? "",
-                (level) => editor.setHeader({ level }),
-                (level) => editor.headerRefusal({ level }),
-              ),
-              "div",
-            ),
-        ),
-      settings.numbering &&
-        this.group(
-          "Messages",
-          h(
-            "label",
-            {
-              class: "row check",
-              ...tipped({ tip: "Numbers the messages, from 1: `autonumber`" }),
-            },
-            h("span", {}, "Numbered"),
-            numbered,
-          ),
-        ),
+      this.layoutGroup(),
+      this.messagesGroup(),
     ].filter((item) => item !== false);
+  }
+
+  /** The direction and the level of the diagram, where its type has them. A level the diagram refuses is off and says why. */
+  private layoutGroup(): HTMLElement | false {
+    const { editor } = this,
+      { settings } = editor,
+      levels = LEVELS[editor.type] ?? LEVELS.tam!;
+    if (!settings.direction && !settings.level) return false;
+    return this.group(
+      "Layout",
+      settings.direction &&
+        this.row(
+          "Direction",
+          this.segments<Direction>(
+            [
+              { value: "TB", icon: "arrow-down", tip: "Top to bottom" },
+              { value: "LR", icon: "arrow-right", tip: "Left to right" },
+            ],
+            () => editor.header?.direction,
+            (direction) => editor.setHeader({ direction }),
+          ),
+          "div",
+        ),
+      settings.level &&
+        this.row(
+          "Level",
+          this.segments<"" | "conceptual" | "design">(
+            [
+              { value: "", name: "Any", tip: levels.any },
+              { value: "conceptual", name: "Conceptual", tip: levels.conceptual },
+              { value: "design", name: "Design", tip: levels.design },
+            ],
+            () => editor.header?.level ?? "",
+            (level) => editor.setHeader({ level }),
+            (level) => editor.headerRefusal({ level }),
+          ),
+          "div",
+        ),
+    );
+  }
+
+  /** Whether the messages of a sequence diagram are numbered. */
+  private messagesGroup(): HTMLElement | false {
+    const { editor } = this;
+    if (!editor.settings.numbering) return false;
+    const numbered = h("input", {
+      type: "checkbox",
+      onChange: () => editor.setHeader({ numbered: numbered.checked }),
+    }) as HTMLInputElement;
+    this.sync.push(() => {
+      numbered.checked = !!editor.header?.numbered;
+    });
+    return this.group(
+      "Messages",
+      h(
+        "label",
+        { class: "row check", ...tipped({ tip: "Numbers the messages, from 1: `autonumber`" }) },
+        h("span", {}, "Numbered"),
+        numbered,
+      ),
+    );
   }
 }

@@ -20,7 +20,7 @@ import { Inspector } from "./inspector.ts";
 import { closeMenu, menuButton, menuOpen, popup } from "./menu.ts";
 import { type Bench, Menus, type PanelName, type Shell } from "./menus.ts";
 import { Minimap } from "./minimap.ts";
-import { Outline, within } from "./outline.ts";
+import { Outline } from "./outline.ts";
 import { Palette } from "./palette.ts";
 import { GuideSheet } from "./reference-dialog.ts";
 import type { Known } from "./completion.ts";
@@ -72,6 +72,69 @@ const PAUSE = 600;
 
 /** The most sources whose selection is remembered, to select again after a step of the history. */
 const REMEMBERED = 300;
+
+/** The keys that fold a group of the properties by its title. */
+const FOLDING = new Set(["Enter", " "]);
+
+/** The keys that go along the menu bar, and those that open the menu whose title has the focus. */
+const ALONG: Record<string, number> = { ArrowLeft: -1, ArrowRight: 1 },
+  OPENING = new Set(["ArrowDown", "Enter", " "]);
+
+/**
+ * A key of the window, pressed with one of the sets of modifiers in `with`: `C` for Ctrl or Cmd,
+ * `A` for Alt and `S` for Shift, in that order.
+ */
+interface Binding {
+  keys: string[];
+  /** The place of the key on the keyboard, for a key that may type another letter. */
+  code?: string;
+  with: string[];
+  /** A key of the canvas: it is the dialog's, the menu's or the field's while one has the focus. */
+  canvas?: boolean;
+  run(event: KeyboardEvent, key: string): void;
+}
+
+/** The modifiers held with a key, as a binding names them. */
+function modifiers(event: KeyboardEvent): string {
+  return (
+    (event.ctrlKey || event.metaKey ? "C" : "") +
+    (event.altKey ? "A" : "") +
+    (event.shiftKey ? "S" : "")
+  );
+}
+
+/** Whether a key pressed with the modifiers `held` is the binding's. */
+function bound(binding: Binding, event: KeyboardEvent, key: string, held: string): boolean {
+  return (binding.keys.includes(key) || binding.code === event.code) && binding.with.includes(held);
+}
+
+/** A key of the canvas is the dialog's, the menu's or the field's while one has the focus. */
+function keptFromCanvas(binding: Binding, event: KeyboardEvent): boolean {
+  return !!binding.canvas && (typing(event.target) || dialogOpen() || menuOpen());
+}
+
+/** The list of commands closes by its own key; no other key acts under a dialog. */
+function actsUnderDialog(key: string): boolean {
+  return !dialogOpen() || (key === "k" && !!document.querySelector("dialog.commands"));
+}
+
+/** Whether the key goes to a field that takes typing. */
+function typing(target: EventTarget | null): boolean {
+  const element = target as HTMLElement | null;
+  return (
+    !!element && (element.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(element.tagName))
+  );
+}
+
+/** Under a dialog every key is the dialog's, wherever the focus went: true when it was kept for it. */
+function keptByDialog(event: KeyboardEvent): boolean {
+  const target = event.target as HTMLElement | null;
+  if (!dialogOpen() || target?.closest?.("dialog")) return false;
+  focusDialog();
+  event.stopPropagation();
+  if (event.key !== "Tab" && event.key !== "Escape") event.preventDefault();
+  return true;
+}
 
 export class Panels {
   private readonly root: HTMLElement;
@@ -139,7 +202,7 @@ export class Panels {
   private readonly folded: Set<string>;
   private readonly banner = h("button", { class: "banner", type: "button" });
   /** When the source was typed in last, and the timer that shows an error once the typing rests. */
-  private typed = 0;
+  private typedAt = 0;
   private resting: number | undefined;
   /** The problem on show: the document's, once it is no longer one of typing under way. */
   private said: Problem | undefined;
@@ -183,7 +246,61 @@ export class Panels {
     this.shell = shell;
     this.stage = stage;
     installTooltips();
-    this.guide = new GuideSheet({
+    this.guide = this.makeGuide();
+    this.minimap = new Minimap(editor);
+    this.minimap.enabled = shell.recall("minimap") !== "off";
+    this.menus = new Menus(editor, shell, this.bench());
+    this.status = new StatusBar(editor, {
+      layout: () => this.menus.layoutMode(),
+      zoom: () => this.menus.zoom(),
+      showProblem: () => this.showProblem(),
+      toggleSnap: () => this.toggleSnap(),
+    });
+    this.palette = new Palette(editor, (text) => this.insert(text));
+    this.outline = new Outline(editor, (at) => popup(this.menus.context({ x: 0, y: 0 }), at));
+    this.inspector = new Inspector(editor);
+    this.folded = new Set((shell.recall("groups-folded") ?? "").split("\n").filter(Boolean));
+    this.foldByTitles();
+
+    // The bar: the menus, the document, and the few commands worth a button.
+    this.undo = iconButton("undo", { tip: "Undo", key: "Ctrl+Z" }, () => editor.doc.undo());
+    this.redo = iconButton("redo", { tip: "Redo", key: "Ctrl+Shift+Z" }, () => editor.doc.redo());
+    // One click between light and dark; View ▸ Theme also follows the system.
+    this.themeToggle = iconButton("theme", { tip: "Dark mode" }, () => {
+      shell.setTheme(this.dark ? "light" : "dark");
+      this.showTheme();
+    });
+    this.showTheme();
+    const header = this.makeBar(),
+      rail = this.makeRail();
+    this.leftPanel = this.makeLeftPanel();
+    const sourceBox = h("div", { class: "source" });
+    this.source = this.makeSource(sourceBox);
+    this.expand = this.makeExpand();
+    this.sidePanel = this.makeSidePanel(sourceBox);
+    this.coverStage();
+    root.append(
+      header,
+      rail,
+      this.leftPanel,
+      stage,
+      this.guide.element,
+      this.sidePanel,
+      this.status.element,
+    );
+    this.recallLayout();
+    this.hookEditor();
+    this.shortcuts();
+    if (shell.recall("welcomed") !== "yes") this.greet();
+    this.arrange();
+  }
+
+  // The making of the window.
+
+  /** The reference guide beside the source, whose examples replace the diagram on show. */
+  private makeGuide() {
+    const { editor, shell, root } = this;
+    return new GuideSheet({
       type: () => editor.type,
       insert: (text) => this.insert(text),
       example: (source, at) => {
@@ -200,7 +317,13 @@ export class Panels {
       notify: (message) => this.toast(message),
       shown: (open) => root.classList.toggle("guide-open", open),
     });
-    const bench: Bench = {
+  }
+
+  /** What the menus may ask of the window: its dialogs, its panels and its switches. */
+  private bench(): Bench {
+    const { editor, shell } = this,
+      panels = this;
+    return {
       chooser: () => this.chooser(),
       help: () => helpDialog(editor.type),
       syntax: () => syntaxDialog(editor.type),
@@ -212,51 +335,86 @@ export class Panels {
       toggleSnap: () => this.toggleSnap(),
       toggleGrid: () => this.toggleGrid(),
       get minimap() {
-        return minimap.enabled;
+        return panels.minimap.enabled;
       },
       toggleMinimap: () => {
+        const { minimap } = this;
         minimap.enabled = !minimap.enabled;
         shell.remember("minimap", minimap.enabled ? "on" : "off");
         minimap.draw();
       },
     };
-    const minimap = new Minimap(editor);
-    minimap.enabled = shell.recall("minimap") !== "off";
-    this.menus = new Menus(editor, shell, bench);
-    this.status = new StatusBar(editor, {
-      layout: () => this.menus.layoutMode(),
-      zoom: () => this.menus.zoom(),
-      showProblem: () => this.showProblem(),
-      toggleSnap: () => this.toggleSnap(),
-    });
-    this.palette = new Palette(editor, (text) => this.insert(text));
-    this.outline = new Outline(editor, (at) => popup(this.menus.context({ x: 0, y: 0 }), at));
-    this.inspector = new Inspector(editor);
-    this.minimap = minimap;
-    this.folded = new Set((shell.recall("groups-folded") ?? "").split("\n").filter(Boolean));
-    // A group of the properties folds by its title, with the pointer or with Enter and Space.
+  }
+
+  /** A group of the properties folds by its title, with the pointer or with Enter and Space. */
+  private foldByTitles() {
     const fold = (event: Event) => {
       const title = (event.target as Element | null)?.closest?.(".group > h3");
       if (!title) return false;
       const name = title.textContent ?? "";
       if (this.folded.has(name)) this.folded.delete(name);
       else this.folded.add(name);
-      shell.remember("groups-folded", [...this.folded].join("\n"));
+      this.shell.remember("groups-folded", [...this.folded].join("\n"));
       this.foldGroups();
       return true;
     };
     this.inspector.element.addEventListener("click", fold);
     this.inspector.element.addEventListener("keydown", (event) => {
-      if ((event.key !== "Enter" && event.key !== " ") || !fold(event)) return;
+      if (!FOLDING.has(event.key) || !fold(event)) return;
       event.preventDefault();
       event.stopPropagation();
     });
+  }
 
-    // The bar: the menus, the document, and the few commands worth a button.
-    this.undo = iconButton("undo", { tip: "Undo", key: "Ctrl+Z" }, () => editor.doc.undo());
-    this.redo = iconButton("redo", { tip: "Redo", key: "Ctrl+Shift+Z" }, () => editor.doc.redo());
+  /** The bar along the top: the menus, the document's title and type, and a few buttons. */
+  private makeBar() {
+    const { editor } = this;
+    this.title.addEventListener("input", () => this.sizeTitle());
+    this.title.addEventListener("change", () => this.commitTitle());
+    this.title.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") this.title.blur();
+      else if (event.key === "Escape") {
+        this.title.value = editor.doc.picture?.title ?? "";
+        this.title.blur();
+      }
+    });
+    this.chip.addEventListener("click", () => this.chooser());
+    const exporting = h(
+      "button",
+      { class: "button primary", type: "button" },
+      icon("export"),
+      h("span", {}, "Export"),
+      icon("chevron"),
+    );
+    menuButton(exporting, () => this.menus.exports(), { right: true });
+    return h(
+      "header",
+      { class: "bar" },
+      h(
+        "div",
+        { class: "bar-start" },
+        h("span", { class: "logo", ...tipped({ tip: "TAM Editor" }) }, icon("logo")),
+        h("nav", { class: "menubar", "aria-label": "Menus" }, ...this.makeMenuTitles()),
+      ),
+      h("div", { class: "bar-doc" }, this.titleBox, this.dot, this.fileName, this.chip),
+      h(
+        "div",
+        { class: "bar-end" },
+        this.undo,
+        this.redo,
+        exporting,
+        this.themeToggle,
+        iconButton("help", { tip: "Keyboard and mouse", key: "?" }, () => helpDialog(editor.type)),
+      ),
+    );
+  }
+
+  /**
+   * The titles of the bar's menus. The first letter of a name opens its menu with Alt, and is
+   * underlined while Alt is held; with one menu open, the pointer and the arrow keys go to the others.
+   */
+  private makeMenuTitles() {
     const names = this.menus.bar().map(({ name }) => name),
-      // The first letter of a name opens its menu with Alt, and is underlined while Alt is held.
       titles = names.map((name) =>
         h(
           "button",
@@ -265,17 +423,18 @@ export class Panels {
           name.slice(1),
         ),
       ),
-      shown = () => titles.filter((title) => !isOff(title));
+      shown = () => titles.filter((title) => !isOff(title)),
+      /** The title `by` steps along the bar from `title`, past the titles that are off. */
+      along = (title: HTMLButtonElement, by: number) => {
+        const list = shown();
+        return list[(list.indexOf(title) + by + list.length) % list.length];
+      };
     /** Set while one menu of the bar takes the place of another: the bar is not left then. */
     let switching = false;
     const opened = titles.map((title, index) =>
       menuButton(title, () => this.menus.bar()[index].items(), {
         // The arrow keys go from menu to menu along the bar.
-        step: (by) => {
-          const list = shown(),
-            next = list[(list.indexOf(title) + by + list.length) % list.length];
-          switchTo(titles.indexOf(next), true);
-        },
+        step: (by) => switchTo(titles.indexOf(along(title, by)), true),
         closed: () => {
           if (!switching) this.leaveBar();
         },
@@ -299,71 +458,41 @@ export class Panels {
       title.addEventListener("pointerenter", () => {
         if (opened.some((menu, other) => other !== index && menu.isOpen)) switchTo(index);
       });
-      // With the focus on the bar, the arrow keys go along it and down into a menu; Escape leaves it.
-      title.addEventListener("keydown", (event) => {
-        const list = shown(),
-          at = list.indexOf(title),
-          by = { ArrowLeft: -1, ArrowRight: 1 }[event.key];
-        if (by) list[(at + by + list.length) % list.length]?.focus();
-        else if (event.key === "ArrowDown" || event.key === "Enter" || event.key === " ")
-          opened[index].open(true);
-        else if (event.key === "Escape") this.leaveBar();
-        else return;
-        event.preventDefault();
-        event.stopPropagation();
-      });
+      title.addEventListener("keydown", (event) =>
+        this.barKey(
+          event,
+          () => opened[index].open(true),
+          () => along(title, ALONG[event.key]),
+        ),
+      );
     });
-    this.title.addEventListener("input", () => this.sizeTitle());
-    this.title.addEventListener("change", () => this.commitTitle());
-    this.title.addEventListener("keydown", (event) => {
-      if (event.key === "Enter") this.title.blur();
-      else if (event.key === "Escape") {
-        this.title.value = editor.doc.picture?.title ?? "";
-        this.title.blur();
-      }
-    });
-    this.chip.addEventListener("click", () => this.chooser());
-    const exporting = h(
-      "button",
-      { class: "button primary", type: "button" },
-      icon("export"),
-      h("span", {}, "Export"),
-      icon("chevron"),
-    );
-    menuButton(exporting, () => this.menus.exports(), { right: true });
-    // One click between light and dark; View ▸ Theme also follows the system.
-    this.themeToggle = iconButton("theme", { tip: "Dark mode" }, () => {
-      shell.setTheme(this.dark ? "light" : "dark");
-      this.showTheme();
-    });
-    this.showTheme();
-    const header = h(
-      "header",
-      { class: "bar" },
-      h(
-        "div",
-        { class: "bar-start" },
-        h("span", { class: "logo", ...tipped({ tip: "TAM Editor" }) }, icon("logo")),
-        h("nav", { class: "menubar", "aria-label": "Menus" }, ...titles),
-      ),
-      h("div", { class: "bar-doc" }, this.titleBox, this.dot, this.fileName, this.chip),
-      h(
-        "div",
-        { class: "bar-end" },
-        this.undo,
-        this.redo,
-        exporting,
-        this.themeToggle,
-        iconButton("help", { tip: "Keyboard and mouse", key: "?" }, () => helpDialog(editor.type)),
-      ),
-    );
+    return titles;
+  }
 
-    // The rail: the pointer tools, then what the panels show.
+  /**
+   * With the focus on the bar, the arrow keys go along it to the title `next` gives and down into
+   * the menu with `open`; Escape leaves it.
+   */
+  private barKey(
+    event: KeyboardEvent,
+    open: () => void,
+    next: () => HTMLButtonElement | undefined,
+  ) {
+    if (ALONG[event.key]) next()?.focus();
+    else if (OPENING.has(event.key)) open();
+    else if (event.key === "Escape") this.leaveBar();
+    else return;
+    event.preventDefault();
+    event.stopPropagation();
+  }
+
+  /** The rail: the pointer tools, then what the panels show. */
+  private makeRail() {
     const tool = (entry: (typeof POINTERS)[number]) => {
       const control = iconButton(
         entry.icon,
         { tip: entry.name, key: entry.key, side: "right" },
-        () => editor.setTool(entry.tool),
+        () => this.editor.setTool(entry.tool),
         "rail-button",
       );
       this.tools.set(entry.tool, control);
@@ -379,7 +508,7 @@ export class Panels {
       this.toggles.set(which, control);
       return control;
     };
-    const rail = h(
+    return h(
       "nav",
       { class: "rail", "aria-label": "Tools and panels" },
       ...POINTERS.map(tool),
@@ -389,8 +518,10 @@ export class Panels {
       h("span", { class: "spacer" }),
       toggle("side", "panel", "Properties and source", () => this.toggleSide()),
     );
+  }
 
-    // The left panel: two tabs that take its whole height.
+  /** The left panel: two tabs that take its whole height. */
+  private makeLeftPanel() {
     const tab = (which: "shapes" | "outline", name: string) => {
       const control = h(
         "button",
@@ -400,7 +531,7 @@ export class Panels {
       this.tabs.set(which, control);
       return control;
     };
-    this.leftPanel = h(
+    return h(
       "aside",
       { class: "left", "aria-label": "Shapes and outline" },
       h(
@@ -420,29 +551,17 @@ export class Panels {
         () => this.leftWidth,
         (width) => {
           this.widths.left = width;
-          shell.remember("left-width", String(width));
+          this.shell.remember("left-width", String(width));
         },
       ),
     );
+  }
 
-    // The right panel: properties above the source, each in a place of its own.
-    const sourceBox = h("div", { class: "source" });
-    this.source = new SourcePane(sourceBox, {
-      changed: (text, whole) => {
-        // The picture follows a statement at once, and one that is still being typed once the typing rests.
-        window.clearTimeout(this.typing);
-        this.typing = window.setTimeout(
-          () => {
-            this.typing = undefined;
-            void editor.doc.apply(text);
-          },
-          whole ? 0 : PAUSE,
-        );
-        // An error that comes with the typing is said once the typing rests.
-        this.typed = performance.now();
-        window.clearTimeout(this.resting);
-        this.resting = window.setTimeout(() => this.update(), REST + 20);
-      },
+  /** The source pane, whose typing becomes the document and whose cursor selects on the canvas. */
+  private makeSource(box: HTMLElement) {
+    const { editor } = this;
+    return new SourcePane(box, {
+      changed: (text, whole) => this.typed(text, whole),
       // The elements with what holds them: a connection reaches no element its end holds.
       elements: () => {
         const flat = (items: TreeItem[], parent: string | null): Known[] =>
@@ -456,95 +575,72 @@ export class Panels {
       type: () => editor.type,
       undo: () => editor.doc.undo(),
       redo: () => editor.doc.redo(),
-      cursorAt: (line) => {
-        const { picture } = editor.doc;
-        if (!picture || editor.doc.problem || picture.source !== editor.doc.source) return;
-        // The line declares an element, or says a connection: that is what is selected.
-        const declared = this.declared(),
-          node = [...picture.diagram.nodes.values()].find(
-            (item) => (declared.get(item.id) ?? item.line) === line && !/#\d*$|#row$/.test(item.id),
-          ),
-          edge = node ? undefined : picture.diagram.edges.find((item) => item.line === line);
-        if (node) {
-          this.lines = String(line);
-          editor.select([{ type: "element", id: node.id }]);
-          editor.reveal(node.id);
-        } else if (edge) {
-          this.lines = String(line);
-          editor.select([{ type: "wire", id: edge.id.replace(/#\d+$/, "") }]);
-        }
-      },
+      cursorAt: (line) => this.selectLine(line),
     });
-    this.expand = iconButton(
+  }
+
+  /** Text was typed in the source: `whole` when it ends a statement. */
+  private typed(text: string, whole: boolean) {
+    // The picture follows a statement at once, and one that is still being typed once the typing rests.
+    window.clearTimeout(this.typing);
+    this.typing = window.setTimeout(
+      () => {
+        this.typing = undefined;
+        void this.editor.doc.apply(text);
+      },
+      whole ? 0 : PAUSE,
+    );
+    // An error that comes with the typing is said once the typing rests.
+    this.typedAt = performance.now();
+    window.clearTimeout(this.resting);
+    this.resting = window.setTimeout(() => this.update(), REST + 20);
+  }
+
+  /** The cursor rests on a line of the source: the element it declares, or the connection it says, is selected. */
+  private selectLine(line: number) {
+    const { editor } = this,
+      { picture } = editor.doc;
+    if (!picture || editor.doc.problem || picture.source !== editor.doc.source) return;
+    const declared = this.declared(),
+      node = [...picture.diagram.nodes.values()].find(
+        (item) => (declared.get(item.id) ?? item.line) === line && !/#\d*$|#row$/.test(item.id),
+      ),
+      edge = node ? undefined : picture.diagram.edges.find((item) => item.line === line);
+    if (node) {
+      this.lines = String(line);
+      editor.select([{ type: "element", id: node.id }]);
+      editor.reveal(node.id);
+    } else if (edge) {
+      this.lines = String(line);
+      editor.select([{ type: "wire", id: edge.id.replace(/#\d+$/, "") }]);
+    }
+  }
+
+  /** The button that gives the source most of the right panel. */
+  private makeExpand() {
+    return iconButton(
       "expand",
       { tip: "Give the source most of the panel" },
       () => {
         this.wide = !this.wide;
-        shell.remember("source-wide", this.wide ? "on" : "off");
+        this.shell.remember("source-wide", this.wide ? "on" : "off");
         // The source shows, whatever was folded, when it is asked to take the room.
         if (this.wide && !this.open.source) this.toggle("source");
         else this.arrange();
       },
       "button small",
     );
+  }
+
+  /** The right panel: properties above the source, each in a place of its own. */
+  private makeSidePanel(sourceBox: HTMLElement) {
     // A strip says its problem in one line; a click shows it whole, and where the problem is.
-    this.problem.addEventListener("click", () => {
-      this.problem.classList.toggle("whole");
-      this.showProblem();
-    });
-    this.warning.addEventListener("click", () => {
-      this.warning.classList.toggle("whole");
-      this.showProblem();
-    });
-    const section = (
-      which: "properties" | "source",
-      name: string,
-      extras: HTMLElement[],
-      ...body: HTMLElement[]
-    ) => {
-      const made = h(
-        "section",
-        { class: `section ${which}` },
-        h(
-          "header",
-          { class: "section-header" },
-          h(
-            "button",
-            { class: "fold", type: "button", onClick: () => this.toggle(which) },
-            icon("chevron"),
-            h("h2", {}, name),
-          ),
-          ...extras,
-        ),
-        ...body,
-      );
-      this.sections.set(which, made);
-      return made;
-    };
-    const splitter = h("div", { class: "splitter", role: "separator" });
-    this.dragging(
-      splitter,
-      "y",
-      1,
-      () => this.sections.get("properties")!.getBoundingClientRect().height,
-      (height) => {
-        const most = this.sidePanel.getBoundingClientRect().height - SECTION;
-        this.split = Math.round(Math.max(SECTION, Math.min(height, most)));
-        this.wide = false;
-        shell.remember("split", String(this.split));
-        shell.remember("source-wide", "off");
-        this.arrange();
-      },
-      () => {
-        // A double click shares the panel evenly again.
-        this.split = 0;
-        this.wide = false;
-        shell.remember("split", "");
-        shell.remember("source-wide", "off");
-        this.arrange();
-      },
-    );
-    this.sidePanel = h(
+    for (const strip of [this.problem, this.warning])
+      strip.addEventListener("click", () => {
+        strip.classList.toggle("whole");
+        this.showProblem();
+      });
+    return h(
       "aside",
       { class: "side", "aria-label": "Properties and source" },
       this.resizer(
@@ -554,12 +650,12 @@ export class Panels {
         () => this.rightWidth,
         (width) => {
           this.widths.right = width;
-          shell.remember(this.text ? "right-width-text" : "right-width", String(width));
+          this.shell.remember(this.text ? "right-width-text" : "right-width", String(width));
         },
       ),
-      section("properties", "Properties", [], this.inspector.element),
-      splitter,
-      section(
+      this.section("properties", "Properties", [], this.inspector.element),
+      this.makeSplitter(),
+      this.section(
         "source",
         "Source",
         [
@@ -577,8 +673,62 @@ export class Panels {
         h("div", { class: "strips" }, this.problem, this.warning),
       ),
     );
+  }
 
-    // Over the canvas.
+  /** A section of the right panel, whose header folds it. */
+  private section(
+    which: "properties" | "source",
+    name: string,
+    extras: HTMLElement[],
+    ...body: HTMLElement[]
+  ) {
+    const made = h(
+      "section",
+      { class: `section ${which}` },
+      h(
+        "header",
+        { class: "section-header" },
+        h(
+          "button",
+          { class: "fold", type: "button", onClick: () => this.toggle(which) },
+          icon("chevron"),
+          h("h2", {}, name),
+        ),
+        ...extras,
+      ),
+      ...body,
+    );
+    this.sections.set(which, made);
+    return made;
+  }
+
+  /** The handle between Properties and Source: a drag shares the panel, a double click shares it evenly. */
+  private makeSplitter() {
+    const splitter = h("div", { class: "splitter", role: "separator" }),
+      share = (split: number) => {
+        this.split = split;
+        this.wide = false;
+        this.shell.remember("split", split ? String(split) : "");
+        this.shell.remember("source-wide", "off");
+        this.arrange();
+      };
+    this.dragging(
+      splitter,
+      "y",
+      1,
+      () => this.sections.get("properties")!.getBoundingClientRect().height,
+      (height) => {
+        const most = this.sidePanel.getBoundingClientRect().height - SECTION;
+        share(Math.round(Math.max(SECTION, Math.min(height, most))));
+      },
+      () => share(0),
+    );
+    return splitter;
+  }
+
+  /** What lies over the canvas, and what a press on it or the pointer over it does to the window. */
+  private coverStage() {
+    const { stage, editor } = this;
     this.banner.addEventListener("click", () => this.showProblem());
     stage.append(
       this.empty,
@@ -604,18 +754,12 @@ export class Panels {
     canvas.addEventListener("pointerleave", () => {
       this.pointer = undefined;
     });
-    root.append(
-      header,
-      rail,
-      this.leftPanel,
-      stage,
-      this.guide.element,
-      this.sidePanel,
-      this.status.element,
-    );
+  }
 
-    // What was chosen on an earlier visit.
-    const number = (key: string, start: number) => Number(shell.recall(key)) || start;
+  /** Lays the window out as it was chosen on an earlier visit, and as the window's size allows. */
+  private recallLayout() {
+    const { shell, editor } = this,
+      number = (key: string, start: number) => Number(shell.recall(key)) || start;
     this.left = this.leftStart;
     this.side = shell.recall("side") !== "closed";
     this.open.source = shell.recall("source-open") !== "closed";
@@ -624,27 +768,32 @@ export class Panels {
     this.wide = shell.recall("source-wide") === "on";
     editor.snapping = shell.recall("snap") !== "off";
     editor.view.grid = shell.recall("grid") !== "off";
-    const sized = () => {
-      const narrow = window.innerWidth < NARROW,
-        tiny = window.innerWidth < TINY,
-        small = window.innerWidth < SMALL;
-      if (narrow === this.narrow && tiny === this.tiny && small === this.small)
-        return this.arrange();
-      this.narrow = narrow;
-      this.tiny = tiny;
-      this.small = small;
-      // A panel that comes to lie over the canvas starts closed; with room beside it, it is back as it was.
-      this.left = narrow ? "" : this.leftStart;
-      this.side = !tiny && shell.recall("side") !== "closed";
-      this.arrange();
-    };
-    window.addEventListener("resize", sized);
+    window.addEventListener("resize", () => this.resized());
     this.narrow = window.innerWidth < NARROW;
     this.tiny = window.innerWidth < TINY;
     this.small = window.innerWidth < SMALL;
     if (this.narrow) this.left = "";
     if (this.tiny) this.side = false;
+  }
 
+  /** The window changed its size: a panel that comes to lie over the canvas, or no longer does, starts again. */
+  private resized() {
+    const narrow = window.innerWidth < NARROW,
+      tiny = window.innerWidth < TINY,
+      small = window.innerWidth < SMALL;
+    if (narrow === this.narrow && tiny === this.tiny && small === this.small) return this.arrange();
+    this.narrow = narrow;
+    this.tiny = tiny;
+    this.small = small;
+    // A panel that comes to lie over the canvas starts closed; with room beside it, it is back as it was.
+    this.left = narrow ? "" : this.leftStart;
+    this.side = !tiny && this.shell.recall("side") !== "closed";
+    this.arrange();
+  }
+
+  /** What the editor asks of the window: notices, menus, help, text fields, and what follows the view. */
+  private hookEditor() {
+    const { editor } = this;
     editor.notify = (message) => this.toast(message);
     editor.onMenu = (at, point) => popup(this.menus.context(point), at);
     editor.onHelp = () => helpDialog(editor.type);
@@ -657,9 +806,6 @@ export class Panels {
       this.minimap.draw();
       this.showAway();
     };
-    this.shortcuts();
-    if (shell.recall("welcomed") !== "yes") this.greet();
-    this.arrange();
   }
 
   // The keyboard.
@@ -671,63 +817,19 @@ export class Panels {
    * never gets them, so it shows no dialog of its own for Ctrl+S or Ctrl+O.
    */
   private shortcuts() {
-    const { editor, shell } = this;
     /** Whether Alt went down and nothing else since: its release then goes to the menu bar. */
     let alone = false;
+    const bindings = this.bindings();
     window.addEventListener(
       "keydown",
       (event) => {
         if (event.key === "Escape") this.dismissWelcome();
-        const target = event.target as HTMLElement | null;
-        // Under a dialog every key is the dialog's, wherever the focus went.
-        if (dialogOpen() && !target?.closest?.("dialog")) {
-          focusDialog();
-          event.stopPropagation();
-          if (event.key !== "Tab" && event.key !== "Escape") event.preventDefault();
-          return;
-        }
-        alone = event.key === "Alt" && !event.ctrlKey && !event.metaKey && !event.shiftKey;
+        if (keptByDialog(event)) return;
+        alone = event.key === "Alt" && !/[CS]/.test(modifiers(event));
         // While Alt is held the menus show their letters. Alt is kept from the browser's own menu.
         this.root.classList.toggle("alt", alone && !dialogOpen());
         if (event.key === "Alt") return event.preventDefault();
-        const command = event.ctrlKey || event.metaKey,
-          key = event.key.length === 1 ? event.key.toLowerCase() : event.key,
-          typing =
-            !!target &&
-            (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName));
-        let run: (() => void) | undefined,
-          /** A key of the canvas: it is the dialog's, the menu's or the field's while one has the focus. */
-          canvas = false;
-        if (command && !event.altKey && key === "s")
-          run = () => (event.shiftKey ? shell.saveFileAs() : shell.saveFile());
-        else if (command && !event.altKey && !event.shiftKey && key === "o")
-          run = () => shell.openFile();
-        else if (command && event.altKey && (key === "n" || event.code === "KeyN"))
-          run = () => this.chooser();
-        else if (command && !event.altKey && !event.shiftKey && key === "k")
-          run = () => commandDialog(this.menus.commands());
-        else if (key === "F10" && !command && !event.altKey && !event.shiftKey)
-          run = () => this.focusBar();
-        else if (key === "F1" && !command && !event.altKey && !event.shiftKey)
-          run = () => this.guide.toggle();
-        else if (event.altKey && !command && !event.shiftKey && /^[a-z]$/.test(key)) {
-          // Alt with the first letter of a menu opens it.
-          if (dialogOpen() || !this.mnemonic(key)) return;
-          event.preventDefault();
-          event.stopPropagation();
-          return;
-        } else if (!event.altKey && (key === "+" || key === "=" || key === "-")) {
-          canvas = true;
-          run = () => editor.view.zoomStep(key === "-" ? -1 : 1);
-        }
-        if (!run) return;
-        if (canvas && (typing || dialogOpen() || menuOpen())) return;
-        event.preventDefault();
-        event.stopPropagation();
-        // The list of commands closes by its own key; no other key acts under a dialog.
-        if (dialogOpen() && !(key === "k" && document.querySelector("dialog.commands"))) return;
-        closeMenu();
-        run();
+        this.press(event, bindings);
       },
       true,
     );
@@ -749,6 +851,51 @@ export class Panels {
     };
     window.addEventListener("pointerdown", released, true);
     window.addEventListener("blur", released);
+  }
+
+  /** The keys of the window, with the modifiers each is pressed with. */
+  private bindings(): Binding[] {
+    const { shell } = this;
+    return [
+      {
+        keys: ["s"],
+        with: ["C", "CS"],
+        run: (event) => (event.shiftKey ? shell.saveFileAs() : shell.saveFile()),
+      },
+      { keys: ["o"], with: ["C"], run: () => shell.openFile() },
+      // With Alt held the key may type another letter: the key's place says it is N.
+      { keys: ["n"], code: "KeyN", with: ["CA", "CAS"], run: () => this.chooser() },
+      { keys: ["k"], with: ["C"], run: () => commandDialog(this.menus.commands()) },
+      { keys: ["F10"], with: [""], run: () => this.focusBar() },
+      { keys: ["F1"], with: [""], run: () => this.guide.toggle() },
+      {
+        keys: ["+", "=", "-"],
+        with: ["", "C", "S", "CS"],
+        canvas: true,
+        run: (_, key) => this.editor.view.zoomStep(key === "-" ? -1 : 1),
+      },
+    ];
+  }
+
+  /** A key went down outside a dialog: a menu's letter, or a key of the window. */
+  private press(event: KeyboardEvent, bindings: Binding[]) {
+    const key = event.key.length === 1 ? event.key.toLowerCase() : event.key,
+      held = modifiers(event);
+    if (held === "A" && /^[a-z]$/.test(key)) return this.pressLetter(event, key);
+    const binding = bindings.find((item) => bound(item, event, key, held));
+    if (!binding || keptFromCanvas(binding, event)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (!actsUnderDialog(key)) return;
+    closeMenu();
+    binding.run(event, key);
+  }
+
+  /** Alt with the first letter of a menu opens it. */
+  private pressLetter(event: KeyboardEvent, letter: string) {
+    if (dialogOpen() || !this.mnemonic(letter)) return;
+    event.preventDefault();
+    event.stopPropagation();
   }
 
   /** Puts the focus on the menu bar, or back where it was when the bar has it. */
@@ -941,23 +1088,32 @@ export class Panels {
 
   /** Lays the window out as its state says: which panels show, how wide, and what the rail marks. */
   private arrange() {
+    this.arrangePanels();
+    this.markRail();
+    this.arrangeSections();
+  }
+
+  /** The widths of the panels, and whether they show beside the canvas or over it. */
+  private arrangePanels() {
     const { root } = this,
       left = !!this.left,
+      beside = left && !this.narrow,
       wide = this.leftWidth,
       // The canvas keeps a part of the window, whatever the panels were dragged to.
-      room = Math.max(
-        RIGHT.least,
-        window.innerWidth - 44 - (left && !this.narrow ? wide : 0) - 240,
-      ),
+      room = Math.max(RIGHT.least, window.innerWidth - 44 - (beside ? wide : 0) - 240),
       right = Math.min(this.rightWidth, this.tiny ? window.innerWidth - 44 : room);
     root.classList.toggle("left-over", this.narrow);
     root.classList.toggle("side-over", this.tiny);
-    root.style.setProperty("--left", left && !this.narrow ? `${wide}px` : "0px");
+    root.style.setProperty("--left", beside ? `${wide}px` : "0px");
     root.style.setProperty("--right", this.side && !this.tiny ? `${right}px` : "0px");
     this.leftPanel.style.width = `${wide}px`;
     this.sidePanel.style.width = `${right}px`;
     this.leftPanel.hidden = !left;
     this.sidePanel.hidden = !this.side;
+  }
+
+  /** The tabs of the left panel and the toggles of the rail say what shows. */
+  private markRail() {
     for (const [which, control] of this.tabs)
       control.setAttribute("aria-selected", String(this.left === which));
     this.palette.element.hidden = this.left !== "shapes";
@@ -965,19 +1121,26 @@ export class Panels {
     this.toggles.get("shapes")!.setAttribute("aria-pressed", String(this.left === "shapes"));
     this.toggles.get("outline")!.setAttribute("aria-pressed", String(this.left === "outline"));
     this.toggles.get("side")!.setAttribute("aria-pressed", String(this.side));
-    // Properties keeps its height above the source; alone, either takes the panel.
+  }
+
+  /** Properties keeps its height above the source; alone, either takes the panel. */
+  private arrangeSections() {
     const properties = this.sections.get("properties")!,
-      source = this.sections.get("source")!;
+      source = this.sections.get("source")!,
+      both = this.open.properties && this.open.source;
     properties.classList.toggle("closed", !this.open.properties);
     source.classList.toggle("closed", !this.open.source);
-    properties.style.flex =
-      this.open.properties && this.open.source
-        ? `0 0 ${this.wide ? EXPANDED : this.split ? `${this.split}px` : "50%"}`
-        : "";
+    properties.style.flex = both ? `0 0 ${this.propertiesHeight}` : "";
     this.expand.setAttribute("aria-pressed", String(this.wide));
-    this.sidePanel.classList.toggle("split", this.open.properties && this.open.source);
+    this.sidePanel.classList.toggle("split", both);
     for (const [which, made] of this.sections)
       made.querySelector(".fold")!.setAttribute("aria-expanded", String(this.open[which]));
+  }
+
+  /** The height of Properties above the source: little while the source is wide, else as dragged or half. */
+  private get propertiesHeight() {
+    if (this.wide) return EXPANDED;
+    return this.split ? `${this.split}px` : "50%";
   }
 
   /** Shows a tab of the left panel, or closes the panel. */
@@ -1152,20 +1315,28 @@ export class Panels {
     if (!picture || doc.problem || picture.source !== doc.source) return;
     if (this.stepping) {
       this.stepping = false;
-      const parts = (this.selections.get(doc.source) ?? []).filter((part) =>
-        part.type === "element"
-          ? picture.diagram.nodes.has(part.id)
-          : picture.diagram.edges.some((edge) => edge.id === part.id),
-      );
-      const same =
-        parts.length === editor.selection.length && parts.every((part) => editor.isSelected(part));
       // Selecting shows the state again, which comes back here with the step taken.
-      if (parts.length && !same) return editor.select(parts);
+      if (this.selectAgain(picture)) return;
     }
     this.selections.delete(doc.source);
     this.selections.set(doc.source, editor.selection);
     if (this.selections.size > REMEMBERED)
       this.selections.delete(this.selections.keys().next().value!);
+  }
+
+  /** Selects what was selected when the source on show was on show last; false when nothing changes. */
+  private selectAgain(picture: NonNullable<Editor["doc"]["picture"]>) {
+    const { editor } = this,
+      parts = (this.selections.get(editor.doc.source) ?? []).filter((part) =>
+        part.type === "element"
+          ? picture.diagram.nodes.has(part.id)
+          : picture.diagram.edges.some((edge) => edge.id === part.id),
+      ),
+      same =
+        parts.length === editor.selection.length && parts.every((part) => editor.isSelected(part));
+    if (!parts.length || same) return false;
+    editor.select(parts);
+    return true;
   }
 
   /**
@@ -1262,7 +1433,6 @@ export class Panels {
     return this.declaredLines;
   }
 
-  /** Shows the editor's state: called whenever it changed. */
   /** Whether the page is dark now, by choice or by the system's. */
   private get dark() {
     return document.documentElement.dataset.theme === "dark";
@@ -1276,142 +1446,23 @@ export class Panels {
     this.themeToggle.setAttribute("aria-label", tip);
   }
 
+  /** Shows the editor's state: called whenever it changed. */
   update() {
     this.showTheme();
-    const { editor, shell } = this,
-      { doc } = editor,
+    const { editor } = this,
       info = typeInfo(editor.type),
       text = info.mode === "text",
-      // The picture of an earlier type that shows under an error: the window stays that type's.
-      earlier =
-        doc.problem && doc.picture && !sameType(doc.picture.type, editor.type)
-          ? doc.picture
-          : undefined,
-      shown = earlier ? typeInfo(earlier.type) : info;
+      earlier = this.earlier();
     this.reselect();
-    // An offer of a step goes when its source is no longer the one on show.
-    for (const { note, source } of this.offers) if (source !== doc.source) note.remove();
-    this.offers = this.offers.filter(({ source }) => source === doc.source);
-    if (text !== this.text) {
-      // Text needs room to be read, and has no properties to show: the right panel starts wider, the source alone.
-      const first = this.text === undefined;
-      this.text = text;
-      this.widths.right = Number(shell.recall(text ? "right-width-text" : "right-width")) || 0;
-      this.open.properties =
-        (shell.recall(text ? "properties-text" : "properties") ?? (text ? "closed" : "open")) ===
-        "open";
-      this.arrange();
-      if (!first) void editor.fitSoon();
-    }
-    for (const [tool, control] of this.tools) {
-      control.setAttribute("aria-pressed", String(tool === editor.tool));
-      setOff(control, text && tool !== "pan" && `${info.plural} are edited as text`);
-    }
-    setOff(this.undo, !doc.canUndo);
-    setOff(this.redo, !doc.canRedo);
-    for (const menu of this.menus.bar()) {
-      const title = this.titles.get(menu.name)!;
-      setOff(title, menu.off);
-      title.dataset.side = "bottom";
-    }
-    if (document.activeElement !== this.title) this.title.value = doc.picture?.title ?? "";
-    this.sizeTitle();
-    this.chip.replaceChildren(icon(shown.icon), h("span", {}, shown.name), icon("chevron"));
-    Object.assign(this.chip.dataset, { tip: `${shown.about}. Click for a new diagram.` });
-    this.dot.hidden = !shell.unsaved;
-    const file = shell.fileName;
-    this.fileName.textContent = file ?? "";
-    this.fileName.hidden = !file;
-    if (file) this.fileName.dataset.tip = `Saved to ${file}`;
-
-    if (!this.typing && this.source.setText(doc.source)) this.lines = "replaced";
-    // An error made by typing shows when the typing has rested, or the cursor has left its line: a
-    // statement half typed is no error yet. One that goes, goes at once.
-    const waiting =
-      !!doc.problem &&
-      this.source.focused &&
-      performance.now() - this.typed < REST &&
-      this.said?.message !== doc.problem.message;
-    this.said = waiting ? this.said : doc.problem;
-    const problem = this.said;
-    this.source.setProblem(problem);
-    // The lines of what is selected on the canvas are marked in the source: where an element is
-    // declared, and where a connection is said.
-    const declared = this.declared(),
-      lines = doc.problem
-        ? []
-        : [
-            ...editor.selectedElements.flatMap(
-              (id) => declared.get(id) ?? doc.picture?.diagram.nodes.get(id)?.line ?? [],
-            ),
-            ...editor.selectedWires.flatMap(
-              (id) => doc.picture?.diagram.edges.find((edge) => edge.id === id)?.line ?? [],
-            ),
-          ];
-    if (lines.join() !== this.lines) {
-      this.lines = lines.join();
-      this.source.setSelectedLines(lines);
-    }
-    if (this.problem.dataset.said !== (problem?.message ?? "")) {
-      this.problem.dataset.said = problem?.message ?? "";
-      this.problem.replaceChildren(...prose(problem?.message ?? ""));
-      this.problem.classList.remove("whole");
-    }
-    this.problem.hidden = !problem;
-    // Not an error of the source, but not TAM either: elements that lie on each other.
-    const [pair] = doc.picture?.overlaps ?? [],
-      names = pair?.map((id) => {
-        const node = doc.picture!.diagram.nodes.get(id);
-        return (node?.label || node?.origin || id).replace(/<br\s*\/?>/gi, " ");
-      });
-    this.warning.textContent = names
-      ? `“${names[0]}” and “${names[1]}” overlap. TAM places all elements apart.`
-      : "";
-    this.warning.hidden = !names || !!doc.problem;
-    if (this.warning.hidden) this.warning.classList.remove("whole");
-    this.problems.textContent = doc.problem ? "1 problem" : "";
-    this.problems.hidden = !doc.problem;
-
-    // An error leaves the last good picture on show, dimmed, with a banner that says so.
-    this.stage.classList.toggle("stale", !!problem);
-    this.banner.hidden = !problem;
-    this.banner.textContent = problem
-      ? `The source has an error${problem.line ? ` on line ${problem.line}` : ""}.${
-          doc.picture
-            ? ` Showing the last valid diagram${earlier ? " of the previous type" : ""}.`
-            : ""
-        }`
-      : "";
-    this.preview.hidden = !text;
-    const none = !doc.problem && !!doc.picture && !doc.picture.scene.shapes.length;
-    if (this.empty.hidden !== !none || !this.empty.childElementCount)
-      this.empty.replaceChildren(
-        h("strong", {}, "An empty diagram"),
-        ...(text
-          ? [h("span", {}, "Type in the source, or add a snippet from the left.")]
-          : editor.structural
-            ? [
-                h(
-                  "span",
-                  {},
-                  `Click a shape on the left, or double-click here, to add the first ${
-                    editor.structure?.pieces[0]?.name.toLowerCase() ?? "part"
-                  }.`,
-                ),
-              ]
-            : [
-                h("span", {}, "Drag a shape here from the left, or double-click for an agent."),
-                h(
-                  "span",
-                  { class: "note" },
-                  "Positions are written into the source as ",
-                  h("code", {}, "@x,y"),
-                  "; without them the layout is automatic.",
-                ),
-              ]),
-      );
-    this.empty.hidden = !none;
-
+    this.dropOffers();
+    if (text !== this.text) this.switchMode(text);
+    this.showTools(text, info.plural);
+    this.showDocument(earlier ? typeInfo(earlier.type) : info);
+    if (!this.typing && this.source.setText(editor.doc.source)) this.lines = "replaced";
+    const problem = this.sayProblem();
+    this.markSelected();
+    this.showStrips(problem);
+    this.showStage(problem, earlier, text);
     // The shapes stay those of the picture on show until the source reads as its new type.
     if (!earlier) this.palette.update();
     this.outline.update();
@@ -1420,5 +1471,193 @@ export class Panels {
     this.status.update();
     this.minimap.draw();
     this.showAway();
+  }
+
+  /** The picture of an earlier type that shows under an error: the window stays that type's. */
+  private earlier() {
+    const { doc, type } = this.editor;
+    return doc.problem && doc.picture && !sameType(doc.picture.type, type)
+      ? doc.picture
+      : undefined;
+  }
+
+  /** An offer of a step goes when its source is no longer the one on show. */
+  private dropOffers() {
+    const { source } = this.editor.doc;
+    for (const offer of this.offers) if (offer.source !== source) offer.note.remove();
+    this.offers = this.offers.filter((offer) => offer.source === source);
+  }
+
+  /**
+   * The diagram on show became one edited as text, or one edited on the canvas. Text needs room to
+   * be read, and has no properties to show: the right panel starts wider, the source alone.
+   */
+  private switchMode(text: boolean) {
+    const { shell } = this,
+      first = this.text === undefined;
+    this.text = text;
+    this.widths.right = Number(shell.recall(text ? "right-width-text" : "right-width")) || 0;
+    this.open.properties =
+      (shell.recall(text ? "properties-text" : "properties") ?? (text ? "closed" : "open")) ===
+      "open";
+    this.arrange();
+    if (!first) void this.editor.fitSoon();
+  }
+
+  /** The tools of the rail, the history's buttons and the bar's menus: which are on. */
+  private showTools(text: boolean, plural: string) {
+    const { editor } = this;
+    for (const [tool, control] of this.tools) {
+      control.setAttribute("aria-pressed", String(tool === editor.tool));
+      setOff(control, text && tool !== "pan" && `${plural} are edited as text`);
+    }
+    setOff(this.undo, !editor.doc.canUndo);
+    setOff(this.redo, !editor.doc.canRedo);
+    for (const menu of this.menus.bar()) {
+      const title = this.titles.get(menu.name)!;
+      setOff(title, menu.off);
+      title.dataset.side = "bottom";
+    }
+  }
+
+  /** The document in the bar: its title, its type, whether it is saved, and its file. */
+  private showDocument(shown: ReturnType<typeof typeInfo>) {
+    const { editor, shell } = this,
+      file = shell.fileName;
+    if (document.activeElement !== this.title) this.title.value = editor.doc.picture?.title ?? "";
+    this.sizeTitle();
+    this.chip.replaceChildren(icon(shown.icon), h("span", {}, shown.name), icon("chevron"));
+    Object.assign(this.chip.dataset, { tip: `${shown.about}. Click for a new diagram.` });
+    this.dot.hidden = !shell.unsaved;
+    this.fileName.textContent = file ?? "";
+    this.fileName.hidden = !file;
+    if (file) this.fileName.dataset.tip = `Saved to ${file}`;
+  }
+
+  /**
+   * Marks the problem in the source, and returns it. An error made by typing shows when the typing
+   * has rested, or the cursor has left its line: a statement half typed is no error yet. One that
+   * goes, goes at once.
+   */
+  private sayProblem() {
+    const { problem } = this.editor.doc,
+      waiting =
+        !!problem &&
+        this.source.focused &&
+        performance.now() - this.typedAt < REST &&
+        this.said?.message !== problem.message;
+    if (!waiting) this.said = problem;
+    this.source.setProblem(this.said);
+    return this.said;
+  }
+
+  /**
+   * The lines of what is selected on the canvas are marked in the source: where an element is
+   * declared, and where a connection is said.
+   */
+  private markSelected() {
+    const lines = this.editor.doc.problem ? [] : this.selectedLines();
+    if (lines.join() === this.lines) return;
+    this.lines = lines.join();
+    this.source.setSelectedLines(lines);
+  }
+
+  /** The lines that declare the selected elements and say the selected connections. */
+  private selectedLines(): number[] {
+    const { editor } = this,
+      diagram = editor.doc.picture?.diagram,
+      declared = this.declared();
+    return [
+      ...editor.selectedElements.flatMap(
+        (id) => declared.get(id) ?? diagram?.nodes.get(id)?.line ?? [],
+      ),
+      ...editor.selectedWires.flatMap(
+        (id) => diagram?.edges.find((edge) => edge.id === id)?.line ?? [],
+      ),
+    ];
+  }
+
+  /** The strips over the foot of the source: the problem on show, and elements that overlap. */
+  private showStrips(problem: Problem | undefined) {
+    const { doc } = this.editor,
+      message = problem?.message ?? "";
+    if (this.problem.dataset.said !== message) {
+      this.problem.dataset.said = message;
+      this.problem.replaceChildren(...prose(message));
+      this.problem.classList.remove("whole");
+    }
+    this.problem.hidden = !problem;
+    // Not an error of the source, but not TAM either: elements that lie on each other.
+    const names = this.overlapping();
+    this.warning.textContent = names
+      ? `“${names[0]}” and “${names[1]}” overlap. TAM places all elements apart.`
+      : "";
+    this.warning.hidden = !names || !!doc.problem;
+    if (this.warning.hidden) this.warning.classList.remove("whole");
+    this.problems.textContent = doc.problem ? "1 problem" : "";
+    this.problems.hidden = !doc.problem;
+  }
+
+  /** The names of the first two elements that lie on each other, if any do. */
+  private overlapping() {
+    const { picture } = this.editor.doc,
+      [pair] = picture?.overlaps ?? [];
+    return pair?.map((id) => {
+      const node = picture!.diagram.nodes.get(id);
+      return (node?.label || node?.origin || id).replace(/<br\s*\/?>/gi, " ");
+    });
+  }
+
+  /** What lies over the canvas: the banner of an error, the label of a preview, the word of an empty diagram. */
+  private showStage(
+    problem: Problem | undefined,
+    earlier: Editor["doc"]["picture"],
+    text: boolean,
+  ) {
+    const { doc } = this.editor;
+    // An error leaves the last good picture on show, dimmed, with a banner that says so.
+    this.stage.classList.toggle("stale", !!problem);
+    this.banner.hidden = !problem;
+    this.banner.textContent = problem ? this.bannerText(problem, !!earlier) : "";
+    this.preview.hidden = !text;
+    const none = !doc.problem && !!doc.picture && !doc.picture.scene.shapes.length;
+    if (this.empty.hidden !== !none || !this.empty.childElementCount)
+      this.empty.replaceChildren(h("strong", {}, "An empty diagram"), ...this.emptyHint(text));
+    this.empty.hidden = !none;
+  }
+
+  /** What the banner says of an error: where it is, and what shows meanwhile. */
+  private bannerText(problem: Problem, earlier: boolean) {
+    const where = problem.line ? ` on line ${problem.line}` : "",
+      showing = this.editor.doc.picture
+        ? ` Showing the last valid diagram${earlier ? " of the previous type" : ""}.`
+        : "";
+    return `The source has an error${where}.${showing}`;
+  }
+
+  /** How an empty diagram gets its first part, as the type on show is edited. */
+  private emptyHint(text: boolean): HTMLElement[] {
+    const { editor } = this;
+    if (text) return [h("span", {}, "Type in the source, or add a snippet from the left.")];
+    if (editor.structural)
+      return [
+        h(
+          "span",
+          {},
+          `Click a shape on the left, or double-click here, to add the first ${
+            editor.structure?.pieces[0]?.name.toLowerCase() ?? "part"
+          }.`,
+        ),
+      ];
+    return [
+      h("span", {}, "Drag a shape here from the left, or double-click for an agent."),
+      h(
+        "span",
+        { class: "note" },
+        "Positions are written into the source as ",
+        h("code", {}, "@x,y"),
+        "; without them the layout is automatic.",
+      ),
+    ];
   }
 }

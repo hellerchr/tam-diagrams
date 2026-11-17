@@ -6,6 +6,7 @@
 
 import { exportsToDrawio } from "../src/drawio.ts";
 import type { Point } from "../src/scene.ts";
+import type { Structure } from "../src/structure.ts";
 import type { Connection, Word } from "../src/tam.ts";
 import type { ElementKind } from "../src/tam-edit.ts";
 import type { Editor } from "./editor.ts";
@@ -231,8 +232,6 @@ export class Menus {
 
   /** The menus of the bar, in their order. Arrange is off in a diagram that is edited as text. */
   bar(): BarMenu[] {
-    const { editor } = this,
-      info = typeInfo(editor.type);
     return [
       { name: "File", items: () => this.file() },
       { name: "Edit", items: () => this.edit() },
@@ -240,7 +239,7 @@ export class Menus {
       {
         name: "Arrange",
         items: () => this.arrange(),
-        off: editor.editable || editor.structural ? undefined : `${info.plural} are edited as text`,
+        off: this.asText,
       },
       { name: "Help", items: () => this.help() },
     ];
@@ -404,24 +403,43 @@ export class Menus {
 
   edit(): MenuEntry[] {
     const { editor } = this,
-      { doc } = editor,
-      elements = editor.selectedElements,
-      text =
-        editor.editable || editor.structural
-          ? undefined
-          : `${typeInfo(editor.type).plural} are edited as text`,
+      text = this.asText,
       // The clipboard takes elements that stand at a place: only a block diagram has them.
       placed = editor.editable ? text : "Parts of this diagram are not copied between diagrams yet",
-      needs = placed ?? (elements.length ? undefined : "Select an element"),
-      // A part of a structure is copied in place, where its type has copies.
-      copies = editor.structural
-        ? !editor.can("copy")
-          ? `Parts of ${typeInfo(editor.type).plural.toLowerCase()} are not duplicated`
-          : elements.length === 1 && !editor.doc.picture?.parts?.get(elements[0])?.group
-            ? undefined
-            : "Select one part that is not a group"
-        : needs,
+      needs = placed ?? (editor.selectedElements.length ? undefined : "Select an element"),
       [only] = editor.selection;
+    return [
+      ...this.history(),
+      "line",
+      { name: "Cut", key: "Ctrl+X", off: needs, run: () => this.clip(true) },
+      { name: "Copy", key: "Ctrl+C", off: needs, run: () => this.clip(false) },
+      { name: "Paste", key: "Ctrl+V", off: placed, run: () => this.paste() },
+      {
+        name: "Duplicate",
+        key: "Ctrl+D",
+        off: editor.structural ? this.copyRefusal() : needs,
+        run: () => editor.duplicateSelection(),
+      },
+      {
+        name: "Delete",
+        key: "Del",
+        off: text ?? (editor.selection.length ? undefined : "Nothing is selected"),
+        run: () => editor.deleteSelection(),
+      },
+      "line",
+      { name: "Select all", key: "Ctrl+A", off: text, run: () => editor.selectAll() },
+      {
+        name: "Rename",
+        key: "F2",
+        off: text ?? this.renameRefusal(),
+        run: () => editor.rename(only.id),
+      },
+    ];
+  }
+
+  /** Undoing and redoing, each off when there is no step to take. */
+  private history(): MenuEntry[] {
+    const { doc } = this.editor;
     return [
       {
         name: "Undo",
@@ -435,30 +453,33 @@ export class Menus {
         off: doc.canRedo ? undefined : "There is nothing to redo",
         run: () => doc.redo(),
       },
-      "line",
-      { name: "Cut", key: "Ctrl+X", off: needs, run: () => this.clip(true) },
-      { name: "Copy", key: "Ctrl+C", off: needs, run: () => this.clip(false) },
-      { name: "Paste", key: "Ctrl+V", off: placed, run: () => this.paste() },
-      { name: "Duplicate", key: "Ctrl+D", off: copies, run: () => editor.duplicateSelection() },
-      {
-        name: "Delete",
-        key: "Del",
-        off: text ?? (editor.selection.length ? undefined : "Nothing is selected"),
-        run: () => editor.deleteSelection(),
-      },
-      "line",
-      { name: "Select all", key: "Ctrl+A", off: text, run: () => editor.selectAll() },
-      {
-        name: "Rename",
-        key: "F2",
-        off:
-          text ??
-          (editor.selection.length === 1 && only.type === "element"
-            ? undefined
-            : "Select one element"),
-        run: () => editor.rename(only.id),
-      },
     ];
+  }
+
+  /** Why the diagram on show has no commands of the canvas: it is edited as text. */
+  private get asText(): string | undefined {
+    const { editor } = this;
+    if (editor.editable || editor.structural) return undefined;
+    return `${typeInfo(editor.type).plural} are edited as text`;
+  }
+
+  /** Why a part of a structure is not duplicated: it is copied in place, where its type has copies. */
+  private copyRefusal(): string | undefined {
+    const { editor } = this,
+      elements = editor.selectedElements;
+    if (!editor.can("copy"))
+      return `Parts of ${typeInfo(editor.type).plural.toLowerCase()} are not duplicated`;
+    return elements.length === 1 && !this.part(elements[0])?.group
+      ? undefined
+      : "Select one part that is not a group";
+  }
+
+  /** Why the selection is not renamed: it is not one element. */
+  private renameRefusal(): string | undefined {
+    const { selection } = this.editor;
+    return selection.length === 1 && selection[0].type === "element"
+      ? undefined
+      : "Select one element";
   }
 
   /** The zoom steps and fits, for the View menu and the zoom in the status bar. */
@@ -661,184 +682,244 @@ export class Menus {
     const { editor } = this,
       elements = editor.selectedElements,
       wires = editor.selectedWires;
-    const remove: MenuItem = {
-      name: "Delete",
-      key: "Del",
-      danger: true,
-      run: () => editor.deleteSelection(),
-    };
-    const fits: MenuEntry[] = [
+    if (editor.structure) return this.structureContext(editor.structure);
+    if (!editor.editable) return this.fits();
+    if (elements.length && wires.length) return [this.removal()];
+    if (elements.length) return this.elementsContext(elements);
+    if (wires.length) return this.wiresContext(wires, point);
+    return this.canvasContext(point);
+  }
+
+  /** Deleting the selection, last in every menu of a right click on it. */
+  private removal(): MenuItem {
+    const { editor } = this;
+    return { name: "Delete", key: "Del", danger: true, run: () => editor.deleteSelection() };
+  }
+
+  /** Fitting the view, in the menu of a right click on nothing. */
+  private fits(): MenuEntry[] {
+    const { editor } = this;
+    return [
       { name: "Fit diagram", key: "1", run: () => editor.fit() },
       { name: "100%", key: "Ctrl+0", run: () => editor.view.zoomTo(1) },
     ];
-    const { structure } = editor;
-    if (structure) {
-      // A diagram that lays itself out: a part is named, continued and removed, a join changes its kind.
-      const [id] = editor.selection.map((part) => part.id),
-        pieces = (at?: string | null): MenuEntry[] =>
-          structure.pieces.map((piece) => ({
-            name: piece.name,
-            off: editor.pieceRefusal(piece.kind),
-            run: () => editor.addPiece(piece.kind, at),
-          }));
-      if (!editor.selection.length) return [{ name: "Add", items: pieces(null) }, "line", ...fits];
-      const parts = editor.doc.picture?.parts,
-        // The groups a part can be moved into, and out of all with the last row.
-        groups = [...(parts?.values() ?? [])].filter((node) => node.group && node.id !== id);
-      if (elements.length === 1 && !wires.length) {
-        const part = parts?.get(id);
-        return [
-          editor.nameable(id) && { name: "Rename", key: "F2", run: () => editor.rename(id) },
-          { name: "Add here", items: pieces(id) },
-          editor.can("moveInto") &&
-            !part?.group &&
-            (groups.length > 0 || !!part?.parent) && {
-              name: "Move to",
-              items: [
-                ...groups.map((group) => ({
-                  name: group.label || group.id,
-                  checked: part?.parent === group.id,
-                  run: () => editor.moveElements([id], group.id),
-                })),
-                !!part?.parent && {
-                  name: "Out of its group",
-                  run: () => editor.moveElements([id], null),
-                },
-              ],
-            },
-          editor.can("copy") &&
-            !part?.group && {
-              name: "Duplicate",
-              key: "Ctrl+D",
-              run: () => editor.duplicateSelection(),
-            },
-          editor.can("ungroup") &&
-            !!part?.group && {
-              name: "Ungroup",
-              key: "Ctrl+Shift+G",
-              run: () => editor.ungroup(id),
-            },
-          "line",
-          remove,
-        ];
+  }
+
+  /** A diagram that lays itself out: a part is named, continued and removed, a join changes its kind. */
+  private structureContext(structure: Structure): MenuEntry[] {
+    const { editor } = this,
+      [id] = editor.selection.map((part) => part.id);
+    if (!editor.selection.length)
+      return [{ name: "Add", items: this.pieces(structure, null) }, "line", ...this.fits()];
+    if (editor.selectedElements.length === 1 && !editor.selectedWires.length)
+      return this.partContext(structure, id);
+    if (editor.selectedWires.length === 1 && !editor.selectedElements.length)
+      return this.joinContext(structure, id);
+    return [this.removal()];
+  }
+
+  /** The pieces of a structure to add at a part, or at the end with `null`. */
+  private pieces(structure: Structure, at?: string | null): MenuEntry[] {
+    const { editor } = this;
+    return structure.pieces.map((piece) => ({
+      name: piece.name,
+      off: editor.pieceRefusal(piece.kind),
+      run: () => editor.addPiece(piece.kind, at),
+    }));
+  }
+
+  /** The menu of a right click on one part of a structure. */
+  private partContext(structure: Structure, id: string): MenuEntry[] {
+    const { editor } = this,
+      group = !!this.part(id)?.group;
+    return [
+      editor.nameable(id) && { name: "Rename", key: "F2", run: () => editor.rename(id) },
+      { name: "Add here", items: this.pieces(structure, id) },
+      this.moveTo(id),
+      editor.can("copy") &&
+        !group && { name: "Duplicate", key: "Ctrl+D", run: () => editor.duplicateSelection() },
+      editor.can("ungroup") &&
+        group && { name: "Ungroup", key: "Ctrl+Shift+G", run: () => editor.ungroup(id) },
+      "line",
+      this.removal(),
+    ];
+  }
+
+  /** Moving a part into one of the groups of its structure, or out of all with the last row. */
+  private moveTo(id: string): MenuEntry {
+    const { editor } = this,
+      part = this.part(id),
+      parent = part?.parent ?? undefined,
+      groups = this.otherGroups(id);
+    if (!editor.can("moveInto") || part?.group || (!groups.length && !parent)) return false;
+    return { name: "Move to", items: this.groupRows(id, groups, parent) };
+  }
+
+  /** A part of the structure on show. */
+  private part(id: string) {
+    return this.editor.doc.picture?.parts?.get(id);
+  }
+
+  /** The groups of a structure a part may be moved into: all but itself. */
+  private otherGroups(id: string) {
+    const parts = this.editor.doc.picture?.parts?.values() ?? [];
+    return [...parts].filter((node) => node.group && node.id !== id);
+  }
+
+  /** A row for each group a part may be moved into, with a tick at the one that holds it. */
+  private groupRows(
+    id: string,
+    groups: { id: string; label?: string }[],
+    parent: string | undefined,
+  ): MenuEntry[] {
+    const { editor } = this;
+    return [
+      ...groups.map((group) => ({
+        name: group.label || group.id,
+        checked: parent === group.id,
+        run: () => editor.moveElements([id], group.id),
+      })),
+      !!parent && { name: "Out of its group", run: () => editor.moveElements([id], null) },
+    ];
+  }
+
+  /** The menu of a right click on one join of a structure. */
+  private joinContext(structure: Structure, id: string): MenuEntry[] {
+    const { editor } = this,
+      sequence = editor.type === "sequence";
+    return [
+      !!editor.wireLabel(id) && { name: "Edit label", run: () => this.editJoinLabel(id) },
+      editor.labelPlaced(id) && { name: "Put the label back", run: () => editor.unplaceLabel(id) },
+      this.relinks(structure, id),
+      editor.can("reverse") && { name: "Reverse", run: () => editor.reverseJoin(id) },
+      sequence && { name: "Move earlier", key: "↑", run: () => editor.shift(-1) },
+      sequence && { name: "Move later", key: "↓", run: () => editor.shift(1) },
+      "line",
+      this.removal(),
+    ];
+  }
+
+  /** Edits the label of a join where it is drawn: at the middle of its line. */
+  private editJoinLabel(id: string) {
+    const { editor } = this,
+      wire = editor.doc.picture?.scene.wires.find((item) => item.edge === id),
+      middle = wire?.points[Math.floor(wire.points.length / 2)];
+    if (middle) editor.rename(id, true, middle);
+  }
+
+  /** The kinds a join may change to, where its structure has more than one and it is one of them. */
+  private relinks(structure: Structure, id: string): MenuEntry {
+    const { editor } = this,
+      current = editor.linkKind(id);
+    if (structure.links.length < 2 || !structure.links.some((link) => link.kind === current))
+      return false;
+    return {
+      name: "Change kind",
+      items: structure.links.map((link) => ({
+        name: link.name,
+        checked: current === link.kind,
+        run: () => editor.relink(id, link.kind),
+      })),
+    };
+  }
+
+  /** The menu of a right click on elements of a block diagram. */
+  private elementsContext(elements: string[]): MenuEntry[] {
+    const { editor } = this,
+      [id] = elements,
+      { align, distribute, size } = this.arrangements(),
+      [inside] = this.layouts();
+    return [
+      elements.length === 1 && { name: "Rename", key: "F2", run: () => editor.rename(id) },
+      this.elementKinds(elements),
+      "line",
+      this.boxes(),
+      !!editor.selectionHolder && { name: "Take out of its box", run: () => editor.takeOut() },
+      !!editor.ungroupable && {
+        name: "Ungroup",
+        key: "Ctrl+Shift+G",
+        run: () => editor.ungroupSelection(),
+      },
+      { name: "Arrange", items: [...align, "line", ...distribute, "line", ...size] },
+      editor.canLayoutSelection && inside,
+      "line",
+      { name: "Fit selection", key: "2", run: () => editor.fitSelection() },
+      "line",
+      { name: "Duplicate", key: "Ctrl+D", run: () => editor.duplicateSelection() },
+      { name: "Copy", key: "Ctrl+C", run: () => this.clip(false) },
+      { name: "Cut", key: "Ctrl+X", run: () => this.clip(true) },
+      "line",
+      this.removal(),
+    ];
+  }
+
+  /** The kinds the selected elements may be, with a tick at the kind of one alone. */
+  private elementKinds(elements: string[]): MenuItem {
+    const { editor } = this,
+      kind =
+        elements.length === 1
+          ? editor.doc.picture?.diagram.nodes.get(elements[0])?.kind
+          : undefined;
+    return {
+      name: "Change kind",
+      items: ELEMENTS.filter((item) => item === kind || editor.allowsElements({ kind: item })).map(
+        (item) => ({
+          name: kindName(item),
+          checked: item === kind,
+          run: () => editor.setElements({ kind: item }),
+        }),
+      ),
+    };
+  }
+
+  /** The menu of a right click on connections of a block diagram. */
+  private wiresContext(wires: string[], point: Point): MenuEntry[] {
+    const { editor } = this,
+      [id] = wires,
+      connection = wires.length === 1 ? editor.connection(id) : undefined;
+    return [
+      this.wireKinds(id, connection),
+      !!connection &&
+        editor.allowsWire(id, { reverse: true }) && {
+          name: "Reverse",
+          run: () => editor.setWire(id, { reverse: true }),
+        },
+      !!connection &&
+        connection.word !== "dependency" && {
+          name: connection.label ? "Edit label" : "Add a label",
+          run: () => editor.rename(id, true, point),
+        },
+      editor.labelPlaced(id) && { name: "Put the label back", run: () => editor.unplaceLabel(id) },
+      "line",
+      this.removal(),
+    ];
+  }
+
+  /** The kinds a connection may be, between the elements it joins: offered where there is a choice. */
+  private wireKinds(id: string, connection: Connection | undefined): MenuEntry {
+    if (!connection) return false;
+    const { editor } = this,
+      current = wireValue(connection),
+      kinds = WIRES.filter(
+        (kind) =>
+          kind.value === current || (!kind.design && editor.allowsWire(id, wireChange(kind))),
+      );
+    return (
+      kinds.length > 1 && {
+        name: "Change kind",
+        items: kinds.map((kind) => ({
+          name: kind.name,
+          checked: kind.value === current,
+          run: () => editor.setWire(id, wireChange(kind)),
+        })),
       }
-      if (wires.length === 1 && !elements.length)
-        return [
-          !!editor.wireLabel(id) && {
-            name: "Edit label",
-            run: () => {
-              const wire = editor.doc.picture?.scene.wires.find((item) => item.edge === id),
-                middle = wire?.points[Math.floor(wire.points.length / 2)];
-              if (middle) editor.rename(id, true, middle);
-            },
-          },
-          editor.labelPlaced(id) && {
-            name: "Put the label back",
-            run: () => editor.unplaceLabel(id),
-          },
-          structure.links.length > 1 &&
-            structure.links.some((link) => link.kind === editor.linkKind(id)) && {
-              name: "Change kind",
-              items: structure.links.map((link) => ({
-                name: link.name,
-                checked: editor.linkKind(id) === link.kind,
-                run: () => editor.relink(id, link.kind),
-              })),
-            },
-          editor.can("reverse") && { name: "Reverse", run: () => editor.reverseJoin(id) },
-          editor.type === "sequence" && {
-            name: "Move earlier",
-            key: "↑",
-            run: () => editor.shift(-1),
-          },
-          editor.type === "sequence" && {
-            name: "Move later",
-            key: "↓",
-            run: () => editor.shift(1),
-          },
-          "line",
-          remove,
-        ];
-      return [remove];
-    }
-    if (!editor.editable) return fits;
-    if (elements.length && wires.length) return [remove];
-    if (elements.length) {
-      const [id] = elements,
-        kind = elements.length === 1 ? editor.doc.picture?.diagram.nodes.get(id)?.kind : undefined,
-        { align, distribute, size } = this.arrangements(),
-        [inside] = this.layouts();
-      return [
-        elements.length === 1 && { name: "Rename", key: "F2", run: () => editor.rename(id) },
-        {
-          name: "Change kind",
-          items: ELEMENTS.filter(
-            (item) => item === kind || editor.allowsElements({ kind: item }),
-          ).map((item) => ({
-            name: kindName(item),
-            checked: item === kind,
-            run: () => editor.setElements({ kind: item }),
-          })),
-        },
-        "line",
-        this.boxes(),
-        !!editor.selectionHolder && { name: "Take out of its box", run: () => editor.takeOut() },
-        !!editor.ungroupable && {
-          name: "Ungroup",
-          key: "Ctrl+Shift+G",
-          run: () => editor.ungroupSelection(),
-        },
-        { name: "Arrange", items: [...align, "line", ...distribute, "line", ...size] },
-        editor.canLayoutSelection && inside,
-        "line",
-        { name: "Fit selection", key: "2", run: () => editor.fitSelection() },
-        "line",
-        { name: "Duplicate", key: "Ctrl+D", run: () => editor.duplicateSelection() },
-        { name: "Copy", key: "Ctrl+C", run: () => this.clip(false) },
-        { name: "Cut", key: "Ctrl+X", run: () => this.clip(true) },
-        "line",
-        remove,
-      ];
-    }
-    if (wires.length) {
-      const [id] = wires,
-        connection = wires.length === 1 ? editor.connection(id) : undefined,
-        current = connection && wireValue(connection);
-      // The kinds this connection may be, between the elements it joins.
-      const kinds = connection
-        ? WIRES.filter(
-            (kind) =>
-              kind.value === current || (!kind.design && editor.allowsWire(id, wireChange(kind))),
-          )
-        : [];
-      return [
-        kinds.length > 1 && {
-          name: "Change kind",
-          items: kinds.map((kind) => ({
-            name: kind.name,
-            checked: kind.value === current,
-            run: () => editor.setWire(id, wireChange(kind)),
-          })),
-        },
-        !!connection &&
-          editor.allowsWire(id, { reverse: true }) && {
-            name: "Reverse",
-            run: () => editor.setWire(id, { reverse: true }),
-          },
-        !!connection &&
-          connection.word !== "dependency" && {
-            name: connection.label ? "Edit label" : "Add a label",
-            run: () => editor.rename(id, true, point),
-          },
-        editor.labelPlaced(id) && {
-          name: "Put the label back",
-          run: () => editor.unplaceLabel(id),
-        },
-        "line",
-        remove,
-      ];
-    }
-    const kinds = ELEMENTS.filter((kind) => editor.allowsKind(kind)),
+    );
+  }
+
+  /** The menu of a right click on the empty canvas of a block diagram: what to add at the point. */
+  private canvasContext(point: Point): MenuEntry[] {
+    const { editor } = this,
+      kinds = ELEMENTS.filter((kind) => editor.allowsKind(kind)),
       [, whole] = this.layouts();
     return [
       kinds.length > 0 && {
@@ -852,7 +933,7 @@ export class Menus {
       { name: "Paste", key: "Ctrl+V", run: () => this.paste() },
       { name: "Select all", key: "Ctrl+A", run: () => editor.selectAll() },
       "line",
-      ...fits,
+      ...this.fits(),
       "line",
       whole,
     ];

@@ -167,48 +167,18 @@ export class Palette {
       icon(pieceIcon(piece.kind)),
       h("span", { class: "name" }, piece.name),
     );
-    let start: { x: number; y: number } | undefined, chip: HTMLElement | undefined;
-    const over = (event: PointerEvent) => {
-      const rect = editor.view.canvas.getBoundingClientRect();
-      return (
-        event.clientX >= rect.left &&
-        event.clientX <= rect.right &&
-        event.clientY >= rect.top &&
-        event.clientY <= rect.bottom
-      );
-    };
-    const end = () => {
-      start = undefined;
-      chip?.remove();
-      chip = undefined;
-      editor.showPieceTarget(undefined);
-    };
-    control.addEventListener("pointerdown", (event) => {
-      if (event.button !== 0 || isOff(control)) return;
-      start = { x: event.clientX, y: event.clientY };
-      control.setPointerCapture(event.pointerId);
-    });
-    control.addEventListener("pointermove", (event) => {
-      if (!start) return;
-      if (!chip && Math.hypot(event.clientX - start.x, event.clientY - start.y) < 5) return;
-      chip ??= document.body.appendChild(
+    dragTile(control, editor, {
+      starts: () => !isOff(control),
+      chip: () =>
         h("div", { class: "drag-chip" }, icon(pieceIcon(piece.kind)), h("span", {}, piece.name)),
-      );
-      chip.style.transform = `translate(${event.clientX + 10}px, ${event.clientY + 10}px)`;
-      editor.showPieceTarget(
-        over(event) ? editor.view.toScene(editor.view.pointOf(event)) : undefined,
-        piece.kind,
-      );
+      move: (event, on) =>
+        editor.showPieceTarget(on ? scenePoint(editor, event) : undefined, piece.kind),
+      release: (event, dragged, on) => {
+        if (!dragged) editor.addPiece(piece.kind);
+        else if (on) editor.dropPiece(piece.kind, scenePoint(editor, event));
+      },
+      end: () => editor.showPieceTarget(undefined),
     });
-    control.addEventListener("pointerup", (event) => {
-      if (!start) return;
-      const dragged = !!chip,
-        on = over(event);
-      end();
-      if (!dragged) editor.addPiece(piece.kind);
-      else if (on) editor.dropPiece(piece.kind, editor.view.toScene(editor.view.pointOf(event)));
-    });
-    control.addEventListener("pointercancel", end);
     // The keyboard adds a piece as a click does.
     control.addEventListener("click", (event) => {
       if (event.detail === 0 && !isOff(control)) editor.addPiece(piece.kind);
@@ -252,60 +222,25 @@ export class Palette {
       h("span", { class: "name" }, entry.name),
     );
     this.tiles.set(kind, control);
-    let start: { x: number; y: number } | undefined,
-      chip: HTMLElement | undefined,
-      clicked = -1000;
-    const over = (event: PointerEvent) => {
-      const rect = editor.view.canvas.getBoundingClientRect();
-      return (
-        event.clientX >= rect.left &&
-        event.clientX <= rect.right &&
-        event.clientY >= rect.top &&
-        event.clientY <= rect.bottom
-      );
-    };
-    const end = () => {
-      start = undefined;
-      chip?.remove();
-      chip = undefined;
-      editor.showGhost(kind, undefined);
-    };
-    control.addEventListener("pointerdown", (event) => {
-      if (event.button !== 0) return;
-      start = { x: event.clientX, y: event.clientY };
-      control.setPointerCapture(event.pointerId);
-    });
-    control.addEventListener("pointermove", (event) => {
-      if (!start) return;
-      if (!chip && Math.hypot(event.clientX - start.x, event.clientY - start.y) < 5) return;
-      chip ??= document.body.appendChild(
-        h("div", { class: "drag-chip" }, icon(entry.icon), h("span", {}, entry.name)),
-      );
+    let clicked = -1000;
+    dragTile(control, editor, {
+      chip: () => h("div", { class: "drag-chip" }, icon(entry.icon), h("span", {}, entry.name)),
       // Over the canvas the element shows where it would stand; on the way there, as a chip.
-      const on = over(event);
-      chip.hidden = on;
-      chip.style.transform = `translate(${event.clientX + 10}px, ${event.clientY + 10}px)`;
-      editor.showGhost(
-        kind,
-        on ? editor.view.toScene(editor.view.pointOf(event)) : undefined,
-        event.altKey,
-      );
-    });
-    control.addEventListener("pointerup", (event) => {
-      if (!start) return;
-      const dragged = !!chip,
-        on = over(event);
-      end();
-      // A second click soon after the first keeps the tool, to place several.
-      const again = event.timeStamp - clicked < 400;
-      clicked = event.timeStamp;
-      if (!dragged) {
-        if (again) editor.setTool(kind, true);
+      move: (event, on, chip) => {
+        chip.hidden = on;
+        editor.showGhost(kind, on ? scenePoint(editor, event) : undefined, event.altKey);
+      },
+      release: (event, dragged, on) => {
+        // A second click soon after the first keeps the tool, to place several.
+        const again = event.timeStamp - clicked < 400;
+        clicked = event.timeStamp;
+        if (dragged) {
+          if (on) editor.create(kind, scenePoint(editor, event), event.altKey);
+        } else if (again) editor.setTool(kind, true);
         else editor.setTool(editor.tool === kind ? "select" : kind);
-      } else if (on)
-        editor.create(kind, editor.view.toScene(editor.view.pointOf(event)), event.altKey);
+      },
+      end: () => editor.showGhost(kind, undefined),
     });
-    control.addEventListener("pointercancel", end);
     // The keyboard picks a shape as the pointer does.
     control.addEventListener("click", (event) => {
       if (event.detail === 0) editor.setTool(editor.tool === kind ? "select" : kind);
@@ -315,36 +250,60 @@ export class Palette {
 
   /** Shows the editor's state: called whenever it changed. */
   update() {
-    const { editor } = this,
-      { doc } = editor;
+    const { editor } = this;
     // An activity diagram that takes its first lane stays the type it was: its list stays.
     if (!this.type || !sameType(editor.type, this.type)) this.build(editor.type);
-    const words = this.search.value.trim().toLowerCase();
-    let found = false;
-    // Only the shapes the diagram takes are offered: one its level allows.
-    for (const group of this.groups) {
-      let any = false;
-      for (const entry of group.items) {
-        const allowed = !!doc.problem || editor.allowsKind(entry.kind),
-          shown = allowed && (!words || entry.name.toLowerCase().includes(words)),
-          tile = this.tiles.get(entry.kind)!;
-        tile.hidden = !shown;
-        tile.setAttribute("aria-pressed", String(editor.tool === entry.kind));
-        tile.classList.toggle("sticky", editor.tool === entry.kind && editor.sticky);
-        any ||= shown;
-        if (!allowed && editor.tool === entry.kind) editor.tool = "select";
-      }
-      group.box.hidden = !any;
-      found ||= any;
-    }
-    // A piece the diagram does not take as it stands is off, with the reason: a group beside lanes.
-    for (const { tile, piece } of this.pieces) {
-      tile.hidden = !!words && !piece.name.toLowerCase().includes(words);
-      setOff(tile, editor.pieceRefusal(piece.kind));
-      found ||= !tile.hidden;
-    }
+    const words = this.search.value.trim().toLowerCase(),
+      shapes = this.showShapes(words),
+      pieces = this.showPieces(words),
+      snippets = this.showSnippets(words);
     for (const [kind, tile] of this.links)
       tile.setAttribute("aria-pressed", String(editor.link === kind));
+    this.none.hidden = shapes || pieces || snippets;
+  }
+
+  /** Shows the groups of shapes as far as the search finds them; true when it found any. */
+  private showShapes(words: string) {
+    let found = false;
+    for (const group of this.groups) {
+      const shown = group.items.map((entry) => this.showTile(entry, words));
+      group.box.hidden = !shown.includes(true);
+      found ||= !group.box.hidden;
+    }
+    return found;
+  }
+
+  /**
+   * Shows the tile of a shape, pressed while it is the tool; true when it shows. Only the shapes
+   * the diagram takes are offered: one its level allows.
+   */
+  private showTile(entry: Shape, words: string) {
+    const { editor } = this,
+      allowed = !!editor.doc.problem || editor.allowsKind(entry.kind),
+      shown = allowed && (!words || entry.name.toLowerCase().includes(words)),
+      tile = this.tiles.get(entry.kind)!,
+      tool = editor.tool === entry.kind;
+    tile.hidden = !shown;
+    tile.setAttribute("aria-pressed", String(tool));
+    tile.classList.toggle("sticky", tool && editor.sticky);
+    if (!allowed && tool) editor.tool = "select";
+    return shown;
+  }
+
+  /** A piece the diagram does not take as it stands is off, with the reason: a group beside lanes. */
+  private showPieces(words: string) {
+    let found = false;
+    for (const { tile, piece } of this.pieces) {
+      tile.hidden = !!words && !piece.name.toLowerCase().includes(words);
+      setOff(tile, this.editor.pieceRefusal(piece.kind));
+      found ||= !tile.hidden;
+    }
+    return found;
+  }
+
+  /** Shows the snippets whose name or text holds the search; true when it found any. */
+  private showSnippets(words: string) {
+    let found = false;
     for (const { row, snippet } of this.snippets) {
       row.hidden =
         !!words &&
@@ -352,6 +311,66 @@ export class Palette {
         !snippet.text.toLowerCase().includes(words);
       found ||= !row.hidden;
     }
-    this.none.hidden = found;
+    return found;
   }
 }
+
+/** What a tile does as it is dragged to the canvas. */
+interface TileDrag {
+  /** Whether a press starts anything: a tile that is off starts nothing. */
+  starts?(): boolean;
+  /** The chip that follows the pointer on its way to the canvas. */
+  chip(): HTMLElement;
+  /** The pointer moved in a drag, over the canvas when `on`. */
+  move(event: PointerEvent, on: boolean, chip: HTMLElement): void;
+  /** The pointer was let go: after a drag, or after a click. */
+  release(event: PointerEvent, dragged: boolean, on: boolean): void;
+  /** The press ended, however it did. */
+  end(): void;
+}
+
+/** Makes a tile a thing to click or to drag to the canvas: a drag starts once the pointer went 5 pixels. */
+function dragTile(control: HTMLElement, editor: Editor, drag: TileDrag) {
+  let start: { x: number; y: number } | undefined, chip: HTMLElement | undefined;
+  const end = () => {
+    start = undefined;
+    chip?.remove();
+    chip = undefined;
+    drag.end();
+  };
+  control.addEventListener("pointerdown", (event) => {
+    if (event.button !== 0 || drag.starts?.() === false) return;
+    start = { x: event.clientX, y: event.clientY };
+    control.setPointerCapture(event.pointerId);
+  });
+  control.addEventListener("pointermove", (event) => {
+    if (!start) return;
+    if (!chip && Math.hypot(event.clientX - start.x, event.clientY - start.y) < 5) return;
+    chip ??= document.body.appendChild(drag.chip());
+    chip.style.transform = `translate(${event.clientX + 10}px, ${event.clientY + 10}px)`;
+    drag.move(event, overCanvas(editor, event), chip);
+  });
+  control.addEventListener("pointerup", (event) => {
+    if (!start) return;
+    const dragged = !!chip,
+      on = overCanvas(editor, event);
+    end();
+    drag.release(event, dragged, on);
+  });
+  control.addEventListener("pointercancel", end);
+}
+
+/** Whether the pointer is over the canvas. */
+function overCanvas(editor: Editor, event: PointerEvent): boolean {
+  const rect = editor.view.canvas.getBoundingClientRect();
+  return (
+    event.clientX >= rect.left &&
+    event.clientX <= rect.right &&
+    event.clientY >= rect.top &&
+    event.clientY <= rect.bottom
+  );
+}
+
+/** The point of the diagram under the pointer. */
+const scenePoint = (editor: Editor, event: PointerEvent) =>
+  editor.view.toScene(editor.view.pointOf(event));

@@ -145,45 +145,55 @@ export class StatusBar {
 
   /** The hint for the state the editor is in. */
   private hintText(): string {
-    const { editor } = this,
-      { doc } = editor,
-      elements = editor.selectedElements.length,
-      wires = editor.selectedWires.length;
-    if (doc.problem)
-      return doc.picture
+    const { editor } = this;
+    if (editor.doc.problem)
+      return editor.doc.picture
         ? "The source has an error: the diagram shows as it last was"
         : "The source has an error: the diagram shows once it is mended";
     if (editor.structural)
-      return elements === 1
+      return editor.selectedElements.length === 1
         ? "Click a shape to add it here · drag a dot to connect · double-click to rename · Delete removes"
         : "Click a shape to add it, or drag it onto a part · drag a dot to connect · the layout is automatic";
     if (!editor.editable)
       return `${typeInfo(editor.type).plural} are edited as text: type in the source or add a snippet · drag to move the view · Ctrl + wheel zooms`;
+    return this.canvasHint();
+  }
+
+  /** The hint in a block diagram: for the gesture under way, the tool, or what is selected. */
+  private canvasHint(): string {
+    const { editor } = this;
     if (editor.doing && GESTURE_HINTS[editor.doing]) return GESTURE_HINTS[editor.doing];
-    if (editor.tool !== "select")
-      return (
-        TOOL_HINTS[editor.tool] ??
-        (editor.sticky
-          ? "Click to place an element · again for another · Escape to stop"
-          : "Click to place the element · inside another element to put it there · Shift-click to place several")
-      );
-    if (elements + wires > 1)
-      return "Drag to move them together · align and distribute from the Arrange menu · right-click for more";
-    if (elements)
-      return "Drag to move · drag a dot to connect · double-click to rename · right-click for more";
-    if (wires)
-      return "Drag an end to another element · double-click to label · right-click to change its kind";
-    return "Drag a shape onto the canvas · double-click it for an agent · drag a frame to select · right-click for more";
+    if (editor.tool === "select") return selectionHint(editor);
+    return (
+      TOOL_HINTS[editor.tool] ??
+      (editor.sticky
+        ? "Click to place an element · again for another · Escape to stop"
+        : "Click to place the element · inside another element to put it there · Shift-click to place several")
+    );
   }
 
   /** Shows the editor's state: called whenever it changed. */
   update() {
     const { editor } = this,
-      { doc } = editor,
       elements = editor.selectedElements.length,
       wires = editor.selectedWires.length;
     this.hint.textContent = this.hintText();
-    const overlaps = doc.picture?.overlaps.length ?? 0,
+    this.showProblem();
+    this.selection.textContent = [
+      elements && count(elements, "element"),
+      wires && count(wires, "connection"),
+    ]
+      .filter(Boolean)
+      .join(", ");
+    this.selection.hidden = !elements && !wires;
+    this.showMode();
+    this.snap.setAttribute("aria-pressed", String(editor.snapping));
+  }
+
+  /** The problem of the source, or else the elements that overlap: a click shows where. */
+  private showProblem() {
+    const { doc } = this.editor,
+      overlaps = doc.picture?.overlaps.length ?? 0,
       label = this.problem.lastElementChild!;
     this.problem.hidden = !doc.problem && !overlaps;
     this.problem.classList.toggle("warning", !doc.problem);
@@ -192,20 +202,31 @@ export class StatusBar {
       ? doc.problem.message.replace(/`/g, "")
       : "Elements lie on each other. TAM places all elements apart.";
     this.problem.dataset.side = "top";
-    this.selection.textContent = [
-      elements && count(elements, "element"),
-      wires && count(wires, "connection"),
-    ]
-      .filter(Boolean)
-      .join(", ");
-    this.selection.hidden = !elements && !wires;
-    const placed = !!doc.picture?.placed && doc.picture.diagram.nodes.size > 0;
+  }
+
+  /** How the diagram is laid out: by the positions in the source, or automatically. */
+  private showMode() {
+    const { editor } = this,
+      { picture } = editor.doc,
+      placed = !!picture?.placed && picture.diagram.nodes.size > 0;
     this.mode.parentElement!.hidden = !editor.editable && !editor.structural;
     this.mode.firstElementChild!.textContent = placed ? "Manual positions" : "Auto layout";
     this.mode.dataset.tip = placed
       ? `Parts stand where the source places them (${editor.structural ? "%% @id x,y" : "@x,y"}). Click for Auto layout.`
       : "No element is placed: the layout is automatic until one is moved.";
     this.mode.dataset.side = "top";
-    this.snap.setAttribute("aria-pressed", String(editor.snapping));
   }
+}
+
+/** The hint of the select tool, for what is selected. */
+function selectionHint(editor: Editor): string {
+  const elements = editor.selectedElements.length,
+    wires = editor.selectedWires.length;
+  if (elements + wires > 1)
+    return "Drag to move them together · align and distribute from the Arrange menu · right-click for more";
+  if (elements)
+    return "Drag to move · drag a dot to connect · double-click to rename · right-click for more";
+  if (wires)
+    return "Drag an end to another element · double-click to label · right-click to change its kind";
+  return "Drag a shape onto the canvas · double-click it for an agent · drag a frame to select · right-click for more";
 }
