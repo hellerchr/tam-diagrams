@@ -374,6 +374,15 @@ export function meetsSquare(end: Point, before: Point, box: Box): boolean {
   return (leftOrRight && near(before.y, end.y)) || (topOrBottom && near(before.x, end.x));
 }
 
+/** Whether every segment of a route runs straight across or straight down. */
+export const orthogonal = (points: Point[]) =>
+  points
+    .slice(1)
+    .every(
+      (point, index) =>
+        Math.abs(point.x - points[index].x) < 0.5 || Math.abs(point.y - points[index].y) < 0.5,
+    );
+
 /** Whether a route meets the elements at both its ends square to their sides. */
 export function endsSquare(geometry: Geometry, id: string, points: Point[]): boolean {
   const [source, target] = geometry.ends.get(id)!;
@@ -387,7 +396,8 @@ export function endsSquare(geometry: Geometry, id: string, points: Point[]): boo
 
 /**
  * Puts `points` in place of a route and moves its label along; restores `before` when no spot for the
- * label is free. A route that would end along a side of its element is refused.
+ * label is free. A route with a slanted segment, or one that would end along a side of its element,
+ * is refused.
  */
 export function tryRoute(
   geometry: Geometry,
@@ -395,7 +405,7 @@ export function tryRoute(
   points: Point[],
   before: Point[],
 ): boolean {
-  if (!endsSquare(geometry, id, points)) return false;
+  if (!orthogonal(points) || !endsSquare(geometry, id, points)) return false;
   const label = geometry.edgeLabels.get(id);
   geometry.routes.set(id, points);
   if (relabel(geometry, id, points)) return true;

@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { colors, umlColors } from "./fixtures.ts";
 import { arialMeasure, parseTam, renderTam, renderUml } from "../src/index.ts";
 import { alongSides, offOutline } from "../src/audit.ts";
-import { meetsSquare } from "../src/route.ts";
+import { meetsSquare, orthogonal } from "../src/route.ts";
 import { type Scene, STACK } from "../src/scene.ts";
 import { TAM_EXAMPLES } from "../src/samples/tam-examples.ts";
 import * as UML from "../src/samples/uml-examples.ts";
@@ -126,4 +126,35 @@ describe("a reads/writes access", () => {
     }
     expect(found).toEqual([]);
   }, 60_000);
+});
+
+describe("a wire's route", () => {
+  it("is orthogonal when every segment runs straight across or straight down", () => {
+    expect(
+      orthogonal([
+        { x: 0, y: 0 },
+        { x: 0, y: 40 },
+        { x: 60, y: 40 },
+      ]),
+    ).toBe(true);
+    expect(
+      orthogonal([
+        { x: 0, y: 0 },
+        { x: 0, y: 40 },
+        { x: 60, y: 58 },
+      ]),
+    ).toBe(false);
+  });
+
+  it.each([34, 57])(
+    "runs straight across or down in generated block diagram %i, where a title once slanted it",
+    async (seed) => {
+      const { scene } = await renderTam(generateTam(seed), colors, measure);
+      const slanted = scene.wires
+        .filter((wire) => !wire.path?.includes("A"))
+        .filter((wire) => !orthogonal(wire.points))
+        .map((wire) => wire.edge);
+      expect(slanted).toEqual([]);
+    },
+  );
 });
