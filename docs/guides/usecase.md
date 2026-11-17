@@ -80,7 +80,7 @@ A use case diagram shows the functional requirements of a subject: the actors ex
 
 | You write | It means |
 | --- | --- |
-| `note for order Needs a login` | A note at an element that is declared above. The text runs to the end of the line; quotes around it are optional. `<br>` breaks a line. `#quot;` writes a quote, `#35;` the character with that number. |
+| `note for order Needs a login` | A note at an element that is declared above. The text runs to the end of the line; quotes around it are optional. `<br>` breaks a line. `#quot;` writes a quote, `#35;` the character with that number. Angle brackets show as written, as in `autofix/<id>`, except HTML formatting tags such as `<b>`: they format the text, and `#lt;b>` shows one. |
 
 ## Read and not drawn
 

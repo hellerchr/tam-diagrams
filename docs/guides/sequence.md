@@ -57,7 +57,7 @@ A message is two participants with an arrow between, then a colon and the text. 
 | `A->B: hint` | A solid line without a head. Dashed: `-->`. |
 | `A<<->>B: sync` | Heads at both ends. Dashed: `<<-->>`. |
 | `A->>A: think` | A self message. |
-| `A->>B: first line<br>second line` | `<br>` breaks a line. `#quot;` writes a quote, `#35;` the character with that number. |
+| `A->>B: first line<br>second line` | `<br>` breaks a line. `#quot;` writes a quote, `#35;` the character with that number. Angle brackets show as written, as in `autofix/<id>`, except HTML formatting tags such as `<b>`: they format the text, and `#lt;b>` shows one. |
 
 ## Activation
 

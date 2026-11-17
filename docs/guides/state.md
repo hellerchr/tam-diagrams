@@ -44,7 +44,7 @@ A state machine diagram shows the states of one object and the transitions betwe
 | --- | --- |
 | `Idle --> Busy` | A transition from `Idle` to `Busy`. |
 | `Idle --> Busy : start` | The trigger event, after a colon. |
-| `Idle --> Busy : start [ready] / beep` | Trigger, guard and effect. `<br>` breaks a line. `#quot;` writes a quote, `#35;` the character with that number. |
+| `Idle --> Busy : start [ready] / beep` | Trigger, guard and effect. `<br>` breaks a line. `#quot;` writes a quote, `#35;` the character with that number. Angle brackets show as written, as in `autofix/<id>`, except HTML formatting tags such as `<b>`: they format the text, and `#lt;b>` shows one. |
 | `[*] --> Idle` | From the initial pseudostate to the default state. |
 | `Busy --> [*]` | To a final state: the region completes. |
 | `Busy --> Busy : retry` | A self-transition. |

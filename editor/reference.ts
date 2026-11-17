@@ -94,7 +94,7 @@ const front = (header: string, body: string, level?: string): GuideRow[] => [
 
 /** How the text of a label is written, in every Mermaid type. */
 const TEXT =
-  "`<br>` breaks a line. `#quot;` writes a quote, `#35;` the character with that number.";
+  "`<br>` breaks a line. `#quot;` writes a quote, `#35;` the character with that number. Angle brackets show as written, as in `autofix/<id>`, except HTML formatting tags such as `<b>`: they format the text, and `#lt;b>` shows one.";
 
 /**
  * The section on the lines that place the parts of a Mermaid diagram by hand: `id` is a part of

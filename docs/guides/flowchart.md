@@ -44,7 +44,7 @@ An activity diagram shows the control flow between actions: their order, decisio
 | `pack` | An id alone: an action that shows its id. Flows may name nodes that are declared nowhere. |
 | `pack("Pack (all) goods")` | Quotes keep brackets and signs inside a text. |
 | ``pack("`Pack **all** goods`")`` | A Markdown text: shown without its emphasis signs. |
-| `pack(Pack<br>goods)` | `<br>` breaks a line. `#quot;` writes a quote, `#35;` the character with that number. |
+| `pack(Pack<br>goods)` | `<br>` breaks a line. `#quot;` writes a quote, `#35;` the character with that number. Angle brackets show as written, as in `autofix/<id>`, except HTML formatting tags such as `<b>`: they format the text, and `#lt;b>` shows one. |
 | `db[(Orders)]` | A cylinder: an object node, a data store. |
 | `pill([Wait])` | Mermaid's stadium: drawn as an action. |
 | `sub[[Check credit]]` | A subroutine: a rectangle with double sides. |

@@ -155,9 +155,17 @@ function decodeEntities(text: string): string {
   });
 }
 
+/** HTML tags Mermaid reads as formatting in a label: it shows what they hold, without them. */
+const FORMATTING = new Set([
+  ...["a", "abbr", "b", "big", "center", "cite", "code", "del", "div", "em", "font", "i", "ins"],
+  ...["kbd", "mark", "p", "q", "s", "samp", "small", "span", "strike", "strong", "sub", "sup"],
+  ...["tt", "u", "var"],
+]);
+
 /**
  * Label text as Mermaid shows it: quotes removed, entities decoded, markdown strings (`` "`...`" ``)
- * without emphasis markers, HTML tags other than `<br>` dropped.
+ * without emphasis markers, HTML formatting tags dropped but for `<br>`. Anything else in angle
+ * brackets, such as a placeholder `<id>`, shows as written.
  */
 export function labelText(raw: string): string {
   let text = raw.trim();
@@ -170,7 +178,9 @@ export function labelText(raw: string): string {
   else text = text.replace(/^"([\s\S]*)"$/, "$1");
   text = text
     .replace(/<br\s*\/?>/gi, "\u0000")
-    .replace(/<\/?[a-z][^>]*>/gi, "")
+    .replace(/<\/?([a-z][\w-]*)[^>]*>/gi, (tag, name: string) =>
+      FORMATTING.has(name.toLowerCase()) ? "" : tag,
+    )
     .replace(/\u0000/g, "<br>");
   return decodeEntities(text).replace(/\\n/g, "<br>").trim();
 }
