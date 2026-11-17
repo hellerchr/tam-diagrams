@@ -39,7 +39,7 @@ import type { ToastAction } from "./ui.ts";
 /** What the session says to the user, and the typing it takes in before a save. */
 export interface Notices {
   toast(message: string, action?: ToastAction): void;
-  /** Makes typed text that waits the document. */
+  /** Takes what is still being typed into the document, so a save holds it. */
   commit(): void;
 }
 

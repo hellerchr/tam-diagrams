@@ -179,6 +179,9 @@ export const emptyScene = (): Scene => ({
   bounds: { x: 0, y: 0, width: 0, height: 0 },
 });
 
+/** The area of a box. */
+export const areaOf = (box: Box) => box.width * box.height;
+
 /** The center of a box. */
 export const centerOf = (box: Box): Point => ({
   x: box.x + box.width / 2,
@@ -211,6 +214,10 @@ export function around(boxes: Box[]): Box {
     height: Math.max(...boxes.map((box) => box.y + box.height)) - y,
   };
 }
+
+/** The box around some boxes; none around none. */
+export const aroundSome = (boxes: Box[]): Box | undefined =>
+  boxes.length ? around(boxes) : undefined;
 
 /** The unit vector from `from` toward `to`. */
 export const unit = (from: Point, to: Point): Point => {

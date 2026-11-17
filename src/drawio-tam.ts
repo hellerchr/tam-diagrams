@@ -8,6 +8,7 @@
  * wrote settles what the picture leaves open.
  */
 
+import { spanBox } from "./route.ts";
 import {
   type Cell,
   type Drawing,
@@ -41,7 +42,9 @@ import {
   vertexGeometry,
 } from "./drawio-shapes.ts";
 import {
+  areaOf,
   around,
+  aroundSome,
   type Box,
   centerOf,
   inside,
@@ -518,7 +521,7 @@ type CellStyle = Record<string, string | number | undefined>;
 /** Where the scene draws a label: the box around all its lines. */
 function labelBox(scene: Scene, owner: string, role: SceneText["role"] = "label") {
   const lines = scene.texts.filter((text) => text.owner === owner && text.role === role);
-  return lines.length ? around(lines.map((text) => text.box)) : undefined;
+  return aroundSome(lines.map((text) => text.box));
 }
 
 /** The style every connection starts from. */
@@ -1192,9 +1195,6 @@ const accessWord = (toStorage: boolean, toAgent: boolean) =>
 /** The dot product of two directions. */
 const dot = (a: Point, b: Point) => a.x * b.x + a.y * b.y;
 
-/** The area of a box. */
-const area = (box: Box) => box.width * box.height;
-
 /**
  * A page read as a TAM block diagram, in its phases: the parts by their picture, the elements and
  * what holds what, the connections, the protocols, the labels from free texts, and the source
@@ -1367,7 +1367,8 @@ class TamPage {
     return this.list
       .filter((element) => toOutline(element.box, point) <= 10)
       .toSorted(
-        (a, b) => toOutline(a.box, point) - toOutline(b.box, point) || area(a.box) - area(b.box),
+        (a, b) =>
+          toOutline(a.box, point) - toOutline(b.box, point) || areaOf(a.box) - areaOf(b.box),
       )[0];
   }
 
@@ -1781,7 +1782,7 @@ class TamPage {
           distanceToPath(path, centerOf(connection.at)) <= 12),
     );
     if (!crossed.length) return;
-    const name = (this.drawing.label(border) || this.texts.take(boxAround(path), 40) || "").replace(
+    const name = (this.drawing.label(border) || this.texts.take(spanBox(path), 40) || "").replace(
       /\n/g,
       " ",
     );
@@ -1849,9 +1850,11 @@ class TamPage {
       list
         .filter(
           (element) =>
-            element.kind !== "note" && inside(box, element.box, 2) && area(element.box) > area(box),
+            element.kind !== "note" &&
+            inside(box, element.box, 2) &&
+            areaOf(element.box) > areaOf(box),
         )
-        .toSorted((a, b) => area(a.box) - area(b.box))[0];
+        .toSorted((a, b) => areaOf(a.box) - areaOf(b.box))[0];
     const dots = drawing.parts
       .filter((item) => this.partIs(item, "dots") && roleOf(drawing, item) !== "copy-dots")
       .map((item): Dots => ({ box: drawing.box(item), in: dotsHolder(drawing.box(item)) }));
@@ -2062,7 +2065,7 @@ const agentAround = (elements: Map<string, Element>, box: Box) =>
     .filter(
       (other) => (other.kind === "agent" || other.kind === "human") && inside(box, other.box, 2),
     )
-    .toSorted((a, b) => area(a.box) - area(b.box))[0];
+    .toSorted((a, b) => areaOf(a.box) - areaOf(b.box))[0];
 
 /** Copies and stack outlines this package wrote name the element they belong to. */
 function readMarks(drawing: Drawing, elements: Map<string, Element>, marks: Cell[]) {
@@ -2121,10 +2124,10 @@ function holderOf(
       (other) =>
         other !== element &&
         other.kind !== "note" &&
-        area(other.box) > area(element.box) &&
+        areaOf(other.box) > areaOf(element.box) &&
         inside(element.box, other.box, 2),
     )
-    .toSorted((a, b) => area(a.box) - area(b.box))[0];
+    .toSorted((a, b) => areaOf(a.box) - areaOf(b.box))[0];
 }
 
 /** Whether a group counts as a storage: all its elements are storages. */
@@ -2160,15 +2163,6 @@ function middleOfMiddle(path: Point[]): Point {
 /** Whether a box holds a point. */
 const holds = (box: Box, point: Point) =>
   point.x > box.x && point.x < box.x + box.width && point.y > box.y && point.y < box.y + box.height;
-
-/** The box around a path's points. */
-function boxAround(path: Point[]): Box {
-  const xs = path.map((p) => p.x),
-    ys = path.map((p) => p.y);
-  const x = Math.min(...xs),
-    y = Math.min(...ys);
-  return { x, y, width: Math.max(...xs) - x, height: Math.max(...ys) - y };
-}
 
 /** Whether a polyline crosses any of the polylines of a route. */
 function crosses(line: Point[], route: Point[][]): boolean {

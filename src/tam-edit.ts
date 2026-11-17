@@ -5,7 +5,7 @@
  * a rule of the notation shows when the result is parsed.
  */
 
-import { rootEnd } from "./uml-edit-text.ts";
+import { indentOf, linesOf, rootEnd } from "./source-text.ts";
 import {
   COLORS,
   type Connection,
@@ -29,8 +29,6 @@ export type ElementKind = (typeof ELEMENT_KINDS)[number];
 /** Words a source reads as statements, so no element is named by one. */
 const RESERVED = new Set<string>([...ELEMENT_KINDS, "title", "direction", "level"]);
 
-const linesOf = (source: string) => source.replace(/\r\n?/g, "\n").split("\n");
-
 /** A line's statement and the comment after it. */
 function cut(line: string): [string, string] {
   const at = line.indexOf("%%");
@@ -38,8 +36,6 @@ function cut(line: string): [string, string] {
 }
 
 const statementOf = (line: string) => cut(line)[0].trim();
-
-const indentOf = (line: string) => line.match(/^\s*/)![0];
 
 /** A number as sources write it: whole where it can be, one decimal else. */
 const number = (value: number) => String(Math.round(value * 10) / 10);
@@ -455,10 +451,10 @@ export function connectionOf(source: string, edge: string): Connection | undefin
 }
 
 /**
- * The word that connects two elements when nothing else is said: an agent reads and writes a
- * storage, calls another agent, and holds what it delegates to; storages point at each other and
- * packages use each other; a note is attached to an element, the note first. `from` and `to` swap
- * where only the other element can act.
+ * The word that connects two elements when nothing else is said: an agent drawn to a storage writes
+ * it and one drawn from a storage reads it, an agent calls another agent and delegates to what it
+ * holds; storages point at each other and packages use each other; a note is attached to an
+ * element, the note first. `from` and `to` swap where only the other element can act.
  */
 export function defaultConnection(diagram: TamDiagram, from: string, to: string): Connection {
   const a = declared(diagram, from)!,

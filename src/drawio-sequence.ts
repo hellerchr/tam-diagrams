@@ -14,7 +14,7 @@
  * draw.io's own UML Lifeline, Actor, Frame and Destroy shapes, as people draw them by hand.
  */
 
-import { oneLine } from "./uml-edit-text.ts";
+import { oneLine } from "./source-text.ts";
 import {
   type Cell,
   type Drawing,
@@ -45,7 +45,9 @@ import {
 } from "./drawio-shapes.ts";
 import type { MarkerKind } from "./markers.ts";
 import {
+  aroundSome,
   type Box,
+  centerOf,
   contains,
   inside,
   type Point,
@@ -84,18 +86,6 @@ class CellIds {
 
 /** Model text (line breaks as `<br>`) as text with `\n`. */
 const plain = (text: string) => text.replace(/<br\s*\/?>/gi, "\n");
-
-/** The box around some boxes. */
-function union(boxes: Box[]): Box | undefined {
-  if (!boxes.length) return undefined;
-  const left = Math.min(...boxes.map((box) => box.x)),
-    top = Math.min(...boxes.map((box) => box.y)),
-    right = Math.max(...boxes.map((box) => box.x + box.width)),
-    bottom = Math.max(...boxes.map((box) => box.y + box.height));
-  return { x: left, y: top, width: right - left, height: bottom - top };
-}
-
-const centerOf = (box: Box): Point => ({ x: box.x + box.width / 2, y: box.y + box.height / 2 });
 
 /** Edge style keys for an arrow head of the model at one end. */
 function headStyle(kind: MarkerKind | null, end: "start" | "end") {
@@ -562,7 +552,7 @@ function messageCells(
   const from = endOn(lifelines.get(event.from), points[0]),
     to = endOn(lifelines.get(event.to), points.at(-1)!);
   const route = edgeRoute(points, from?.box, to?.box);
-  const label = union(textsOf(scene, event.id, "label").map((text) => text.box));
+  const label = aroundSome(textsOf(scene, event.id, "label").map((text) => text.box));
   const cells: Cell[] = [
     cell(
       {
@@ -713,7 +703,7 @@ function branchCells(
     if (index > 0)
       cells.push(branchCell(ids.of(`${frameCell}#branch${index}`), frameCell, box, top));
     const text = conditions[index];
-    const drawn = union(
+    const drawn = aroundSome(
       guards.filter((guard) => guard.y > top && guard.y < bottom).map((guard) => guard.box),
     );
     if (text && drawn)
@@ -1020,7 +1010,7 @@ function readFigure(reader: Reader, item: Cell) {
  */
 function readHuman(reader: Reader, item: Cell) {
   const { drawing } = reader;
-  const outer = drawing.parentOf(item) ?? boxAround(reader, reader.box(item));
+  const outer = drawing.parentOf(item) ?? nameCellAround(reader, reader.box(item));
   reader.use(item, true);
   if (outer && !reader.used.has(outer.id) && reader.label(outer) && !reader.isText(outer)) {
     reader.use(outer, true);
@@ -1040,8 +1030,8 @@ function readHuman(reader: Reader, item: Cell) {
   );
 }
 
-/** The smallest box with a name around a figure, the size of a head. */
-function boxAround(reader: Reader, figure: Box): Cell | undefined {
+/** The smallest named box around a figure, the size of a head: the cell that names it. */
+function nameCellAround(reader: Reader, figure: Box): Cell | undefined {
   return reader.vertices
     .filter((item) => {
       if (!item.vertex || reader.isText(item) || !reader.label(item)) return false;

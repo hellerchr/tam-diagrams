@@ -13,7 +13,7 @@
 import type { Structure, StructureEdge, StructureNode } from "./structure.ts";
 import { parseStateDiagram, type StateDiagram, type UmlState } from "./uml-state.ts";
 import { accessibilityLines, scan, STYLING } from "./uml.ts";
-import { dedent, indentOf, linesOf, numberedId, originalsOf, rootEnd } from "./uml-edit-text.ts";
+import { dedent, indentOf, linesOf, numberedId, originalsOf, rootEnd } from "./source-text.ts";
 
 /** What a canvas adds to a state diagram. */
 type StatePiece =

@@ -1,14 +1,12 @@
 /** What holds what in a scene, read from its geometry: the scene model has no parents. */
 
-import { type Box, inside, type Scene, type SceneShape } from "./scene.ts";
+import { areaOf, inside, type Scene, type SceneShape } from "./scene.ts";
 
 /** What holds what in a scene: the container around each shape, and the shapes in each container. */
 export interface SceneTree {
   parent: Map<string, string | undefined>;
   children: Map<string, string[]>;
 }
-
-const area = (box: Box) => box.width * box.height;
 
 /** Whether `outer` holds `inner` at any depth, in a tree whose parts know their parent. */
 export function holdsDeep<T extends { parent?: T | null }>(outer: T, inner: T): boolean {
@@ -23,7 +21,7 @@ export function holdsDeep<T extends { parent?: T | null }>(outer: T, inner: T): 
 export function sceneTree(scene: Scene): SceneTree {
   const containers = scene.shapes
     .filter((shape) => shape.container)
-    .toSorted((a, b) => area(a.box) - area(b.box));
+    .toSorted((a, b) => areaOf(a.box) - areaOf(b.box));
   const parent = new Map<string, string | undefined>(),
     children = new Map<string, string[]>();
   for (const shape of scene.shapes) {

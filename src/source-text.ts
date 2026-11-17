@@ -1,6 +1,6 @@
 /**
- * What the editing modules of the UML diagram types share: the source as lines, the indentation of
- * a line, texts written the way Mermaid reads them, and ids that no part has yet.
+ * What the modules that write sources share: a source as lines, the indentation of a line, texts
+ * written the way the parsers read them, and ids that no part has yet.
  */
 
 /** A source as its lines, whatever line breaks it uses. */
@@ -20,7 +20,7 @@ export const oneLine = (text: string) => text.replace(/\s*\n\s*/g, " ").trim();
 export const indentOf = (line: string) => line.match(/^\s*/)![0];
 
 /** One more level of indentation, in the style of the source: a tab where it indents with tabs. */
-export const stepOf = (lines: string[]) =>
+export const indentStep = (lines: string[]) =>
   lines.some((line) => line.startsWith("\t")) ? "\t" : "  ";
 
 /**

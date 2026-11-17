@@ -454,12 +454,15 @@ classDiagram
 | `src/tam-placed-field.ts`    | TAM layout by hand: what stands in a wire's way and what a line through it costs     |
 | `src/tam-placed-lines.ts`    | TAM layout by hand: the simple lines between two elements                            |
 | `src/tam-placed-marks.ts`    | TAM layout by hand: where a connection's circle and label stand on its wire          |
+| `src/label-places.ts`        | Labels placed by hand: a connection's label as an offset from its line's middle      |
 | `src/tam-placed-detour.ts`   | TAM layout by hand: a wire's way around the elements between its ends                |
 | `src/tam-edit.ts`            | Edits of a TAM source as text: place, add, change, connect, remove, nest, copy       |
 | `src/tam-pin.ts`             | Positions for every element from a layout                                            |
 | `src/edit.ts`                | The `tam-diagrams/edit` entry point                                                  |
 | `src/tam-protocols.ts`       | TAM protocol boundaries: dashed lines through the channels of one protocol           |
 | `src/uml.ts`                 | What the UML parsers share: type detection, errors, source preparation, vertex ports |
+| `src/uml-header-edit.ts`     | A whole diagram's settings as text: title, direction, level, message numbers         |
+| `src/source-text.ts`         | What the modules that write sources share: lines, indents, coded texts, fresh ids    |
 | `src/uml-class.ts`           | Class diagrams: the parser, and the views and hit tests of the class explorer        |
 | `src/uml-class-layout.ts`    | Class diagram layout: compartments, notes, lollipops and self relations              |
 | `src/uml-class-packages.ts`  | Class diagram packages side by side, end labels and merged inheritance trees         |
@@ -515,6 +518,7 @@ classDiagram
 | `src/best.ts`                | Scene metrics, the best-layout portfolio and the layout cache                        |
 | `cli/bin.ts`                 | The executable's entry: runs `main` and sets the exit code                           |
 | `cli/main.ts`                | The `render` and `check` commands, their exit codes, and the I/O port they use       |
+| `cli/edit.ts`                | The `edit` command: the built editor and the file, on 127.0.0.1 with a token         |
 | `cli/args.ts`                | Command line parsing and the usage text                                              |
 | `cli/diagram.ts`             | Source to SVG with `arialMeasure`: TAM or Mermaid by content; the CLI's colors       |
 | `cli/report.ts`              | Error messages as `<file>:<line>: <message>`                                         |
@@ -528,6 +532,10 @@ classDiagram
 | `src/drawio-sequence.ts`     | Sequence diagrams as draw.io pages and back                                          |
 | `editor/document.ts`         | The editor's document: the source, its picture, previews and history                 |
 | `editor/editor.ts`           | Selection, tools, gestures on the canvas and the commands of panels and keyboard     |
+| `editor/gesture.ts`          | The gestures on the canvas from press to release, and when a press becomes one       |
+| `editor/keys.ts`             | The keys of the canvas: which key runs which command, and when keys go elsewhere     |
+| `editor/overlay.ts`          | What is drawn over the picture: hover, selection, handles, a gesture under way       |
+| `editor/placing.ts`          | Where the editor places elements: on the grid, at their size, in room of their own   |
 | `editor/hit.ts`              | What of a picture lies at a point, in a frame, or under a dragged element            |
 | `editor/guides.ts`           | Alignment help: snapping to edges, middles and gaps; align, spread, same size        |
 | `editor/view.ts`             | The canvas: viewport, grid, the picture as an image, and the overlay                 |
@@ -539,6 +547,7 @@ classDiagram
 | `editor/inspector.ts`        | The Properties section: what is selected, in groups that keep their order            |
 | `editor/statusbar.ts`        | The status bar: hint, problems, selection, pointer, layout mode, snap, zoom          |
 | `editor/dialogs.ts`          | The chooser of diagram types, the question before a replace, the help sheets         |
+| `editor/reference-dialog.ts` | The guide sheet: a type's reference guide in a panel beside the source               |
 | `editor/minimap.ts`          | The minimap: the whole diagram small, with the part on show framed                   |
 | `editor/tooltip.ts`          | Tooltips with the keys of a control, and why a control is off                        |
 | `editor/dom.ts`              | Elements, icons and icon buttons the panels are built from                           |
@@ -549,7 +558,15 @@ classDiagram
 | `editor/completion-uml.ts`   | Completion of the Mermaid types' sources, and of the header on the first line        |
 | `editor/structures.ts`       | The `Structure` of each type edited by its structure, and the drawings of its pieces |
 | `editor/icons.ts`            | The editor's icons as SVG                                                            |
-| `editor/main.ts`             | The page: theme, files, export, autosave                                             |
+| `editor/main.ts`             | The page put together: document, canvas, panels, and the source kept and followed    |
+| `editor/session.ts`          | The diagram on show and its file: open, save, replace, the diagrams shown lately     |
+| `editor/served.ts`           | The file of `tam-diagrams edit`: read, and written back in its own format            |
+| `editor/disk.ts`             | The disk as the browser reaches it: file pickers, files written back, downloads      |
+| `editor/exporting.ts`        | The diagram leaving the editor: a picture as SVG or PNG, or a draw.io file           |
+| `editor/theme.ts`            | The look: light and dark colors, which of them shows, rounded connectors             |
+| `editor/storage.ts`          | What the editor remembers across visits, in the browser's local storage              |
+| `editor/follow.ts`           | The view following the edits: it keeps on what an edit changed                       |
+| `editor/starter.ts`          | The diagram a first visit starts with                                                |
 | `editor/files.ts`            | File names, the diagram in an opened file, export backgrounds, recent diagrams       |
 | `rolldown.config.mjs`        | The build: bundles `cli/bin.ts` into `dist/cli.js`, the package's `bin`              |
 | `test/`                      | Tests; `tam.fuzz.test.ts` is a stress run gated by `HARNESS=1`                       |

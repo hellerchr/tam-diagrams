@@ -97,11 +97,12 @@ function shellOf(
 }
 
 /**
- * Keeps the source in storage on every change, and the view on the diagram: a whole other diagram
- * that comes on show, by a replacement, by Undo or Redo across one, or by a first line that names
- * another type, shows whole, and the pointer selects again.
+ * Watches the source on show. It is kept in storage on every change, and the view follows it: a
+ * whole other diagram that comes on show, by a replacement, by Undo or Redo across one, or by a first
+ * line that names another type, shows whole, and the pointer selects again. Returns how to open a
+ * source as the one on show.
  */
-function autosave(doc: Steps, editor: Editor, session: Session, follower: Follower) {
+function watchSource(doc: Steps, editor: Editor, session: Session, follower: Follower) {
   /** The source on show. */
   let last = "";
   doc.onChange = () => {
@@ -173,7 +174,7 @@ async function start() {
     panels.update();
   };
   doc.onStep = () => panels.stepped();
-  const open = autosave(doc, editor, session, new Follower(editor));
+  const open = watchSource(doc, editor, session, new Follower(editor));
   repaint();
   await reopen(doc, open);
   if (session.saved === null) session.keep(doc.source);

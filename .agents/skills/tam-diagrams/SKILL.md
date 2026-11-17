@@ -17,7 +17,7 @@ The repo has no Prettier config: format with `npx prettier --print-width 100 --w
 
 ## Pristine
 
-Every function you add or change stays under cyclomatic complexity 10 by `crapper --no-coverage <files>`, and `dryer -s src -s editor -s cli --threshold 0.8` reports no duplicate you made. Reuse before you write a helper: box and point geometry lives in `src/scene.ts`, Mermaid text helpers in `src/uml.ts`, draw.io cell helpers in `src/drawio-shapes.ts`. Both tools write `.metrics/`, which git ignores.
+Every function you add or change stays under cyclomatic complexity 10 by `crapper --no-coverage <files>`, and `dryer -s src -s editor -s cli --threshold 0.8` reports no duplicate you made. Reuse before you write a helper: box and point geometry lives in `src/scene.ts` (`around`, `aroundSome`, `centerOf`, `areaOf`, `middlesApart`), the text of sources in `src/source-text.ts` (lines, indents, one-line texts, fresh ids), Mermaid label codings in `src/uml.ts`, draw.io cell helpers and ids in `src/drawio-shapes.ts`, what holds what in `src/scene-tree.ts`. Both tools write `.metrics/`, which git ignores.
 
 ## Done
 

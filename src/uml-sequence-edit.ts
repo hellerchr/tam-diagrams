@@ -18,7 +18,7 @@
 
 import type { Structure, StructureEdge, StructureNode } from "./structure.ts";
 import { BREAK_CODING, type Coding, codedWith, scan, TAG_CODING } from "./uml.ts";
-import { dedent, indentOf, linesOf, numberedId, rootEnd } from "./uml-edit-text.ts";
+import { dedent, indentOf, linesOf, numberedId, rootEnd } from "./source-text.ts";
 import { type MessageEvent, parseSequenceDiagram, type SequenceDiagram } from "./uml-sequence.ts";
 
 /** What a canvas adds to a sequence diagram. */

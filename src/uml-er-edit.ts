@@ -40,8 +40,8 @@ import {
   oneLine,
   renamedOnly,
   rootEnd,
-  stepOf,
-} from "./uml-edit-text.ts";
+  indentStep,
+} from "./source-text.ts";
 
 const PLAIN = /^[\p{L}_][\p{L}\p{N}_-]*$/u;
 
@@ -261,7 +261,7 @@ function openOnOwnLine(lines: string[], { open, close }: Block) {
     open,
     1,
     head,
-    ...(first ? [indent + stepOf(lines) + first] : []),
+    ...(first ? [indent + indentStep(lines) + first] : []),
     ...(close === open ? [`${indent}}`] : []),
   );
 }
@@ -304,7 +304,7 @@ function bodyOf(outline: Outline, id: string) {
     block,
     indent: inside
       ? indentOf(outline.lines[inside.index])
-      : indentOf(outline.lines[block.open]) + stepOf(outline.lines),
+      : indentOf(outline.lines[block.open]) + indentStep(outline.lines),
   };
 }
 
@@ -802,7 +802,7 @@ export function duplicateEntity(source: string, id: string): { source: string; i
     head = `${ref(copy)}${item.label === id ? "" : `["${entityCoded(item.label, " ")}"]`}`,
     attributes = erAttributes(source, id),
     text = attributes.length
-      ? [`${head} {`, ...attributes.map((line) => stepOf(lines) + line), "}"]
+      ? [`${head} {`, ...attributes.map((line) => indentStep(lines) + line), "}"]
       : [head];
   lines.splice(
     (declaration.body?.close ?? declaration.index) + 1,

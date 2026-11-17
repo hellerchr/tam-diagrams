@@ -11,6 +11,7 @@ export const stored = (key: string) => {
   }
 };
 
+/** Remembers a value under a key, where the browser keeps storage. */
 export const store = (key: string, value: string) => {
   try {
     localStorage.setItem(`${STORE}:${key}`, value);

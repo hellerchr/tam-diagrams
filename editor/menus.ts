@@ -10,15 +10,13 @@ import type { Structure } from "../src/structure.ts";
 import type { Connection, Word } from "../src/tam.ts";
 import type { ElementKind } from "../src/tam-edit.ts";
 import type { Editor } from "./editor.ts";
+import type { ThemeChoice } from "./theme.ts";
 import type { Arrangement } from "./guides.ts";
 import type { IconName } from "./icons.ts";
 import { ageOf, type Recent } from "./files.ts";
 import { type MenuEntry, type MenuItem, refusal } from "./menu.ts";
 import { GUIDES, guideOf } from "./reference.ts";
 import { type DiagramType, kindName, sameType, TYPES, typeInfo, typeOf } from "./types.ts";
-
-/** How the page follows light and dark: one of them, or the system's choice. */
-export type ThemeChoice = "light" | "dark" | "system";
 
 /** What the page offers the panels: files, the theme and what is remembered across visits. */
 export interface Shell {

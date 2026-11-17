@@ -11,7 +11,7 @@
 
 import type { Structure, StructureEdge, StructureNode } from "./structure.ts";
 import { accessibilityLines, labelText, scan } from "./uml.ts";
-import { counted, indentOf, linesOf, listed, numberedId, rootEnd } from "./uml-edit-text.ts";
+import { counted, indentOf, linesOf, listed, numberedId, rootEnd } from "./source-text.ts";
 import {
   parseUseCaseDiagram,
   type UseCaseDiagram,

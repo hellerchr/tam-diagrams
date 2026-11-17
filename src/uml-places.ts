@@ -10,7 +10,7 @@
  * layout that follows the places is uml-placed.ts.
  */
 
-import { endedLines } from "./uml-edit-text.ts";
+import { endedLines } from "./source-text.ts";
 import type { Point } from "./scene.ts";
 import type { Structure } from "./structure.ts";
 

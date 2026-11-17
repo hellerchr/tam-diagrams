@@ -35,8 +35,8 @@ import {
   oneLine,
   renamedOnly,
   rootEnd,
-  stepOf,
-} from "./uml-edit-text.ts";
+  indentStep,
+} from "./source-text.ts";
 
 /** The kinds of class a canvas adds, by the annotation that makes a class one. */
 const ANNOTATIONS: Record<string, string> = {
@@ -406,7 +406,7 @@ function put(
   kind: "class" | "note" | "package",
 ): number {
   const { lines } = outline,
-    step = stepOf(lines),
+    step = indentStep(lines),
     block = space ? outline.spaces.get(space)?.at(-1) : undefined;
   if (block) {
     const indent = indentOf(lines[block.open]);
@@ -461,7 +461,7 @@ function withBody(source: string, id: string): string {
   const declaration = item.declarations.find((found) => found.body) ?? item.declarations[0],
     line = lines[declaration.index],
     indent = indentOf(line),
-    step = stepOf(lines);
+    step = indentStep(lines);
   if (!declaration.body) {
     lines.splice(declaration.index, 1, `${line.trimEnd()} {`, `${indent}}`);
     return lines.join("\n");
@@ -512,7 +512,7 @@ function bodyOf(outline: Outline, id: string) {
     block,
     indent: inside
       ? indentOf(outline.lines[inside.index])
-      : indentOf(outline.lines[block.open]) + stepOf(outline.lines),
+      : indentOf(outline.lines[block.open]) + indentStep(outline.lines),
   };
 }
 
@@ -671,7 +671,7 @@ function annotate(
   return lines
     .flatMap((line, index) => [
       ...(gone.has(index) ? [] : [line]),
-      ...(index === opened ? [`${indentOf(line)}${stepOf(lines)}<<${add}>>`] : []),
+      ...(index === opened ? [`${indentOf(line)}${indentStep(lines)}<<${add}>>`] : []),
     ])
     .join("\n");
 }
@@ -819,7 +819,7 @@ function addClassPiece(
     parent = spaceOf(diagram, piece.parent);
   if (piece.kind === "lollipop")
     return addLollipop(source, piece.parent ?? "", nameOf(piece.label));
-  const made = newPart(diagram, piece.kind, piece.label, parent, stepOf(outline.lines)),
+  const made = newPart(diagram, piece.kind, piece.label, parent, indentStep(outline.lines)),
     kind = piece.kind === "note" || piece.kind === "package" ? piece.kind : "class",
     at = put(outline, made.text, parent, kind),
     result = outline.lines.join("\n");
@@ -1280,7 +1280,9 @@ export function duplicateClass(source: string, id: string): { source: string; id
       ...item.annotations.map((annotation) => `<<${annotation}>>`),
       ...classMembers(source, id),
     ],
-    text = inner.length ? [`${head} {`, ...inner.map((line) => stepOf(lines) + line), "}"] : [head];
+    text = inner.length
+      ? [`${head} {`, ...inner.map((line) => indentStep(lines) + line), "}"]
+      : [head];
   lines.splice(
     (declaration.body?.close ?? declaration.index) + 1,
     0,
@@ -1423,7 +1425,7 @@ function ungroupStatement(
   words.splice(at - first, 1);
   const line = lines[block.open],
     indent = indentOf(line),
-    step = stepOf(lines);
+    step = indentStep(lines);
   if (words.length) {
     const [, , label = "", rest] = line.trim().match(NAMESPACE_PARTS)!;
     // A label is that of the last name: it goes with it.

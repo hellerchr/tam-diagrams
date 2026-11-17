@@ -40,8 +40,18 @@ import {
   titleCell,
   TAMSHAPES,
   vertexGeometry,
+  cellPartId,
 } from "./drawio-shapes.ts";
-import { around, type Box, inside, type Point, type Scene, type SceneShape } from "./scene.ts";
+import {
+  areaOf,
+  around,
+  type Box,
+  centerOf,
+  inside,
+  type Point,
+  type Scene,
+  type SceneShape,
+} from "./scene.ts";
 import { chainOf, sceneTree } from "./scene-tree.ts";
 import {
   parseStateDiagram,
@@ -89,8 +99,6 @@ const PAD = 12;
 
 /** Model text (`<br>` between lines) as a cell's HTML label. */
 const html = (text: string) => textToHtml(text.replace(/<br\s*\/?>/gi, "\n"));
-
-const centerOf = (box: Box): Point => ({ x: box.x + box.width / 2, y: box.y + box.height / 2 });
 
 /** The choice a diamond that splits a crowded choice belongs to (`check#join1` belongs to `check`). */
 const splitOwner = (id: string) => id.match(/^(.*)#(?:join|branch)\d+$/)?.[1];
@@ -307,7 +315,7 @@ class StateCells {
         (shape) =>
           shape.container && shape.kind !== "region" && inside(pointBox(middle), shape.box, 0.5),
       )
-      .toSorted((a, b) => area(a.box) - area(b.box))[0];
+      .toSorted((a, b) => areaOf(a.box) - areaOf(b.box))[0];
     const corner = holder?.box ?? { x: 0, y: 0 };
     const shift = (p: Point) => ({ x: p.x - corner.x, y: p.y - corner.y });
     return cell(
@@ -489,7 +497,6 @@ const ROLE_KINDS: Record<string, Kind> = {
   title: "ignore",
 };
 
-const area = (box: Box) => box.width * box.height;
 const pointBox = (point: Point): Box => ({ ...point, width: 0, height: 0 });
 
 /** Whether a vertex draws nothing: no outline and no fill. */
@@ -789,11 +796,12 @@ class PageReader {
   private nest() {
     const holders = this.parts
       .filter((part) => part.kind === "state")
-      .toSorted((a, b) => area(a.box) - area(b.box));
+      .toSorted((a, b) => areaOf(a.box) - areaOf(b.box));
     for (const part of this.parts) {
       if (part.kind === "note" || part.kind === "text" || part.kind === "description") continue;
       const holder = holders.find(
-        (item) => item !== part && area(item.box) > area(part.box) && inside(part.box, item.box, 2),
+        (item) =>
+          item !== part && areaOf(item.box) > areaOf(part.box) && inside(part.box, item.box, 2),
       );
       if (!holder) continue;
       part.parent = holder;
@@ -827,7 +835,7 @@ class PageReader {
     );
     const holder = candidates
       .filter((part) => inside(pointBox(point), part.box, 6))
-      .toSorted((a, b) => area(a.box) - area(b.box))[0];
+      .toSorted((a, b) => areaOf(a.box) - areaOf(b.box))[0];
     if (holder && (!holder.members.length || outlineGap(point, holder.box) <= 6))
       return { part: holder };
     const nearest = candidates
@@ -1020,7 +1028,7 @@ class PageReader {
   private attachDescriptions() {
     const states = this.parts
       .filter((part) => part.kind === "state")
-      .toSorted((a, b) => area(a.box) - area(b.box));
+      .toSorted((a, b) => areaOf(a.box) - areaOf(b.box));
     const unlabeled = new Set(this.transitions.filter((item) => !item.label));
     const written = new Map<Part, Written[]>();
     for (const text of this.parts.filter(
@@ -1137,7 +1145,7 @@ class PageReader {
   private stateAt(point: Point) {
     return this.parts
       .filter((part) => part.kind === "state" && inside(pointBox(point), part.box, 0.5))
-      .toSorted((a, b) => area(a.box) - area(b.box))[0];
+      .toSorted((a, b) => areaOf(a.box) - areaOf(b.box))[0];
   }
 
   /** Regions of a composite state from the dashed lines across it. */
@@ -1306,27 +1314,10 @@ class StateIds {
   of(cellId: string, label: string, fallback: string): string {
     const free = (id: string) =>
       STATE_ID.test(id) && !KEYWORDS.test(id) && !STYLING.test(id) && !this.taken.has(id);
-    let id = free(cellId) ? cellId : madeId(label, fallback);
-    if (!free(id)) {
-      let index = 1;
-      while (!free(`${id}${index}`)) index++;
-      id = `${id}${index}`;
-    }
+    const id = cellPartId(free, cellId, label, fallback, true);
     this.taken.add(id);
     return id;
   }
-}
-
-/** An id made from a label: its letters, digits and underscores, after `fallback` where it needs one. */
-function madeId(label: string, fallback: string): string {
-  const made = label
-    .normalize("NFKD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^\p{L}\p{N}_]+/gu, "_")
-    .replace(/^_+|_+$/g, "")
-    .slice(0, 40);
-  if (!made) return fallback;
-  return /^[\p{L}_]/u.test(made) ? made : `${fallback}_${made}`;
 }
 
 type Direction = "TB" | "BT" | "LR" | "RL";

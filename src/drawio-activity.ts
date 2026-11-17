@@ -35,8 +35,10 @@ import {
 } from "./drawio-shapes.ts";
 import type { DrawioKind, DrawioType, Imported } from "./drawio.ts";
 import {
-  around,
+  areaOf,
+  aroundSome,
   type Box,
+  centerOf,
   contains,
   inside,
   type Point,
@@ -198,12 +200,6 @@ function endStyle(end: "start" | "end", marker: Marker | undefined) {
 
 /** A label's text as a cell's value: Mermaid's `<br>` as line breaks. */
 const valueOf = (label: string) => textToHtml(label.replace(/<br\s*\/?>/gi, "\n"));
-
-/** The box around texts. */
-function boxAround(texts: SceneText[]): Box | undefined {
-  if (!texts.length) return undefined;
-  return around(texts.map((text) => text.box));
-}
 
 /** The font size a scene text is written in, as draw.io gets it. */
 const fontOf = (texts: SceneText[]) =>
@@ -457,7 +453,10 @@ function nodeStyle(job: Export, id: string, node: FlowNode, shape: SceneShape) {
   const beside = () =>
     besideStyle(
       shape.box,
-      boxAround(texts) ?? { ...shape.box, x: shape.box.x + shape.box.width + 4 },
+      aroundSome(texts.map((text) => text.box)) ?? {
+        ...shape.box,
+        x: shape.box.x + shape.box.width + 4,
+      },
     );
   return {
     ...SHAPE_STYLES[node.shape],
@@ -510,7 +509,7 @@ function edgeCell(job: Export, edge: FlowEdge, id: string) {
   if (!wire) return;
   const route = edgeRoute(wire.points, job.boxes.get(edge.source), job.boxes.get(edge.target));
   const texts = job.scene.texts.filter((text) => text.owner === edge.id && text.role === "label");
-  const at = boxAround(texts);
+  const at = aroundSome(texts.map((text) => text.box));
   const geometry: Geometry = at
     ? labelAt(route.geometry, wire.points, { x: at.x + at.width / 2, y: at.y + at.height / 2 })
     : route.geometry;
@@ -758,7 +757,7 @@ class PartReader {
       const inner = this.boxes.get(other.id)!;
       return (
         drawing.parentOf(other) === item ||
-        (area(inner) < area(box) &&
+        (areaOf(inner) < areaOf(box) &&
           inside(inner, box, 2) &&
           shapeOf(drawing.style(other)) !== "text")
       );
@@ -862,9 +861,6 @@ type ReadFlow = Flow & { from: Part; to: Part };
 /** A part that is a node. */
 type NodePart = Part & { kind: Shape };
 
-const center = (box: Box): Point => ({ x: box.x + box.width / 2, y: box.y + box.height / 2 });
-const area = (box: Box) => box.width * box.height;
-
 /** The Mermaid markers of draw.io's arrow heads; every other head is an arrow. */
 const MARKERS = new Map<string, Marker>([
   ["oval", "circle"],
@@ -937,8 +933,8 @@ function directionOf(
   let dx = 0,
     dy = 0;
   for (const { from, to } of flows) {
-    const a = center(from.box),
-      b = center(to.box);
+    const a = centerOf(from.box),
+      b = centerOf(to.box);
     dx += b.x - a.x;
     dy += b.y - a.y;
   }
@@ -953,8 +949,8 @@ function directionOf(
 function runsInColumns(lanes: Part[], dx: number, dy: number): boolean {
   if (lanes.length === 1) return lanes[0].box.height >= lanes[0].box.width;
   if (!lanes.length) return Math.abs(dy) >= Math.abs(dx);
-  const a = center(lanes[0].box),
-    b = center(lanes[1].box);
+  const a = centerOf(lanes[0].box),
+    b = centerOf(lanes[1].box);
   return Math.abs(b.x - a.x) > Math.abs(b.y - a.y);
 }
 
@@ -1145,7 +1141,7 @@ class ActivityPage {
     for (const group of this.reading.parts.filter((part) => part.kind === "subgraph")) {
       if (
         lanes.some(
-          (lane) => contains(lane.box, center(group.box)) && area(lane.box) > area(group.box),
+          (lane) => contains(lane.box, centerOf(group.box)) && areaOf(lane.box) > areaOf(group.box),
         )
       )
         this.warnings.push(
@@ -1174,7 +1170,7 @@ class ActivityPage {
     if (!text.label) return;
     const near = this.symbolNear(text);
     const line = this.flowNear(text);
-    const fromFlow = () => distanceTo(this.drawing.path(line!), center(text.box));
+    const fromFlow = () => distanceTo(this.drawing.path(line!), centerOf(text.box));
     if (near && (!line || namesSymbol(text, near, fromFlow()))) near.label = text.label;
     else if (line) this.edgeLabels.set(line.id, text.label);
     else this.warnings.push(`The text “${text.label}” belongs to no node or flow and is left out.`);
@@ -1190,7 +1186,7 @@ class ActivityPage {
   /** The nearest unlabeled flow a text may label. */
   private flowNear(text: Part) {
     const { drawing } = this;
-    const from = (item: Cell) => distanceTo(drawing.path(item), center(text.box));
+    const from = (item: Cell) => distanceTo(drawing.path(item), centerOf(text.box));
     return this.flowCells
       .filter((item) => !drawing.label(item) && !this.edgeLabels.has(item.id) && from(item) < 30)
       .toSorted((a, b) => from(a) - from(b))[0];
@@ -1250,10 +1246,10 @@ class ActivityPage {
         .filter(
           (other) =>
             other !== part &&
-            area(other.box) > area(part.box) &&
-            contains(other.box, center(part.box)),
+            areaOf(other.box) > areaOf(part.box) &&
+            contains(other.box, centerOf(part.box)),
         )
-        .toSorted((a, b) => area(a.box) - area(b.box))[0];
+        .toSorted((a, b) => areaOf(a.box) - areaOf(b.box))[0];
     const containers = this.kind === "swimlane" ? this.lanes : this.groups;
     for (const part of this.nodes) this.parentOf.set(part, holderOf(part, containers));
     for (const group of this.groups)
@@ -1275,7 +1271,7 @@ class ActivityPage {
     if (!point) return undefined;
     return [...this.nodes, ...this.groups]
       .filter((part) => contains(part.box, point, LOOSE))
-      .toSorted((a, b) => area(a.box) - area(b.box))[0];
+      .toSorted((a, b) => areaOf(a.box) - areaOf(b.box))[0];
   }
 
   /** A flow's label: its own, the text beside it, or a label cell on it. */
@@ -1431,7 +1427,7 @@ class ActivityPage {
     const middleOf =
       this.kind === "swimlane"
         ? laneMover(chart, laneOrder, this.parentOf, vertical)
-        : (part: Part) => center(part.box);
+        : (part: Part) => centerOf(part.box);
     return [...this.nodePlaces(chart, middleOf, vertical), ...this.emptyGroupPlaces(chart)].map(
       ([id, at]) => `%% @${id} ${Math.round(at.x)},${Math.round(at.y)}`,
     );
@@ -1507,7 +1503,7 @@ function laneMover(
   const laneIndex = (lane: Part | undefined) =>
     lane && lane.kind !== "lane-none" ? named.indexOf(lane) : laid.lanes.length - 1;
   return (part: Part): Point => {
-    const middle = center(part.box),
+    const middle = centerOf(part.box),
       lane = parentOf.get(part);
     const index = laneIndex(lane);
     const share = lane ? (middle[across] - lane.box[across]) / (lane.box[size] || 1) : 0.5;

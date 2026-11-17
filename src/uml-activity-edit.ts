@@ -10,7 +10,7 @@
 import type { Structure, StructureNode } from "./structure.ts";
 import { type FlowEdge, type Flowchart, parseFlowchart } from "./uml-activity.ts";
 import { accessibilityLines, escapeLabel, labelText as shownText, scan, STYLING } from "./uml.ts";
-import { dedent, indentOf, linesOf, numberedId, originalsOf } from "./uml-edit-text.ts";
+import { dedent, indentOf, linesOf, numberedId, originalsOf } from "./source-text.ts";
 import { removePlaces } from "./uml-places.ts";
 
 /** What a canvas adds to an activity diagram. */
@@ -1849,7 +1849,7 @@ function copyText(model: Model, id: string, copy: string, label: string): string
 }
 
 /** One step of indentation, as the source indents. */
-const stepOf = (model: Model) =>
+const indentStep = (model: Model) =>
   model.lines.some((line, index) => index !== model.header && line.startsWith("\t")) ? "\t" : "  ";
 
 /**
@@ -2243,7 +2243,7 @@ function wrapInPlace(
     ),
     block = [
       `subgraph ${id} [${labelText(label) || "Group"}]`,
-      ...[...whole.map((item) => item.text), ...own].map((text) => stepOf(model) + text),
+      ...[...whole.map((item) => item.text), ...own].map((text) => indentStep(model) + text),
       "end",
     ];
   changes.set(first, [...block, ...(changes.get(first) ?? [first.text])]);

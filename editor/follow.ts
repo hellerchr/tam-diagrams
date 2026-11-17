@@ -1,6 +1,6 @@
 /** The view following the edits: it keeps on what an edit changed once its picture was laid out. */
 
-import { around, type Box, type Scene } from "../src/scene.ts";
+import { areaOf, aroundSome, type Box, type Scene } from "../src/scene.ts";
 import type { Doc } from "./document.ts";
 import type { Editor } from "./editor.ts";
 
@@ -9,14 +9,14 @@ function shared(a: Box, b: Box): number {
   const width = Math.min(a.x + a.width, b.x + b.width) - Math.max(a.x, b.x),
     height = Math.min(a.y + a.height, b.y + b.height) - Math.max(a.y, b.y),
     both = Math.max(0, width) * Math.max(0, height),
-    all = a.width * a.height + b.width * b.height - both;
+    all = areaOf(a) + areaOf(b) - both;
   return all > 0 ? both / all : 1;
 }
 
 /** The box around some elements of a scene; undefined when it draws none of them. */
 function boxOf(scene: Scene, ids: string[]): Box | undefined {
   const boxes = scene.shapes.filter((shape) => ids.includes(shape.id)).map((shape) => shape.box);
-  return boxes.length ? around(boxes) : undefined;
+  return aroundSome(boxes);
 }
 
 /** Whether a scene draws something, over an area that has a width. */

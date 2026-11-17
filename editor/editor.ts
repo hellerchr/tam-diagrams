@@ -4,7 +4,15 @@
  */
 
 import type { DiagramColors } from "../src/draw.ts";
-import { around, type Box, contains, inside, overlaps, type Point } from "../src/scene.ts";
+import {
+  around,
+  aroundSome,
+  type Box,
+  contains,
+  inside,
+  overlaps,
+  type Point,
+} from "../src/scene.ts";
 import {
   type Connection,
   ELEMENT_KINDS,
@@ -2095,7 +2103,7 @@ export class Editor {
     // The first element lands on the grid; the others keep their distance to it.
     const lead = places.get(outer[0]) ?? [...places.values()][0];
     if (!lead) return;
-    const box = boxAround(picture, outer);
+    const box = elementsBox(picture, outer);
     const { x: dx, y: dy } = this.step(gesture, point, event, box, lead);
     const moved = place(picture.source, shifted(places, dx, dy)),
       { result, target } = droppedInto(
@@ -3203,9 +3211,8 @@ function holdsOnly(diagram: TamDiagram, group: string, count: number): boolean {
 }
 
 /** The box around the boxes of some elements; undefined when none is drawn. */
-function boxAround(picture: Picture, ids: string[]): Box | undefined {
-  const boxes = ids.flatMap((id) => boxOf(picture, id) ?? []);
-  return boxes.length ? around(boxes) : undefined;
+function elementsBox(picture: Picture, ids: string[]): Box | undefined {
+  return aroundSome(ids.flatMap((id) => boxOf(picture, id) ?? []));
 }
 
 /** The kind of element a new connection ends at: an access at a storage, any other at an agent. */

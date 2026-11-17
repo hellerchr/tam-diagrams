@@ -2,9 +2,11 @@
 
 import type { DiagramColors } from "../src/draw.ts";
 import type { Editor } from "./editor.ts";
-import type { ThemeChoice } from "./menus.ts";
 import { store, stored } from "./storage.ts";
 import type { View } from "./view.ts";
+
+/** How the page follows light and dark: one of them, or the system's choice. */
+export type ThemeChoice = "light" | "dark" | "system";
 
 /** The font the labels are measured and drawn with. */
 export const FONT = "system-ui, sans-serif";

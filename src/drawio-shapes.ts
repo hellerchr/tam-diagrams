@@ -22,6 +22,7 @@ import {
 } from "./drawio-file.ts";
 import type { Box, Point, Scene, SceneShape } from "./scene.ts";
 import { FONT } from "./text.ts";
+import { numberedId } from "./source-text.ts";
 
 /** The "R ▾" of a request/response channel: R above a triangle pointing down; rotated, it points elsewhere. */
 export const REQUEST_STENCIL =
@@ -176,6 +177,33 @@ export const FONT_SIZE = FONT;
 const ID = /^[A-Za-z_]\w*$/;
 
 /**
+ * An id made from a label: its letters, digits and underscores (ASCII ones, or any script's with
+ * `unicode`), after `fallback` where it needs one (`Order API` → `Order_API`, `2nd` → `part_2nd`).
+ */
+export function labelId(label: string, fallback: string, unicode = false): string {
+  const made = label
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(unicode ? /[^\p{L}\p{N}_]+/gu : /[^A-Za-z0-9_]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 40);
+  if (!made) return fallback;
+  return (unicode ? /^[\p{L}_]/u : /^[A-Za-z_]/).test(made) ? made : `${fallback}_${made}`;
+}
+
+/** A cell's own id where `free` takes it, else one made from its label, numbered where taken. */
+export function cellPartId(
+  free: (id: string) => boolean,
+  cellId: string,
+  label: string,
+  fallback: string,
+  unicode = false,
+): string {
+  const id = free(cellId) ? cellId : labelId(label, fallback, unicode);
+  return free(id) ? id : numberedId((other) => !free(other), id);
+}
+
+/**
  * Ids for the parts of an imported diagram: a cell's own id when the syntax takes it, else one made
  * from its label (`Order API` → `Order_API`), else `fallback` and a number; never one taken.
  */
@@ -190,22 +218,12 @@ export class Ids {
   }
   /** An id for a cell: `pattern` says which ids the syntax takes. */
   of(cellId: string, label: string, fallback: string, pattern: RegExp = ID): string {
-    const fresh = (id: string) => pattern.test(id) && !this.taken.has(id.toLowerCase());
-    let id = cellId;
-    if (!fresh(id)) {
-      const made = label
-        .normalize("NFKD")
-        .replace(/[\u0300-\u036f]/g, "")
-        .replace(/[^A-Za-z0-9_]+/g, "_")
-        .replace(/^_+|_+$/g, "")
-        .slice(0, 40);
-      id = made && /^[A-Za-z_]/.test(made) ? made : made ? `${fallback}_${made}` : fallback;
-      if (!fresh(id)) {
-        let index = 1;
-        while (!fresh(`${id}${index}`)) index++;
-        id = `${id}${index}`;
-      }
-    }
+    const id = cellPartId(
+      (id) => pattern.test(id) && !this.taken.has(id.toLowerCase()),
+      cellId,
+      label,
+      fallback,
+    );
     this.take(id);
     return id;
   }

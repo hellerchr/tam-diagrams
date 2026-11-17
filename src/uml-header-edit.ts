@@ -7,7 +7,7 @@
  * parser gives.
  */
 
-import { endedLines } from "./uml-edit-text.ts";
+import { endedLines, indentOf } from "./source-text.ts";
 import type { Direction } from "./elk.ts";
 import { overlaps, type Point } from "./scene.ts";
 import { type Level, scan, UmlError, type UmlKind, detectUml } from "./uml.ts";
@@ -175,7 +175,7 @@ function linesAround(source: string, kind: UmlKind): SettingLines {
     ended,
     header: scan(source).lines[0].line - 1,
     top,
-    indent: lines[top[0]?.index ?? -1]?.match(/^\s*/)?.[0] || "  ",
+    indent: indentOf(lines[top[0]?.index ?? -1] ?? "") || "  ",
     kind,
   };
 }
@@ -213,7 +213,7 @@ function addSetting(at: SettingLines, setting: (typeof ORDER)[number], text: str
 /** Replaces the lines at some indexes, each with its indent, or removes them; false when there are none. */
 function replaceLines({ lines }: SettingLines, found: number[], text: string | undefined) {
   for (const index of found.toReversed())
-    lines.splice(index, 1, ...(text ? [`${lines[index].match(/^\s*/)![0]}${text}`] : []));
+    lines.splice(index, 1, ...(text ? [`${indentOf(lines[index])}${text}`] : []));
   return found.length > 0;
 }
 

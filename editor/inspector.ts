@@ -38,13 +38,11 @@ const CARDINALITY_NAMES: { value: Cardinality; name: string }[] = [
   { value: "zero-or-more", name: "Zero or more" },
 ];
 
-/** What each level means in a diagram of a type, as the Level buttons' tooltips say it. */
-const LEVELS: Partial<Record<string, { any: string; conceptual: string; design: string }>> = {
-  tam: {
-    any: "Conceptual and design level elements together",
-    conceptual: "Agents, storages, channels and accesses only",
-    design: "Components, interfaces and connectors",
-  },
+/**
+ * What each level means in a diagram of a type, as the Level buttons' tooltips say it; every type
+ * that offers a level has its own. Block diagrams offer none: the editor draws them conceptual.
+ */
+const LEVELS: Record<string, { any: string; conceptual: string; design: string }> = {
   class: {
     any: "No level: everything a class diagram has",
     conceptual:
@@ -1052,7 +1050,7 @@ export class Inspector {
   private layoutGroup(): HTMLElement | false {
     const { editor } = this,
       { settings } = editor,
-      levels = LEVELS[editor.type] ?? LEVELS.tam!;
+      levels = LEVELS[editor.type];
     if (!settings.direction && !settings.level) return false;
     return this.group(
       "Layout",
