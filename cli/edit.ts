@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { existsSync, statSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
-import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { basename, dirname, extname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { TOKEN_HEADER } from "../editor/served.ts";
@@ -14,7 +14,7 @@ import type { CliIo } from "./main.ts";
  * `dist/cli.js` and from `cli/edit.ts` in a source checkout, since both lie one folder below the
  * package.
  */
-export const EDITOR_ROOT = fileURLToPath(new URL("../dist/editor/", import.meta.url));
+const EDITOR_ROOT = fileURLToPath(new URL("../dist/editor/", import.meta.url));
 
 /** The biggest file the editor may write back: far more than any diagram. */
 const MOST = 32 * 1024 * 1024;
@@ -104,28 +104,81 @@ async function fileRequest(request: IncomingMessage, response: ServerResponse, p
   reply(response, 405, "The file is read with GET and written with PUT.");
 }
 
+/** The path a request asks for, as it is written; undefined when it is no path. */
+function pathOf(request: IncomingMessage): string | undefined {
+  try {
+    return decodeURIComponent(new URL(request.url ?? "/", "http://host").pathname);
+  } catch {
+    return undefined;
+  }
+}
+
+/** The file of the editor's folder a path names, its page for a folder; undefined outside the folder. */
+function fileIn(root: string, path: string): string | undefined {
+  const full = resolve(root, `.${path.endsWith("/") ? `${path}index.html` : path}`);
+  return full.startsWith(root.endsWith(sep) ? root : root + sep) ? full : undefined;
+}
+
+/** A file's content; undefined when it cannot be read. */
+async function contentOf(path: string): Promise<Buffer | undefined> {
+  try {
+    return await readFile(path);
+  } catch {
+    return undefined;
+  }
+}
+
 /** A file of the built editor; `/` is its page. Nothing outside the editor's folder is served. */
 async function staticRequest(request: IncomingMessage, response: ServerResponse, root: string) {
   if (request.method !== "GET" && request.method !== "HEAD") return reply(response, 405);
-  let path: string;
-  try {
-    path = decodeURIComponent(new URL(request.url ?? "/", "http://host").pathname);
-  } catch {
-    return reply(response, 400);
-  }
-  const full = resolve(root, `.${path.endsWith("/") ? `${path}index.html` : path}`);
-  if (!full.startsWith(root.endsWith(sep) ? root : root + sep)) return reply(response, 404);
-  let data: Buffer;
-  try {
-    data = await readFile(full);
-  } catch {
-    return reply(response, 404, "Not found.");
-  }
+  const path = pathOf(request);
+  if (path === undefined) return reply(response, 400);
+  const full = fileIn(root, path);
+  if (!full) return reply(response, 404);
+  const data = await contentOf(full);
+  if (!data) return reply(response, 404, "Not found.");
   response.writeHead(200, {
     "content-type": TYPES[extname(full)] ?? "application/octet-stream",
     "cache-control": "no-store",
   });
   response.end(request.method === "HEAD" ? undefined : data);
+}
+
+/** Where the server finds what it serves: the editor's folder, and the file with its token. */
+interface Served {
+  root: string;
+  /** The file the editor reads and writes; undefined without one. */
+  path: string | undefined;
+  token: string;
+}
+
+/** Answers a request that came by the right host: a file of the editor, or the file it edits. */
+function answer(request: IncomingMessage, response: ServerResponse, served: Served) {
+  const { pathname } = new URL(request.url ?? "/", "http://host");
+  if (!pathname.startsWith("/api/")) return staticRequest(request, response, served.root);
+  if (!sameToken(request.headers[TOKEN_HEADER], served.token))
+    return reply(response, 401, "The request does not carry the editor's token.");
+  if (pathname === "/api/file" && served.path) return fileRequest(request, response, served.path);
+  reply(response, 404, "Not found.");
+}
+
+/** Says what went wrong while a request was answered, or cuts it off when the answer had begun. */
+function failed(response: ServerResponse, error: unknown) {
+  if (!response.headersSent)
+    reply(response, 500, error instanceof Error ? error.message : String(error));
+  else response.destroy();
+}
+
+/** Starts a server on a port of 127.0.0.1, and gives the port it got. */
+async function listen(server: Server, port: number): Promise<number> {
+  await new Promise<void>((done, fail) => {
+    server.once("error", fail);
+    server.listen(port, "127.0.0.1", () => {
+      server.off("error", fail);
+      done();
+    });
+  });
+  return (server.address() as { port: number }).port;
 }
 
 /**
@@ -135,36 +188,22 @@ async function staticRequest(request: IncomingMessage, response: ServerResponse,
  * name that resolves to 127.0.0.1 leads no page of another site here.
  */
 export async function serveEditor(options: ServeOptions): Promise<EditServer> {
-  const root = resolve(options.root),
-    path = options.file === undefined ? undefined : resolve(options.file),
-    token = options.token ?? randomBytes(24).toString("hex");
+  const served: Served = {
+    root: resolve(options.root),
+    path: options.file === undefined ? undefined : resolve(options.file),
+    token: options.token ?? randomBytes(24).toString("hex"),
+  };
   let port = 0;
   const server = createServer((request, response) => {
     const host = request.headers.host;
     if (host !== `127.0.0.1:${port}` && host !== `localhost:${port}`)
       return reply(response, 403, "The editor is served to 127.0.0.1 only.");
-    const { pathname } = new URL(request.url ?? "/", "http://host");
-    const answer = !pathname.startsWith("/api/")
-      ? staticRequest(request, response, root)
-      : !sameToken(request.headers[TOKEN_HEADER], token)
-        ? reply(response, 401, "The request does not carry the editor's token.")
-        : pathname === "/api/file" && path
-          ? fileRequest(request, response, path)
-          : reply(response, 404, "Not found.");
-    Promise.resolve(answer).catch((error: unknown) => {
-      if (!response.headersSent)
-        reply(response, 500, error instanceof Error ? error.message : String(error));
-      else response.destroy();
-    });
+    Promise.resolve(answer(request, response, served)).catch((error: unknown) =>
+      failed(response, error),
+    );
   });
-  await new Promise<void>((done, fail) => {
-    server.once("error", fail);
-    server.listen(options.port ?? 0, "127.0.0.1", () => {
-      server.off("error", fail);
-      done();
-    });
-  });
-  port = (server.address() as { port: number }).port;
+  port = await listen(server, options.port ?? 0);
+  const { path, token } = served;
   return {
     url: `http://127.0.0.1:${port}/${path ? `?token=${token}` : ""}`,
     port,
@@ -177,7 +216,7 @@ export async function serveEditor(options: ServeOptions): Promise<EditServer> {
 }
 
 /** Opens an address in the default browser; false when there is no program to do it. */
-export function openInBrowser(url: string, platform = process.platform): Promise<boolean> {
+function openInBrowser(url: string, platform = process.platform): Promise<boolean> {
   const [command, args] =
     platform === "darwin"
       ? ["open", [url]]

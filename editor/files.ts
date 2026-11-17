@@ -214,6 +214,20 @@ export interface Kept<File> {
   saved: boolean;
 }
 
+/** A replacement of the diagram `before` by `after`, with what belongs to each. */
+interface Swap<File> {
+  before: string;
+  after: string;
+  left: Kept<File>;
+  right: Kept<File>;
+}
+
+/** Whether a step of the history from one source to another takes a replacement, or Undo takes it back. */
+const crosses = <File>(swap: Swap<File>, from: string, to: string, how: string) =>
+  how === "undo"
+    ? swap.after === from && swap.before === to
+    : swap.before === from && swap.after === to;
+
 /**
  * The replacements of one diagram by another, each a step of the history. The file of a diagram
  * and whether it was saved belong to the diagram: a step across a replacement, back or forth,
@@ -221,7 +235,7 @@ export interface Kept<File> {
  */
 export class Replacements<File> {
   /** The replacements in their order: those taken, then those undone, which Redo takes again. */
-  private steps: { before: string; after: string; left: Kept<File>; right: Kept<File> }[] = [];
+  private steps: Swap<File>[] = [];
   /** How many of the replacements are taken and not undone. */
   private taken = 0;
 
@@ -246,13 +260,8 @@ export class Replacements<File> {
     now: Kept<File>,
     how: "edit" | "undo" | "redo" = "edit",
   ): Kept<File> | undefined {
-    const step = this.steps[how === "redo" ? this.taken : this.taken - 1],
-      crossed =
-        !!step &&
-        (how === "undo"
-          ? step.after === from && step.before === to
-          : step.before === from && step.after === to);
-    if (!crossed) {
+    const step = this.steps[how === "redo" ? this.taken : this.taken - 1];
+    if (!step || !crosses(step, from, to, how)) {
       if (how === "edit") this.steps.length = this.taken;
       return undefined;
     }
