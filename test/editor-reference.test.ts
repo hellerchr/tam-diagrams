@@ -288,9 +288,15 @@ describe("the guides as pages", () => {
   });
 
   it.each(GUIDES.map((guide) => [guide.type, guide] as const))(
-    "keeps every statement and meaning of the %s guide in its compact text, in fewer tokens",
+    "keeps all of the %s guide in its compact text, in fewer tokens",
     (type, guide) => {
       const text = guideText(type);
+      expect(text).toContain(`${guide.about}.`);
+      for (const section of guide.sections) {
+        expect(text).toContain(`## ${section.title}\n`);
+        for (const part of [section.prose, ...(section.rules ?? []), section.example])
+          if (part) expect(text).toContain(part);
+      }
       for (const [, item] of rowsOf(guide))
         expect(text).toContain(`%% ${item.means}\n${item.write}\n`);
       // Words, numbers and marks, roughly as a tokenizer splits them: markup such as `&nbsp;` costs.

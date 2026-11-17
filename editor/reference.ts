@@ -1792,15 +1792,13 @@ function sectionText(section: GuideSection): string[] {
 }
 
 /**
- * The guide of a type as compact text, for the command line and for agents: the Markdown page's
- * content without its tables, each statement as it is written under a comment that says what it
- * means. What the diagram shows is left to the line under the title: whoever reads the text has
- * chosen the type already.
+ * The guide of a type as compact text, for the command line and for agents: everything the
+ * Markdown page says, without its tables, each statement as it is written under a comment that
+ * says what it means.
  */
 export function guideText(type: string): string {
   const guide = guideOf(type);
   if (!guide) throw new Error(`There is no guide for \`${type}\`.`);
-  const sections = guide.sections.filter((section) => section.id !== "about");
-  const out = [`# ${guide.name} guide`, `${guide.about}.`, ...sections.flatMap(sectionText)];
+  const out = [`# ${guide.name} guide`, `${guide.about}.`, ...guide.sections.flatMap(sectionText)];
   return `${out.join("\n")}\n`;
 }
