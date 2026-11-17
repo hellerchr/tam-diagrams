@@ -77,6 +77,15 @@ export function range(end: End, side: Side): [number, number] {
 
 const share = ([low, high]: [number, number], of: number) => low + (high - low) * of;
 
+/** Two elements to join, with the spots on each of their sides a line may end at, looked up once. */
+interface Pair {
+  a: End;
+  b: End;
+  on: (end: End, side: Side) => Spot[];
+  marked: boolean;
+  half: number;
+}
+
 /**
  * The lines two elements can be joined by with at most two corners; `part` is the one the other
  * holds, `marked` a line that carries a circle or a label, `spots` where on a side a line may end,
@@ -91,138 +100,161 @@ export function lines(
   spots: Spots = plainSpots,
   half = 0,
 ): Line[] {
-  const found: Line[] = [];
-  if (part) {
-    // From the border of the outer element straight in to its part, on the same side of both.
-    for (const side of SIDES) {
-      if (Math.abs(level(a.box, side) - level(b.box, side)) < TOUCHING) continue;
-      for (const { at, off } of spots(part, side))
-        found.push({
-          from: side,
-          to: side,
-          points: [sidePoint(a.box, side, at), sidePoint(b.box, side, at)],
-          off,
-        });
-    }
-    return found;
-  }
+  if (part) return linesIn(a, b, part, spots);
   const ends = new Map<string, Spot[]>();
   const on = (end: End, side: Side) => {
     const key = `${end === a ? "a" : "b"}${side}`;
     if (!ends.has(key)) ends.set(key, spots(end, side));
     return ends.get(key)!;
   };
+  const pair: Pair = { a, b, on, marked, half },
+    found: Line[] = [];
   for (const from of SIDES)
     for (const to of SIDES) {
-      const ra = range(a, from),
-        rb = range(b, to);
-      if (from !== to && lies(from) === lies(to)) {
-        // Facing sides: straight where they overlap, in the middle of what they share first.
-        const low = Math.max(ra[0], rb[0]),
-          high = Math.min(ra[1], rb[1]);
-        if (high >= low && outward(from) * (level(b.box, to) - level(a.box, from)) >= TOUCHING) {
-          const middle = (low + high) / 2,
-            straight = [middle];
-          for (const spot of [
-            share(ra, 0.5),
-            share(rb, 0.5),
-            ...on(a, from).map((spot) => spot.at),
-            ...on(b, to).map((spot) => spot.at),
-            low + (high - low) / 4,
-            high - (high - low) / 4,
-            low,
-            high,
-          ])
-            if (
-              spot >= low &&
-              spot <= high &&
-              straight.every((other) => Math.abs(other - spot) >= 4)
-            )
-              straight.push(spot);
-          straight.forEach((at, index) =>
-            found.push({
-              from,
-              to,
-              points: [sidePoint(a.box, from, at), sidePoint(b.box, to, at)],
-              off: index ? 0.1 : 0,
-            }),
-          );
-        }
-      }
-      if (lies(from) !== lies(to)) {
-        // One corner where no spot on the sides leaves it clear of both elements: an end as near
-        // its side's middle as keeps the corner clear of the other element.
-        const clear = CLEAR + half;
-        const beside = (near: End, side: Side, far: End, other: Side): Spot | undefined => {
-          const [low, high] = range(near, side),
-            limit = level(far.box, other) + outward(other) * clear,
-            at = outward(other) > 0 ? Math.max(limit, low) : Math.min(limit, high);
-          return at < low || at > high || on(near, side).some((spot) => spot.at === at)
-            ? undefined
-            : { at, off: 1 };
-        };
-        const first = on(a, from).some(
-            (spot) => outward(to) * (spot.at - level(b.box, to)) >= CLEAR,
-          )
-            ? undefined
-            : beside(a, from, b, to),
-          last = on(b, to).some((spot) => outward(from) * (spot.at - level(a.box, from)) >= CLEAR)
-            ? undefined
-            : beside(b, to, a, from);
-        for (const sa of first ? [first] : on(a, from))
-          for (const sb of last ? [last] : on(b, to)) {
-            if (!first && !last) continue;
-            const p = sidePoint(a.box, from, sa.at),
-              q = sidePoint(b.box, to, sb.at),
-              corner = lies(from) ? { x: p.x, y: q.y } : { x: q.x, y: p.y };
-            if (beyond(a.box, from, corner) >= CLEAR && beyond(b.box, to, corner) >= CLEAR)
-              found.push({ from, to, points: [p, corner, q], off: sa.off + sb.off });
-          }
-      }
-      for (const sa of on(a, from))
-        for (const sb of on(b, to)) {
-          const off = sa.off + sb.off;
-          const p = sidePoint(a.box, from, sa.at),
-            q = sidePoint(b.box, to, sb.at);
-          if (lies(from) !== lies(to)) {
-            // One corner, clear of both elements.
-            const corner = lies(from) ? { x: p.x, y: q.y } : { x: q.x, y: p.y };
-            if (beyond(a.box, from, corner) >= CLEAR && beyond(b.box, to, corner) >= CLEAR)
-              found.push({ from, to, points: [p, corner, q], off });
-            continue;
-          }
-          if (Math.abs(sa.at - sb.at) < CLEAR) continue;
-          const mids: [number, number][] = [];
-          if (from !== to) {
-            // Facing sides: a step in the gap between them, in its middle first.
-            const gap = outward(from) * (level(b.box, to) - level(a.box, from));
-            if (gap < STEP) continue;
-            const near = level(a.box, from),
-              far = level(b.box, to);
-            mids.push([(near + far) / 2, off]);
-            if (off < 1 && gap >= 3 * STEP)
-              mids.push([near + (far - near) / 4, off + 0.3], [far - (far - near) / 4, off + 0.3]);
-          } else {
-            // The same side of both: around them.
-            const far =
-              outward(from) > 0
-                ? Math.max(level(a.box, from), level(b.box, to))
-                : Math.min(level(a.box, from), level(b.box, to));
-            if (marked) mids.push([far + outward(from) * AROUND_MARKED, off]);
-            mids.push([far + outward(from) * AROUND, off + (marked ? 0.1 : 0)]);
-          }
-          for (const [mid, shifted] of mids)
-            found.push({
-              from,
-              to,
-              points: lies(from)
-                ? [p, { x: p.x, y: mid }, { x: q.x, y: mid }, q]
-                : [p, { x: mid, y: p.y }, { x: mid, y: q.y }, q],
-              off: shifted,
-            });
-        }
+      if (from !== to && lies(from) === lies(to)) found.push(...straightLines(pair, from, to));
+      if (lies(from) !== lies(to)) found.push(...clearCornerLines(pair, from, to));
+      found.push(...spotLines(pair, from, to));
     }
   return found;
+}
+
+/** From the border of the outer element straight in to its part, on the same side of both. */
+function linesIn(a: End, b: End, part: End, spots: Spots): Line[] {
+  const found: Line[] = [];
+  for (const side of SIDES) {
+    if (Math.abs(level(a.box, side) - level(b.box, side)) < TOUCHING) continue;
+    for (const { at, off } of spots(part, side))
+      found.push({
+        from: side,
+        to: side,
+        points: [sidePoint(a.box, side, at), sidePoint(b.box, side, at)],
+        off,
+      });
+  }
+  return found;
+}
+
+/** Facing sides: straight where they overlap, in the middle of what they share first. */
+function straightLines({ a, b, on }: Pair, from: Side, to: Side): Line[] {
+  const ra = range(a, from),
+    rb = range(b, to);
+  const low = Math.max(ra[0], rb[0]),
+    high = Math.min(ra[1], rb[1]);
+  if (high < low || outward(from) * (level(b.box, to) - level(a.box, from)) < TOUCHING) return [];
+  const straight = [(low + high) / 2];
+  for (const spot of [
+    share(ra, 0.5),
+    share(rb, 0.5),
+    ...on(a, from).map((spot) => spot.at),
+    ...on(b, to).map((spot) => spot.at),
+    low + (high - low) / 4,
+    high - (high - low) / 4,
+    low,
+    high,
+  ])
+    if (spot >= low && spot <= high && straight.every((other) => Math.abs(other - spot) >= 4))
+      straight.push(spot);
+  return straight.map((at, index) => ({
+    from,
+    to,
+    points: [sidePoint(a.box, from, at), sidePoint(b.box, to, at)],
+    off: index ? 0.1 : 0,
+  }));
+}
+
+/**
+ * The spot on the side of `near` for a corner clear of `far`, where no spot on it leaves one: an end
+ * as near its side's middle as keeps the corner clear of the other element.
+ */
+function clearSpot({ on, half }: Pair, near: End, side: Side, far: End, other: Side) {
+  if (on(near, side).some((spot) => outward(other) * (spot.at - level(far.box, other)) >= CLEAR))
+    return undefined;
+  const [low, high] = range(near, side),
+    limit = level(far.box, other) + outward(other) * (CLEAR + half),
+    at = outward(other) > 0 ? Math.max(limit, low) : Math.min(limit, high);
+  return at < low || at > high || on(near, side).some((spot) => spot.at === at)
+    ? undefined
+    : { at, off: 1 };
+}
+
+/** One corner where no spot on the sides leaves it clear of both elements. */
+function clearCornerLines(pair: Pair, from: Side, to: Side): Line[] {
+  const { a, b, on } = pair,
+    first = clearSpot(pair, a, from, b, to),
+    last = clearSpot(pair, b, to, a, from);
+  if (!first && !last) return [];
+  const found: Line[] = [];
+  for (const sa of first ? [first] : on(a, from))
+    for (const sb of last ? [last] : on(b, to)) {
+      const line = cornerLine(pair, from, to, sa, sb);
+      if (line) found.push(line);
+    }
+  return found;
+}
+
+/** The line with one corner between two spots, where the corner is clear of both elements. */
+function cornerLine({ a, b }: Pair, from: Side, to: Side, sa: Spot, sb: Spot): Line | undefined {
+  const p = sidePoint(a.box, from, sa.at),
+    q = sidePoint(b.box, to, sb.at),
+    corner = lies(from) ? { x: p.x, y: q.y } : { x: q.x, y: p.y };
+  return beyond(a.box, from, corner) >= CLEAR && beyond(b.box, to, corner) >= CLEAR
+    ? { from, to, points: [p, corner, q], off: sa.off + sb.off }
+    : undefined;
+}
+
+/** The lines between every spot on one side and every spot on the other: one corner, a step, or around both. */
+function spotLines(pair: Pair, from: Side, to: Side): Line[] {
+  const { a, b, on } = pair,
+    found: Line[] = [];
+  for (const sa of on(a, from))
+    for (const sb of on(b, to)) {
+      if (lies(from) !== lies(to)) {
+        // One corner, clear of both elements.
+        const line = cornerLine(pair, from, to, sa, sb);
+        if (line) found.push(line);
+        continue;
+      }
+      if (Math.abs(sa.at - sb.at) < CLEAR) continue;
+      const p = sidePoint(a.box, from, sa.at),
+        q = sidePoint(b.box, to, sb.at),
+        off = sa.off + sb.off;
+      for (const [mid, shifted] of from !== to
+        ? stepMids(pair, from, to, off)
+        : aroundMids(pair, from, to, off))
+        found.push({
+          from,
+          to,
+          points: lies(from)
+            ? [p, { x: p.x, y: mid }, { x: q.x, y: mid }, q]
+            : [p, { x: mid, y: p.y }, { x: mid, y: q.y }, q],
+          off: shifted,
+        });
+    }
+  return found;
+}
+
+/** Facing sides: where a step in the gap between them runs, in its middle first, and how far off the middle each is. */
+function stepMids({ a, b }: Pair, from: Side, to: Side, off: number): [number, number][] {
+  const gap = outward(from) * (level(b.box, to) - level(a.box, from));
+  if (gap < STEP) return [];
+  const near = level(a.box, from),
+    far = level(b.box, to);
+  const mids: [number, number][] = [[(near + far) / 2, off]];
+  if (off < 1 && gap >= 3 * STEP)
+    mids.push([near + (far - near) / 4, off + 0.3], [far - (far - near) / 4, off + 0.3]);
+  return mids;
+}
+
+/** The same side of both: where a line around them runs; further out first for one that carries marks. */
+function aroundMids({ a, b, marked }: Pair, from: Side, to: Side, off: number): [number, number][] {
+  const far =
+    outward(from) > 0
+      ? Math.max(level(a.box, from), level(b.box, to))
+      : Math.min(level(a.box, from), level(b.box, to));
+  const mids: [number, number][] = [];
+  if (marked) mids.push([far + outward(from) * AROUND_MARKED, off]);
+  mids.push([far + outward(from) * AROUND, off + (marked ? 0.1 : 0)]);
+  return mids;
 }
 
 /** The line between the middles of two elements that lie on each other, where no other line is left. */
