@@ -1,6 +1,6 @@
 ---
 name: tam-diagrams
-description: Software architecture and processes presented as diagrams, written as text and rendered to SVG by tam-diagrams: TAM block diagrams of a system's structure, and UML sequence, activity, state, ER, class and use case diagrams. Use when showing how a system is built or how a process runs through it, or when asked for a UML or TAM diagram.
+description: Presenting software architecture and processes as UML and TAM diagrams rendered by tam-diagrams. Use when showing how a system is built or how a process runs through it, or when asked for a diagram of either.
 ---
 
 # Presenting architecture with tam-diagrams
@@ -11,15 +11,15 @@ A diagram is a **source**: a short text that `tam-diagrams` renders to SVG. An a
 
 ## Views
 
-| The question the view answers | Diagram | Type |
+| The question the view answers | Diagram | Guide |
 | --- | --- | --- |
-| What is the system made of, and what talks to or keeps data in what? | Block diagram | `tam` |
-| How do the parts talk to each other in one scenario? | Sequence diagram | `sequence` |
-| Which steps does a process take, with its decisions, and who does each? | Activity diagram, a lane for each who | `flowchart` |
-| Which states does one thing pass through, on which events? | State machine | `state` |
-| What data does the system keep, and how does it relate? | ER diagram | `er` |
-| How are the classes of one part built and related? | Class diagram | `class` |
-| Who uses the system for what? | Use case diagram | `usecase` |
+| What is the system made of, and what talks to or keeps data in what? | Block diagram | [`tam`](../../../docs/guides/tam.md) |
+| How do the parts talk to each other in one scenario? | Sequence diagram | [`sequence`](../../../docs/guides/sequence.md) |
+| Which steps does a process take, with its decisions, and who does each? | Activity diagram, a lane for each who | [`flowchart`](../../../docs/guides/flowchart.md) |
+| Which states does one thing pass through, on which events? | State machine | [`state`](../../../docs/guides/state.md) |
+| What data does the system keep, and how does it relate? | ER diagram | [`er`](../../../docs/guides/er.md) |
+| How are the classes of one part built and related? | Class diagram | [`class`](../../../docs/guides/class.md) |
+| Who uses the system for what? | Use case diagram | [`usecase`](../../../docs/guides/usecase.md) |
 
 - **Overview first.** The first view is a block diagram of the whole system with the people and outside systems around it.
 - **About a dozen boxes, lifelines or lanes a view.** Past that, a part's insides move to a block diagram of their own, and the overview shows that part as one box.
@@ -54,7 +54,7 @@ orders -- calls: charge @HTTPS --> payment
 
 ## Steps, for each view
 
-1. **Read the guide.** `tam-diagrams guide <type>` prints the notation: its rules, every statement, an example, and what is refused with what to write instead. The Mermaid types read a subset of Mermaid under TAM's rules, and the block diagram takes Mermaid's arrows only. Done when every statement you write is a row of the guide.
+1. **Read the guide** of the view's type, linked in the table (`docs/guides/<type>.md`; `tam-diagrams guide <type>` prints the same text anywhere): the notation's rules, every statement, an example, and what is refused with what to write instead. The Mermaid types read a subset of Mermaid under TAM's rules, and the block diagram takes Mermaid's arrows only. Done when every statement you write is a row of the guide.
 2. **Write the source** to `<name>.tam` for a block diagram, `<name>.mmd` for the others. Names are labels in boxes: a few words each, `<br>` to break one.
 3. **Check.** `tam-diagrams check <file>` until it prints nothing. Each error names the line and what to write instead.
 4. **Render and look.** `tam-diagrams render <file> -o <name>.svg`, then `rsvg-convert -z 2 -b white <name>.svg -o <name>.png` (the SVG has no background of its own), then read the PNG. Done when every element of the source is in the picture, every label reads, and every wire runs clear of the boxes. To fix a view that fails, in this order: `direction LR` for a long chain, shorter names, two views instead of one, and last, positions by hand (the guide's `@x,y` rows).
