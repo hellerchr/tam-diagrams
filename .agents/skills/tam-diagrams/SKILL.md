@@ -9,15 +9,7 @@ A diagram is a **source**, a short text `tam-diagrams` renders to SVG. Present a
 
 ## The command line
 
-| Command | What it does |
-| --- | --- |
-| `tam-diagrams guide <type>` | Prints a type's guide: what it shows, its rules, each statement under a comment saying what it means, an example, and what is refused with what to write instead. Without a type, lists the types. |
-| `tam-diagrams check <file>...` | Prints `<file>:<line>: <message>` for each error, naming what to write instead; nothing when every file is valid. |
-| `tam-diagrams render <file> -o <name>.svg` | Draws the diagram as SVG. `--background` puts its white page behind it; `--rounded` rounds the corners of connections. |
-| `tam-diagrams convert <file> -o <name>` | Turns a source into a draw.io file (`.drawio`) drawn with the TAMshapes stencils, or a draw.io file into its source. |
-| `tam-diagrams edit <file>` | Opens the editor in the browser on the file; Save writes it back. Runs until stopped. |
-
-Every command reads draw.io files as the diagrams they draw, and all but `edit` read `-` as stdin. Exit codes: 0 done, 1 an error in the diagram, 2 a wrong command line or file. Not on the PATH: `npx tam-diagrams` where the package is installed, else `node <checkout>/dist/cli.js` after `npm install` in a checkout of github.com/hellerchr/tam-diagrams, three levels above this skill's folder.
+`tam-diagrams --help` is the full reference: every command and option, stdin and exit codes. This skill draws each view with `guide`, `check` and `render`, and hands it over with `convert` or `edit`; each is explained in the step that uses it. Where `tam-diagrams` is not on the PATH: `npx tam-diagrams` in a project that installs the package, else `node <checkout>/dist/cli.js` after `npm install` in a checkout of github.com/hellerchr/tam-diagrams, three levels above this skill's folder.
 
 ## 1. Choose the views
 
@@ -42,17 +34,17 @@ Done when the views are a list of titles, the overview first, each saying what i
 
 ## 2. Draw each view, in the order of the list
 
-1. **Read the guide:** `tam-diagrams guide <type>` (the same guide for people: `docs/guides/<type>.md`). Write from it: the Mermaid types read a subset of Mermaid under TAM's rules, and the block diagram takes only Mermaid's arrows.
+1. **Read the guide:** `tam-diagrams guide <type>` prints the notation of the view's type: what it shows, its rules, each statement under a comment that says what it means, an example, and what is refused with what to write instead (the same guide for people: `docs/guides/<type>.md`). Write from it: the Mermaid types read a subset of Mermaid under TAM's rules, and the block diagram takes only Mermaid's arrows.
 2. **Write the source** to `<name>.tam` for a block diagram, `<name>.mmd` for the others. Names are labels in boxes: a few words, `<br>` to break one. With lanes, name each node first inside its lane. Done when every statement is a row of the guide.
-3. **Check:** `tam-diagrams check <file>`, fixing what it names, until it prints nothing.
-4. **Render and look:** `tam-diagrams render <file> --background -o <name>.svg` (its white page reads on dark pages too), then `rsvg-convert <name>.svg -o <previews>/<name>-<n>.png` (its labels read at this size, at half the tokens of a larger one), where `<previews>` is a folder you make once with `mktemp -d` and `<n>` is new each time, since an image read can come from a cache. Read the PNG in a later step than the command that writes it: a read sent alongside finds no file. Done when every element is in the picture, every label reads, and the wires run clear of boxes and labels; wires may cross each other. Fix a view that fails in this order, then check and render it again: `direction LR` for a tall, narrow picture, protocols only where they tell something, shorter names, two views, and last, positions by hand (the guide's position rows).
+3. **Check:** `tam-diagrams check <file>` prints `<file>:<line>: <message>` for each error, naming what to write instead. Fix and check again until it prints nothing.
+4. **Render and look:** `tam-diagrams render <file> --background -o <name>.svg` draws the view on its white page, which reads on dark pages too; then `rsvg-convert <name>.svg -o <previews>/<name>-<n>.png` (its labels read at this size, at half the tokens of a larger one), where `<previews>` is a folder you make once with `mktemp -d` and `<n>` is new each time, since an image read can come from a cache. Read the PNG in a later step than the command that writes it: a read sent alongside finds no file. Done when every element is in the picture, every label reads, and the wires run clear of boxes and labels; wires may cross each other. Fix a view that fails in this order, then check and render it again: `direction LR` for a tall, narrow picture, protocols only where they tell something, shorter names, two views, and last, positions by hand (the guide's position rows).
 
 ## 3. Hand over
 
 - **In a conversation:** each source in a fence (`tam` or `mermaid`) under its title, the path of its SVG, and an offer to open it (`xdg-open <name>.svg`).
 - **In a repository's docs:** `docs/diagrams/<name>.tam` (or `.mmd`) beside `<name>.svg`, embedded as `![Title](diagrams/<name>.svg)` and rendered again whenever the source changes. GitHub shows a `tam` fence as text and draws a `mermaid` fence with Mermaid's own renderer, so readers see the SVG.
-- **As draw.io:** `tam-diagrams convert <file> -o <name>.drawio`, for people who edit in draw.io.
-- **To arrange by hand:** `tam-diagrams edit <file>` opens a window on the user's screen: offer it, and start it in the background once they agree.
+- **As draw.io:** `tam-diagrams convert <file> -o <name>.drawio` writes a page drawn with the TAMshapes stencils, for people who edit in draw.io.
+- **To arrange by hand:** `tam-diagrams edit <file>` serves the editor on the file and opens it in a window on the user's screen; Save writes the file back, and the command runs until stopped. Offer it, and start it in the background once they agree.
 
 Done when the user has every view's title, source and picture.
 
