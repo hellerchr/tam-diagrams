@@ -362,13 +362,40 @@ export function clear(
   return count(points) <= count(before);
 }
 
-/** Puts `points` in place of a route and moves its label along; restores `before` when no spot for the label is free. */
+/**
+ * Whether a segment that ends on a box meets it square: across the side it ends on, never along it.
+ * An end on no side of the box is not judged.
+ */
+export function meetsSquare(end: Point, before: Point, box: Box): boolean {
+  const near = (value: number, side: number) => Math.abs(value - side) < 0.5;
+  const leftOrRight = near(end.x, box.x) || near(end.x, box.x + box.width),
+    topOrBottom = near(end.y, box.y) || near(end.y, box.y + box.height);
+  if (!leftOrRight && !topOrBottom) return true;
+  return (leftOrRight && near(before.y, end.y)) || (topOrBottom && near(before.x, end.x));
+}
+
+/** Whether a route meets the elements at both its ends square to their sides. */
+export function endsSquare(geometry: Geometry, id: string, points: Point[]): boolean {
+  const [source, target] = geometry.ends.get(id)!;
+  const start = geometry.boxes.get(source),
+    end = geometry.boxes.get(target);
+  return (
+    (!start || meetsSquare(points[0], points[1], start)) &&
+    (!end || meetsSquare(points.at(-1)!, points.at(-2)!, end))
+  );
+}
+
+/**
+ * Puts `points` in place of a route and moves its label along; restores `before` when no spot for the
+ * label is free. A route that would end along a side of its element is refused.
+ */
 export function tryRoute(
   geometry: Geometry,
   id: string,
   points: Point[],
   before: Point[],
 ): boolean {
+  if (!endsSquare(geometry, id, points)) return false;
   const label = geometry.edgeLabels.get(id);
   geometry.routes.set(id, points);
   if (relabel(geometry, id, points)) return true;

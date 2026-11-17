@@ -4,9 +4,11 @@ import {
   anchored,
   type Axis,
   clear,
+  endsSquare,
   fallback,
   type Geometry,
   halves,
+  meetsSquare,
   movable,
   other,
   segment,
@@ -17,27 +19,52 @@ import {
   tryRoute,
   zRoute,
 } from "./route.ts";
-import { type Box, grow, overlaps, type Point, segmentHits } from "./scene.ts";
+import { type Box, grow, overlaps, type Point, segmentHits, simplifyPath } from "./scene.ts";
 
 export function straighten(geometry: Geometry, vertical: boolean) {
   const main: Axis = vertical ? "y" : "x";
   const markers = [...geometry.markers].filter((marker) => !anchored(geometry, marker)),
     ids = [...geometry.routes.keys()].filter((id) => movable(geometry, id));
   for (const marker of markers) unfold(geometry, marker, main);
+  // Joining a channel's halves can leave a wire running along its element's side into its end.
+  for (const id of ids) squareEnds(geometry, id);
   for (const id of ids) shortcut(geometry, id);
   for (const id of ids) clearTitles(geometry, id);
-  for (let pass = 0; pass < 2; pass++) {
-    for (const marker of markers) slideMarker(geometry, marker, main);
-    for (const marker of markers) centerMarker(geometry, marker, main);
-    for (const id of ids) {
-      const route = geometry.routes.get(id)!;
-      if (route.length <= 2) continue;
-      // Along the layout direction first, then across it for elements side by side; else as few bends as the ends allow.
-      straightenRoute(geometry, id, other(main)) ||
-        straightenRoute(geometry, id, main) ||
-        simplifyRoute(geometry, id);
-    }
-  }
+  for (let pass = 0; pass < 2; pass++) settle(geometry, markers, ids, main);
+}
+
+/** One round of settling: markers slide and center, then every wire takes the straightest route it can. */
+function settle(geometry: Geometry, markers: string[], ids: string[], main: Axis) {
+  for (const marker of markers) slideMarker(geometry, marker, main);
+  for (const marker of markers) centerMarker(geometry, marker, main);
+  for (const id of ids) straightest(geometry, id, main);
+}
+
+/** Along the layout direction first, then across it for elements side by side; else as few bends as the ends allow. */
+function straightest(geometry: Geometry, id: string, main: Axis) {
+  if (geometry.routes.get(id)!.length <= 2) return;
+  straightenRoute(geometry, id, other(main)) ||
+    straightenRoute(geometry, id, main) ||
+    simplifyRoute(geometry, id);
+}
+
+/** A route that runs along a side of an element into its end meets that side square instead, where it can. */
+function squareEnds(geometry: Geometry, id: string) {
+  const [source, target] = geometry.ends.get(id)!;
+  const route = geometry.routes.get(id)!;
+  const ended = squaredEnd(route, geometry.boxes.get(target)),
+    points = squaredEnd(ended.toReversed(), geometry.boxes.get(source)).toReversed();
+  if (points.length === route.length && endsSquare(geometry, id, route)) return;
+  if (clear(geometry, id, points, new Set(), route)) tryRoute(geometry, id, points, route);
+}
+
+/** A route whose last segment runs along a side of `box`, with its last bend moved so it meets the side square. */
+function squaredEnd(route: Point[], box: Box | undefined): Point[] {
+  if (!box || route.length < 3) return route;
+  const [p, q, end] = route.slice(-3);
+  if (meetsSquare(end, q, box)) return route;
+  const corner = Math.abs(q.x - end.x) < 0.5 ? { x: p.x, y: end.y } : { x: end.x, y: p.y };
+  return simplifyPath([...route.slice(0, -2), corner, end]);
 }
 
 /**

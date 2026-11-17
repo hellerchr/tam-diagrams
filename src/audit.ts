@@ -2,6 +2,7 @@
 
 import {
   type Box,
+  contains,
   grow,
   inside,
   overlaps,
@@ -766,3 +767,47 @@ function titleBox(scene: Scene, id: string): Box {
 }
 
 /** Whether two segments cross at a point inside both. */
+
+/**
+ * Wire ends that run along a straight side of the shape they end at instead of meeting it square:
+ * the last segment lies on the side's line and over the side for more than a pixel, so the wire
+ * reads as the outline drawn on. Every wire meets the shape at its end head-on.
+ */
+export function alongSides(scene: Scene): Finding[] {
+  // Only shapes whose sides are their box's: a curved outline leaves its box at single points.
+  const boxes = new Map(
+    scene.shapes
+      .filter((shape) => shape.kind === "rect" || shape.kind === "round")
+      .map((shape) => [shape.id, shape.box]),
+  );
+  return scene.wires.flatMap((wire) =>
+    [
+      { shapes: wire.from ? [wire.from] : wire.ends, end: wire.points[0], before: wire.points[1] },
+      {
+        shapes: wire.to ? [wire.to] : wire.ends,
+        end: wire.points.at(-1)!,
+        before: wire.points.at(-2)!,
+      },
+    ].flatMap(({ shapes, end, before }) => {
+      const along = shapes.find((id) => {
+        const box = boxes.get(id);
+        return !!box && !!before && contains(box, end, 0.5) && runsAlongSide(before, end, box);
+      });
+      return along
+        ? [{ check: "wire-along-side", detail: `${wire.edge} ends along a side of ${along}` }]
+        : [];
+    }),
+  );
+}
+
+/** Whether a segment lies on a side's line of a box and covers more than a pixel of that side. */
+function runsAlongSide(p: Point, q: Point, box: Box): boolean {
+  const cover = (a: number, b: number, low: number, high: number) =>
+    Math.min(Math.max(a, b), high) - Math.max(Math.min(a, b), low) > 1;
+  const on = (value: number, sides: number[]) => sides.some((side) => Math.abs(value - side) < 0.5);
+  if (Math.abs(p.x - q.x) < 0.5)
+    return on(p.x, [box.x, box.x + box.width]) && cover(p.y, q.y, box.y, box.y + box.height);
+  if (Math.abs(p.y - q.y) < 0.5)
+    return on(p.y, [box.y, box.y + box.height]) && cover(p.x, q.x, box.x, box.x + box.width);
+  return false;
+}
