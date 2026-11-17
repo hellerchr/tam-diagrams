@@ -22,9 +22,10 @@ A diagram is a **source**: a short text that `tam-diagrams` renders to SVG. An a
 | Who uses the system for what? | Use case diagram | [`usecase`](../../../docs/guides/usecase.md) |
 
 - **Overview first.** The first view is a block diagram of the whole system with the people and outside systems around it, written as [Software as a block diagram](#software-as-a-block-diagram) says.
-- **About a dozen boxes, lifelines or lanes a view.** Past that, a part's insides move to a block diagram of their own, and the overview shows that part as one box.
+- **About a dozen boxes, lifelines or lanes a view**, storages included. Past that, leave out the storages only one agent uses, then move a part's insides to a block diagram of their own, the overview showing that part as one box.
 - **A process takes the view of who carries it.** A process that runs through the system's parts is a sequence diagram; one that people or roles carry out, with decisions along the way, is an activity diagram.
-- **One vocabulary.** The lifelines of a sequence diagram and the lanes of an activity diagram are agents of the block diagram, under the same names, and every message between two of them runs over a channel the block diagram shows. An agent that reads or writes a storage sends itself a message naming it.
+- **One vocabulary.** The lifelines of a sequence diagram and the lanes of an activity diagram are agents of a block diagram, under the same names; a scenario inside one part takes them from that part's own block diagram, drawn first. Every message between two of them follows a connection that block diagram shows: a channel, a `create` for a start, or a storage both reach. An agent that reads or writes a storage sends itself a message naming it.
+- **One path a scenario.** A branch of the scenario goes in an `alt` frame; another way into it, such as a second client, goes in a note or a view of its own.
 
 Done when the views are a list of titles, the overview first, each title saying what its view answers ("How the web shop is built"), and every question the user asked is answered by one of them.
 
@@ -35,7 +36,7 @@ In the order of the list, since the later views take their names from the overvi
 1. **Read the guide** of the view's type, linked in the table (`tam-diagrams guide <type>` prints the same text anywhere). The guide is the syntax: the Mermaid types read a subset of Mermaid under TAM's rules, and the block diagram takes Mermaid's arrows only.
 2. **Write the source** to `<name>.tam` for a block diagram, `<name>.mmd` for the others. Names are labels in boxes: a few words each, `<br>` to break one. Done when every statement is a row of the guide.
 3. **Check.** `tam-diagrams check <file>`, fixing the error it names, until it prints nothing.
-4. **Render and look.** `tam-diagrams render <file> -o <name>.svg`, then `rsvg-convert -z 2 -b white <name>.svg -o <name>.png` (the SVG has no background of its own), then read the PNG. Done when every element of the source is in the picture, every label reads, and every wire runs clear of the boxes. A view that fails is fixed in this order, then checked and rendered again: `direction LR` for a long chain, shorter names, two views instead of one, and last, positions by hand (the guide's position rows).
+4. **Render and look.** `tam-diagrams render <file> -o <name>.svg`, then `rsvg-convert -z 2 -b white <name>.svg -o <name>-<n>.png` (the SVG has no background of its own; a new `<n>` each render, since an image read can come from a cache), then read that PNG. Done when every element of the source is in the picture, every label reads, and every wire runs clear of the boxes. A view that fails is fixed in this order, then checked and rendered again: `direction LR` for a tall, narrow picture, protocols only where they tell something, shorter names, two views instead of one, and last, positions by hand (the guide's position rows).
 
 ## 3. Hand over
 
@@ -52,7 +53,9 @@ The block diagram is FMC's compositional structure as SAP TAM draws it:
 
 - Whatever acts is an **agent**: a service, a job, an app, a browser. A person is a `human` agent.
 - Whatever keeps data is a **storage**: a database, a cache, a bucket, a file.
-- Agents exchange over **channels**: `calls` for request and response, `sends data` for a stream, a queue or events. An agent `reads`, `writes` or `reads/writes` a storage.
+- Agents exchange over **channels**: `calls` for request and response, `sends data` for a stream or a push. An agent `reads`, `writes` or `reads/writes` a storage.
+- A broker that keeps messages (Kafka, a queue) is one **storage**: producers write it and consumers read it, with the topics as the accesses' labels.
+- A part and the container around it share their connections; each connection ends at the part that does the work.
 - The system is an agent that holds its parts; the people and outside systems stand beside it.
 
 ```tam
