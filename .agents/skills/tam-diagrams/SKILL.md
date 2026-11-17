@@ -1,6 +1,6 @@
 ---
 name: tam-diagrams
-description: Architecture and behaviour diagrams drawn from text as SVG with tam-diagrams: block diagrams of a system's structure (TAM/FMC agents, storages, channels), and activity, sequence, state, class, ER and use case diagrams. Use when presenting a system, a process or a data model visually, when asked to draw or diagram something, or when reading or writing a draw.io file.
+description: Architecture and behaviour diagrams drawn from text as SVG with tam-diagrams: block diagrams of a system's structure (TAM/FMC agents, storages, channels), and activity, sequence, state, class, ER and use case diagrams. Use when presenting a system, a process or a data model visually, or when asked to draw or diagram something.
 ---
 
 # Drawing with tam-diagrams
