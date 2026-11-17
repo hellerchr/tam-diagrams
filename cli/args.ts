@@ -3,7 +3,7 @@ import { parseArgs } from "node:util";
 /** What one invocation asks for. */
 export type Command =
   | { kind: "help" }
-  | { kind: "render"; input: string; output?: string; rounded?: boolean }
+  | { kind: "render"; input: string; output?: string; rounded?: boolean; background?: boolean }
   | { kind: "convert"; input: string; output?: string; rounded?: boolean }
   | { kind: "check"; inputs: string[] }
   | { kind: "edit"; file?: string; port?: number; noOpen?: boolean }
@@ -28,6 +28,7 @@ Every command reads draw.io files (.drawio, .drawio.svg) as the diagrams they dr
 Options:
   -o, --output <file>   write the result to a file (render and convert)
   --rounded             bend connections round at their corners (render and convert)
+  --background          draw the diagram on its white page instead of on none (render)
   --port <n>            serve the editor on this port of 127.0.0.1 instead of a free one (edit)
   --no-open             print the editor's address without opening a browser (edit)
   -h, --help            show this text
@@ -54,6 +55,7 @@ function wantsHelp(argv: string[]): boolean {
 interface Options {
   output?: string;
   rounded?: boolean;
+  background?: boolean;
   port?: string;
   "no-open"?: boolean;
 }
@@ -68,11 +70,18 @@ function withoutEditOptions(options: Options) {
 function withoutRenderOptions(options: Options) {
   if (options.output !== undefined) throw new UsageError("-o applies to render and convert only.");
   if (options.rounded) throw new UsageError("--rounded applies to render and convert only.");
+  withoutBackground(options);
+}
+
+/** Refuses the white page of render for the other commands. */
+function withoutBackground(options: Options) {
+  if (options.background) throw new UsageError("--background applies to render only.");
 }
 
 function toRender(kind: "render" | "convert", inputs: string[], options: Options): Command {
   withoutEditOptions(options);
-  const { output, rounded } = options;
+  const { output, rounded, background } = options;
+  if (kind === "convert") withoutBackground(options);
   if (inputs.length !== 1) throw new UsageError(`${kind} takes exactly one input.`);
   if (output === "-")
     throw new UsageError(`-o - is not needed: ${kind} writes to stdout by default.`);
@@ -81,6 +90,7 @@ function toRender(kind: "render" | "convert", inputs: string[], options: Options
     input: inputs[0],
     ...(output === undefined ? {} : { output }),
     ...(rounded ? { rounded } : {}),
+    ...(background ? { background } : {}),
   };
 }
 
@@ -141,6 +151,7 @@ export function parseCommand(argv: string[]): Command {
       options: {
         output: { type: "string", short: "o" },
         rounded: { type: "boolean" },
+        background: { type: "boolean" },
         port: { type: "string" },
         "no-open": { type: "boolean" },
       },

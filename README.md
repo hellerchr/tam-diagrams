@@ -231,7 +231,8 @@ npx tam-diagrams guide flowchart
 ```
 
 `render` writes the SVG to the file given with `-o`, or to stdout; with `--rounded`, `render` and
-`convert` bend connections round at their corners. `convert` turns a source into a
+`convert` bend connections round at their corners, and with `--background` the SVG has its white
+page behind it, so it reads on a dark page too, such as GitHub's dark theme. `convert` turns a source into a
 draw.io file and a draw.io file into its source; `render` and `check` read draw.io files as the
 diagrams they draw, and every command prints what a draw.io page holds that the diagram leaves out
 as `<file>: warning: …` on stderr. `check` reads every file, prints

@@ -10,6 +10,7 @@ import {
 } from "../src/index.ts";
 import { isPlaced, layoutPlaced, overlapping } from "../src/edit.ts";
 import { DrawioError, exportDrawio, importDrawio, isDrawio } from "../src/drawio.ts";
+import { withBackground } from "../editor/files.ts";
 
 // Light theme with 6-digit hex only: the renderers mix colors as #rrggbb. The font and arialMeasure
 // belong together, since the measure is valid only for the Arial/Helvetica metric family. Arial
@@ -25,16 +26,23 @@ const CLI_COLORS: DiagramColors = {
 };
 
 /**
- * Draws a diagram source as SVG: UML if it starts with a supported Mermaid header, else TAM. A
- * source with no elements, such as an empty or comment-only file, is an error here, as in Mermaid;
- * the library itself draws it as an empty picture, which suits a live preview.
+ * Draws a diagram source as SVG: UML if it starts with a supported Mermaid header, else TAM; with
+ * `background`, on its white page rather than on none. A source with no elements, such as an empty
+ * or comment-only file, is an error here, as in Mermaid; the library itself draws it as an empty
+ * picture, which suits a live preview.
  */
 export async function renderSource(
   source: string,
-  style: { rounded?: boolean } = {},
+  style: { rounded?: boolean; background?: boolean } = {},
 ): Promise<string> {
+  const svg = await drawnSource(source, !!style.rounded);
+  return style.background ? withBackground(svg, CLI_COLORS.background) : svg;
+}
+
+/** A source drawn as SVG on no page: TAM or Mermaid by its content. */
+async function drawnSource(source: string, rounded: boolean): Promise<string> {
   const options = { measure: arialMeasure },
-    colors = { ...CLI_COLORS, rounded: !!style.rounded };
+    colors = { ...CLI_COLORS, rounded };
   if (detectUml(source)) return (await renderUml(source, colors, options)).svg;
   if (parseTam(source).nodes.size === 0) throw new TamError(0, "the diagram has no elements");
   return (await renderTam(source, colors, options)).svg;

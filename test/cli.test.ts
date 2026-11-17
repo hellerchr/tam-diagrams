@@ -43,6 +43,17 @@ describe("render", () => {
     expect(port.stdout()).toBe("");
   });
 
+  it("draws the diagram on its white page with --background, and on none without", async () => {
+    const page =
+      /<\/style><rect x="[-\d.]+" y="[-\d.]+" width="[\d.]+" height="[\d.]+" fill="#ffffff"\/>/;
+    const plain = memoryIo({ "a.tam": TAM });
+    expect(await main(["render", "a.tam"], plain.io)).toBe(0);
+    expect(plain.stdout()).not.toMatch(page);
+    const backed = memoryIo({ "a.tam": TAM });
+    expect(await main(["render", "a.tam", "--background"], backed.io)).toBe(0);
+    expect(backed.stdout()).toMatch(page);
+  });
+
   it("reads stdin for -", async () => {
     const port = memoryIo({}, TAM);
     expect(await main(["render", "-"], port.io)).toBe(0);

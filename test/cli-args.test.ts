@@ -19,6 +19,7 @@ describe("parseCommand", () => {
       { kind: "convert", input: "a.drawio", output: "a.tam" },
     ],
     [["render", "a.tam", "--rounded"], { kind: "render", input: "a.tam", rounded: true }],
+    [["render", "a.tam", "--background"], { kind: "render", input: "a.tam", background: true }],
     [["convert", "--rounded", "a.tam"], { kind: "convert", input: "a.tam", rounded: true }],
     [["edit"], { kind: "edit" }],
     [["edit", "a.tam"], { kind: "edit", file: "a.tam" }],
@@ -39,6 +40,16 @@ describe("parseCommand", () => {
   it.each([
     ["no arguments", [], /missing command/],
     ["two guides", ["guide", "tam", "state"], /guide takes one type at most/],
+    [
+      "a background for convert",
+      ["convert", "a.tam", "--background"],
+      /--background applies to render only/,
+    ],
+    [
+      "a background for check",
+      ["check", "a.tam", "--background"],
+      /--background applies to render only/,
+    ],
     ["an option for a guide", ["guide", "tam", "-o", "x"], /-o applies to render and convert only/],
     ["an unknown command", ["draw", "a.tam"], /unknown command `draw`/],
     ["an unknown option", ["render", "a.tam", "--dark"], /--dark/],
@@ -94,6 +105,7 @@ describe("parseCommand", () => {
     expect(USAGE).toMatch(/edit \[<file>\] \[--port <n>\]/);
     expect(USAGE).toMatch(/--no-open/);
     expect(USAGE).toMatch(/guide \[<type>\]/);
+    expect(USAGE).toMatch(/--background/);
     expect(USAGE).toMatch(/0 success, 1 diagram error, 2 usage or I\/O error/);
   });
 });
