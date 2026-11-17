@@ -77,6 +77,263 @@ function tidy(entries: MenuEntry[]): (MenuItem | "line")[] {
   );
 }
 
+/** Where the keys that move along a menu go from the row at `at`, which is -1 when none has the focus. */
+const MOVES: Record<string, (rows: HTMLElement[], at: number) => HTMLElement | undefined> = {
+  ArrowDown: (rows, at) => rows[(at + 1) % rows.length],
+  ArrowUp: (rows, at) => rows[(at <= 0 ? rows.length : at) - 1],
+  Home: (rows) => rows[0],
+  End: (rows) => rows.at(-1),
+};
+
+/** The rows of a menu that may be picked. */
+const rowsOf = (menu: HTMLElement) =>
+  [...menu.querySelectorAll<HTMLElement>(":scope > button")].filter((row) => !isOff(row));
+
+/** Whether a key types a letter that goes to the next row whose name starts with it. */
+function typesLetter(event: KeyboardEvent): boolean {
+  return (
+    event.key.length === 1 && event.key !== " " && !event.ctrlKey && !event.metaKey && !event.altKey
+  );
+}
+
+/** The attributes of a row's button: its role, its tick, its submenu and the reason it is off. */
+function rowAttributes(row: MenuItem, off: string | boolean | undefined) {
+  const choice = row.checked !== undefined;
+  return {
+    class: row.danger ? "danger" : "",
+    type: "button",
+    role: choice ? "menuitemcheckbox" : "menuitem",
+    "aria-checked": choice ? String(row.checked) : undefined,
+    "aria-haspopup": row.items ? "menu" : undefined,
+    "aria-expanded": row.items ? "false" : undefined,
+    "data-tip": typeof off === "string" ? off : undefined,
+    "data-side": "right",
+  };
+}
+
+/** What a row shows: a tick where the menu has choices, a drawing, the name, then keys or a note. */
+function rowContent(row: MenuItem, ticks: boolean) {
+  return [
+    ticks && h("span", { class: "tick" }, row.checked ? icon("check") : null),
+    row.icon && icon(row.icon),
+    h("span", { class: "name" }, row.name),
+    row.key ? h("kbd", {}, row.key) : row.note && h("span", { class: "row-note" }, row.note),
+    row.items && icon("chevron-right"),
+  ];
+}
+
+/** A name too long for its row is said whole by its tooltip. */
+function tipLongNames(menu: HTMLElement) {
+  for (const name of menu.querySelectorAll<HTMLElement>(":scope > button > .name")) {
+    const row = name.parentElement!;
+    if (name.scrollWidth > name.clientWidth && !row.dataset.tip)
+      row.dataset.tip = name.textContent ?? "";
+  }
+}
+
+/** Places a submenu beside its row: to the right where there is room, else to the left. */
+function besideRow(control: HTMLElement, sub: HTMLElement) {
+  const at = control.getBoundingClientRect(),
+    { width, height } = sub.getBoundingClientRect(),
+    x = at.right - 2 + width > window.innerWidth - 4 ? at.left - width + 2 : at.right - 2;
+  sub.style.left = `${Math.max(4, x)}px`;
+  sub.style.top = `${Math.max(4, Math.min(at.top - 5, window.innerHeight - height - 4))}px`;
+}
+
+/** Places the first menu at its point or at its control, inside the window, whichever corner it was asked for near. */
+function placeMenu(
+  menu: HTMLElement,
+  anchor: { x: number; y: number } | HTMLElement,
+  options: PopupOptions,
+) {
+  const { width, height } = menu.getBoundingClientRect(),
+    { x, y } = anchor instanceof HTMLElement ? atControl(menu, anchor, options) : anchor;
+  menu.style.left = `${Math.max(4, Math.min(x, window.innerWidth - width - 4))}px`;
+  menu.style.top = `${Math.max(4, Math.min(y, window.innerHeight - height - 4))}px`;
+}
+
+/** Where a menu opens at a control: below or above it, lined up with its left or right edge. */
+function atControl(menu: HTMLElement, control: HTMLElement, options: PopupOptions) {
+  const { width, height } = menu.getBoundingClientRect(),
+    at = control.getBoundingClientRect(),
+    least = options.wide ? at.width : 0;
+  if (options.wide) menu.style.minWidth = `${at.width}px`;
+  return {
+    x: options.right ? at.right - Math.max(width, least) : at.left,
+    y: options.above ? at.top - height - 2 : at.bottom + 2,
+  };
+}
+
+/** A menu that is open, with the submenus open from it. */
+class Popup {
+  private readonly options: PopupOptions;
+  /** What had the focus before the menu opened: it gets it back. */
+  private readonly before = document.activeElement as HTMLElement | null;
+  /** The open menus: the first, then the submenu of each. */
+  private readonly open: HTMLElement[] = [];
+  private timer: number | undefined;
+
+  constructor(options: PopupOptions) {
+    this.options = options;
+  }
+
+  /** The handlers the window calls while the menu is open, bound to it. */
+  private readonly outside = (event: Event) => this.pressed(event);
+  private readonly key = (event: KeyboardEvent) => this.keyDown(event);
+  readonly close = () => this.closeAll();
+
+  private closeAll() {
+    if (!this.open.length) return;
+    window.clearTimeout(this.timer);
+    this.open.splice(0).forEach((menu) => menu.remove());
+    window.removeEventListener("pointerdown", this.outside, true);
+    window.removeEventListener("keydown", this.key, true);
+    window.removeEventListener("blur", this.close);
+    window.removeEventListener("resize", this.close);
+    closeOpen = () => {};
+    if (document.activeElement === document.body || !document.activeElement) this.before?.focus();
+    this.options.closed?.();
+  }
+
+  /** Opens the first menu with its rows at its anchor, and takes the keys and the presses outside. */
+  show(entries: MenuEntry[], anchor: { x: number; y: number } | HTMLElement) {
+    const menu = this.build(0, entries, (menu) => placeMenu(menu, anchor, this.options));
+    menu.focus({ preventScroll: true });
+    if (this.options.first) rowsOf(menu)[0]?.focus({ preventScroll: true });
+    window.addEventListener("pointerdown", this.outside, true);
+    window.addEventListener("keydown", this.key, true);
+    window.addEventListener("blur", this.close);
+    window.addEventListener("resize", this.close);
+  }
+
+  /** A press outside the menus closes them. */
+  private pressed(event: Event) {
+    if (!this.open.some((menu) => menu.contains(event.target as Node))) this.close();
+  }
+
+  /** Closes the menus from `level` on, and marks the rows of the one left as not expanded. */
+  private closeFrom(level: number) {
+    this.open.splice(level).forEach((menu) => menu.remove());
+    this.open
+      .at(-1)
+      ?.querySelectorAll('[aria-expanded="true"]')
+      .forEach((row) => row.setAttribute("aria-expanded", "false"));
+  }
+
+  /** Makes the menu at `level` with its rows, in place of any open there, and places it. */
+  private build(level: number, list: MenuEntry[], place: (menu: HTMLElement) => void) {
+    this.closeFrom(level);
+    const rows = tidy(list),
+      ticks = rows.some((row) => row !== "line" && row.checked !== undefined);
+    const menu = h("div", { class: "menu", role: "menu", tabindex: "-1" });
+    menu.addEventListener("pointerenter", () => window.clearTimeout(this.timer));
+    menu.addEventListener("contextmenu", (event) => event.preventDefault());
+    for (const row of rows) menu.append(row === "line" ? h("hr") : this.row(level, row, ticks));
+    document.body.append(menu);
+    this.open[level] = menu;
+    place(menu);
+    tipLongNames(menu);
+    return menu;
+  }
+
+  /** The button of a row: the pointer resting on it opens its submenu, a click runs it. */
+  private row(level: number, row: MenuItem, ticks: boolean) {
+    const off = refusal(row),
+      control = h("button", rowAttributes(row, off), ...rowContent(row, ticks));
+    setOff(control, off);
+    const enter = () => this.enter(level, row, control, off);
+    control.addEventListener("pointerenter", () => this.hover(level, control, enter));
+    control.addEventListener("click", () => {
+      if (isOff(control)) return;
+      if (row.items) return (enter(), rowsOf(this.open[level + 1])[0]?.focus());
+      this.close();
+      row.run?.();
+    });
+    return control;
+  }
+
+  /** The row is entered: its submenu opens beside it, and any other submenu closes. */
+  private enter(
+    level: number,
+    row: MenuItem,
+    control: HTMLElement,
+    off: string | boolean | undefined,
+  ) {
+    if (!row.items || off) return this.closeFrom(level + 1);
+    if (control.getAttribute("aria-expanded") === "true") return;
+    this.build(level + 1, row.items, (sub) => besideRow(control, sub));
+    control.setAttribute("aria-expanded", "true");
+  }
+
+  /** The pointer came onto a row. On its way to a submenu it crosses other rows: they wait a moment before they take over. */
+  private hover(level: number, control: HTMLElement, enter: () => void) {
+    window.clearTimeout(this.timer);
+    this.timer = window.setTimeout(
+      () => {
+        if (!control.isConnected) return;
+        if (!isOff(control)) control.focus({ preventScroll: true });
+        enter();
+      },
+      this.open.length > level + 1 ? 220 : 60,
+    );
+  }
+
+  /** The keys are the menu's while it is open: none reaches the canvas. */
+  private keyDown(event: KeyboardEvent) {
+    event.stopPropagation();
+    const focused = document.activeElement as HTMLElement | null,
+      level = Math.max(
+        0,
+        this.open.findIndex((menu) => menu.contains(focused)),
+      ),
+      rows = rowsOf(this.open[level]),
+      move = MOVES[event.key];
+    if (move) return focusRow(event, move(rows, rows.indexOf(focused as HTMLElement)));
+    if (event.key === "Escape" || event.key === "Tab") {
+      event.preventDefault();
+      return this.close();
+    }
+    if (event.key === "ArrowRight") return this.right(event, focused);
+    if (event.key === "ArrowLeft") return this.left(event, level);
+    if (typesLetter(event)) this.typeAhead(event, focused, level);
+  }
+
+  /** The right arrow opens the submenu of the row, or at the top goes to the menu beside. */
+  private right(event: KeyboardEvent, focused: HTMLElement | null) {
+    event.preventDefault();
+    if (focused?.getAttribute("aria-haspopup")) focused.click();
+    else this.options.step?.(1);
+  }
+
+  /** The left arrow closes a submenu, back to its row, or at the top goes to the menu beside. */
+  private left(event: KeyboardEvent, level: number) {
+    event.preventDefault();
+    if (level === 0) return this.options.step?.(-1);
+    const parent = this.open[level - 1].querySelector<HTMLElement>('[aria-expanded="true"]');
+    this.closeFrom(level);
+    parent?.focus();
+  }
+
+  /** A letter goes to the next row whose name starts with it. */
+  private typeAhead(event: KeyboardEvent, focused: HTMLElement | null, level: number) {
+    const letter = event.key.toLowerCase(),
+      all = [...this.open[level].querySelectorAll<HTMLElement>(":scope > button")],
+      from = all.indexOf(focused as HTMLElement),
+      next = [...all.slice(from + 1), ...all.slice(0, from + 1)].find(
+        (row) =>
+          !isOff(row) &&
+          row.querySelector(".name")?.textContent?.trim().toLowerCase().startsWith(letter),
+      );
+    if (next) focusRow(event, next);
+  }
+}
+
+/** Puts the focus on a row by a key, which then does nothing else. */
+function focusRow(event: KeyboardEvent, row: HTMLElement | undefined) {
+  event.preventDefault();
+  row?.focus();
+}
+
 /**
  * Opens a menu at a point of the window or at a control, and returns what closes it. A click
  * outside, Escape, or picking a command closes it; only one menu is open at a time.
@@ -87,191 +344,10 @@ export function popup(
   options: PopupOptions = {},
 ): () => void {
   closeOpen();
-  const before = document.activeElement as HTMLElement | null;
-  /** The open menus: the first, then the submenu of each. */
-  const open: HTMLElement[] = [];
-  let timer: number | undefined;
-  const close = () => {
-    if (!open.length) return;
-    window.clearTimeout(timer);
-    open.splice(0).forEach((menu) => menu.remove());
-    window.removeEventListener("pointerdown", outside, true);
-    window.removeEventListener("keydown", key, true);
-    window.removeEventListener("blur", close);
-    window.removeEventListener("resize", close);
-    closeOpen = () => {};
-    if (document.activeElement === document.body || !document.activeElement) before?.focus();
-    options.closed?.();
-  };
-  const outside = (event: Event) => {
-    if (!open.some((menu) => menu.contains(event.target as Node))) close();
-  };
-  const closeFrom = (level: number) => {
-    open.splice(level).forEach((menu) => menu.remove());
-    open
-      .at(-1)
-      ?.querySelectorAll('[aria-expanded="true"]')
-      .forEach((row) => row.setAttribute("aria-expanded", "false"));
-  };
-  const rowsOf = (menu: HTMLElement) =>
-    [...menu.querySelectorAll<HTMLElement>(":scope > button")].filter((row) => !isOff(row));
-  const build = (level: number, list: MenuEntry[], place: (menu: HTMLElement) => void) => {
-    closeFrom(level);
-    const rows = tidy(list),
-      ticks = rows.some((row) => row !== "line" && row.checked !== undefined);
-    const menu = h("div", { class: "menu", role: "menu", tabindex: "-1" });
-    menu.addEventListener("pointerenter", () => window.clearTimeout(timer));
-    menu.addEventListener("contextmenu", (event) => event.preventDefault());
-    for (const row of rows) {
-      if (row === "line") {
-        menu.append(h("hr"));
-        continue;
-      }
-      const off = refusal(row);
-      const control = h(
-        "button",
-        {
-          class: row.danger ? "danger" : "",
-          type: "button",
-          role: row.checked === undefined ? "menuitem" : "menuitemcheckbox",
-          "aria-checked": row.checked === undefined ? undefined : String(row.checked),
-          "aria-haspopup": row.items ? "menu" : undefined,
-          "aria-expanded": row.items ? "false" : undefined,
-          "data-tip": typeof off === "string" ? off : undefined,
-          "data-side": "right",
-        },
-        ticks && h("span", { class: "tick" }, row.checked ? icon("check") : null),
-        row.icon && icon(row.icon),
-        h("span", { class: "name" }, row.name),
-        row.key ? h("kbd", {}, row.key) : row.note && h("span", { class: "row-note" }, row.note),
-        row.items && icon("chevron-right"),
-      );
-      setOff(control, off);
-      const enter = () => {
-        if (!row.items || off) return closeFrom(level + 1);
-        if (control.getAttribute("aria-expanded") === "true") return;
-        build(level + 1, row.items, (sub) => {
-          // Beside its row: to the right where there is room, else to the left.
-          const at = control.getBoundingClientRect(),
-            { width, height } = sub.getBoundingClientRect(),
-            x = at.right - 2 + width > window.innerWidth - 4 ? at.left - width + 2 : at.right - 2;
-          sub.style.left = `${Math.max(4, x)}px`;
-          sub.style.top = `${Math.max(4, Math.min(at.top - 5, window.innerHeight - height - 4))}px`;
-        });
-        control.setAttribute("aria-expanded", "true");
-      };
-      control.addEventListener("pointerenter", () => {
-        window.clearTimeout(timer);
-        // A pointer on its way to a submenu crosses other rows: they wait a moment before they take over.
-        timer = window.setTimeout(
-          () => {
-            if (!control.isConnected) return;
-            if (!isOff(control)) control.focus({ preventScroll: true });
-            enter();
-          },
-          open.length > level + 1 ? 220 : 60,
-        );
-      });
-      control.addEventListener("click", () => {
-        if (isOff(control)) return;
-        if (row.items) return (enter(), rowsOf(open[level + 1])[0]?.focus());
-        close();
-        row.run?.();
-      });
-      menu.append(control);
-    }
-    document.body.append(menu);
-    open[level] = menu;
-    place(menu);
-    // A name too long for its row is said whole by its tooltip.
-    for (const name of menu.querySelectorAll<HTMLElement>(":scope > button > .name")) {
-      const row = name.parentElement!;
-      if (name.scrollWidth > name.clientWidth && !row.dataset.tip)
-        row.dataset.tip = name.textContent ?? "";
-    }
-    return menu;
-  };
-  const key = (event: KeyboardEvent) => {
-    // The keys are the menu's while it is open: none reaches the canvas.
-    event.stopPropagation();
-    const focused = document.activeElement as HTMLElement | null,
-      level = Math.max(
-        0,
-        open.findIndex((menu) => menu.contains(focused)),
-      ),
-      rows = rowsOf(open[level]),
-      at = rows.indexOf(focused as HTMLElement);
-    const go = (row: HTMLElement | undefined) => {
-      event.preventDefault();
-      row?.focus();
-    };
-    switch (event.key) {
-      case "Escape":
-      case "Tab":
-        event.preventDefault();
-        return close();
-      case "ArrowDown":
-        return go(rows[(at + 1) % rows.length]);
-      case "ArrowUp":
-        return go(rows[(at <= 0 ? rows.length : at) - 1]);
-      case "Home":
-        return go(rows[0]);
-      case "End":
-        return go(rows.at(-1));
-      case "ArrowRight":
-        event.preventDefault();
-        if (focused?.getAttribute("aria-haspopup")) focused.click();
-        else options.step?.(1);
-        return;
-      case "ArrowLeft":
-        event.preventDefault();
-        if (level > 0) {
-          const parent = open[level - 1].querySelector<HTMLElement>('[aria-expanded="true"]');
-          closeFrom(level);
-          parent?.focus();
-        } else options.step?.(-1);
-        return;
-    }
-    // A letter goes to the next row whose name starts with it.
-    if (
-      event.key.length !== 1 ||
-      event.key === " " ||
-      event.ctrlKey ||
-      event.metaKey ||
-      event.altKey
-    )
-      return;
-    const letter = event.key.toLowerCase(),
-      all = [...open[level].querySelectorAll<HTMLElement>(":scope > button")],
-      from = all.indexOf(focused as HTMLElement),
-      next = [...all.slice(from + 1), ...all.slice(0, from + 1)].find(
-        (row) =>
-          !isOff(row) &&
-          row.querySelector(".name")?.textContent?.trim().toLowerCase().startsWith(letter),
-      );
-    if (next) go(next);
-  };
-  const menu = build(0, entries, (menu) => {
-    const { width, height } = menu.getBoundingClientRect();
-    let x: number, y: number;
-    if (anchor instanceof HTMLElement) {
-      const at = anchor.getBoundingClientRect();
-      if (options.wide) menu.style.minWidth = `${at.width}px`;
-      x = options.right ? at.right - Math.max(width, options.wide ? at.width : 0) : at.left;
-      y = options.above ? at.top - height - 2 : at.bottom + 2;
-    } else ({ x, y } = anchor);
-    // Inside the window, whichever corner it was asked for near.
-    menu.style.left = `${Math.max(4, Math.min(x, window.innerWidth - width - 4))}px`;
-    menu.style.top = `${Math.max(4, Math.min(y, window.innerHeight - height - 4))}px`;
-  });
-  menu.focus({ preventScroll: true });
-  if (options.first) rowsOf(menu)[0]?.focus({ preventScroll: true });
-  window.addEventListener("pointerdown", outside, true);
-  window.addEventListener("keydown", key, true);
-  window.addEventListener("blur", close);
-  window.addEventListener("resize", close);
-  closeOpen = close;
-  return close;
+  const menu = new Popup(options);
+  menu.show(entries, anchor);
+  closeOpen = menu.close;
+  return menu.close;
 }
 
 /**
@@ -315,9 +391,28 @@ export function menuButton(
     event.preventDefault();
     open();
   });
-  // The arrow down opens the menu of a control that shows a choice, as it opens a list.
+  openByKeys(control, !!options.arrow, () => !!close, open);
+  return {
+    open,
+    close: () => close?.(),
+    get isOpen() {
+      return !!close;
+    },
+  };
+}
+
+/**
+ * Makes the keyboard open a control's menu with the focus on its first row: Enter and Space, which
+ * click it, and the arrow down where it shows a choice, as it opens a list.
+ */
+function openByKeys(
+  control: HTMLElement,
+  arrow: boolean,
+  isOpen: () => boolean,
+  open: (first: boolean) => void,
+) {
   control.addEventListener("keydown", (event) => {
-    if (event.key !== "ArrowDown" || close || !options.arrow) return;
+    if (event.key !== "ArrowDown" || isOpen() || !arrow) return;
     event.preventDefault();
     event.stopPropagation();
     open(true);
@@ -326,13 +421,6 @@ export function menuButton(
     // A click without a pointer comes from the keyboard.
     if (event.detail === 0) open(true);
   });
-  return {
-    open,
-    close: () => close?.(),
-    get isOpen() {
-      return !!close;
-    },
-  };
 }
 
 /** One of the things to choose from in a `choiceButton`. */

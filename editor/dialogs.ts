@@ -42,31 +42,28 @@ function dialog(kind: string, title: string, parts: DialogParts): HTMLDialogElem
     if (event.target === box) box.close();
   });
   box.addEventListener("keydown", (event) => {
-    if (event.key !== "Tab") return;
-    const stops = [
-        ...box.querySelectorAll<HTMLElement>("button, input, select, textarea, [tabindex]"),
-      ].filter((stop) => stop.tabIndex >= 0 && stop.getClientRects().length > 0),
-      first = stops[0],
-      last = stops.at(-1),
-      active = document.activeElement,
-      // From the last stop on to the first, and back from the first to the last.
-      next = event.shiftKey
-        ? active === first || active === box
-          ? last
-          : undefined
-        : active === last
-          ? first
-          : undefined;
-    if (!first) return event.preventDefault();
-    if (!next) return;
-    event.preventDefault();
-    next.focus();
+    if (event.key === "Tab") keepTab(box, event);
   });
   document.body.append(box);
   box.showModal();
   // The focus starts on the dialog, not on its close button.
   if (!box.querySelector("[autofocus]")) box.focus();
   return box;
+}
+
+/** Tab goes round inside a dialog: from the last stop on to the first, and back from the first to the last. */
+function keepTab(box: HTMLDialogElement, event: KeyboardEvent) {
+  const stops = [
+      ...box.querySelectorAll<HTMLElement>("button, input, select, textarea, [tabindex]"),
+    ].filter((stop) => stop.tabIndex >= 0 && stop.getClientRects().length > 0),
+    [first] = stops,
+    last = stops.at(-1),
+    active = document.activeElement,
+    next = event.shiftKey ? (active === first || active === box) && last : active === last && first;
+  if (!first) return event.preventDefault();
+  if (!next) return;
+  event.preventDefault();
+  next.focus();
 }
 
 /** Whether a dialog is open over the page. */
@@ -186,6 +183,9 @@ const BLOCK_KEYS: SheetGroup[] = [
   VIEW_KEYS,
 ];
 
+/** Rows of a sheet that only some diagram types have. */
+const when = (has: boolean, rows: SheetRow[]): SheetRow[] => (has ? rows : []);
+
 /** What the keyboard and the mouse do in a diagram that lays itself out: its parts are added, named, joined and removed. */
 const structureKeys = (info: TypeInfo): SheetGroup[] => {
   const structure = structureOf(info.type),
@@ -216,23 +216,17 @@ const structureKeys = (info: TypeInfo): SheetGroup[] => {
         ["Double-click", "Name a part, or label a connection"],
         [["Enter", "F2"], "Name the selected part"],
         ["Drag a label", "Stand it elsewhere; it keeps beside its line"],
-        ...(info.type === "swimlane"
-          ? ([
-              ["Drag a lane's border", "Make the lane before it wider or narrower"],
-            ] satisfies SheetRow[])
-          : []),
+        ...when(info.type === "swimlane", [
+          ["Drag a lane's border", "Make the lane before it wider or narrower"],
+        ]),
         ["Right-click", "Menu: add here, change a kind, delete"],
-        ...(info.type === "sequence"
-          ? ([
-              [
-                ["←", "↑", "→", "↓"],
-                "Move the selected message earlier or later, a participant along its row",
-              ],
-            ] satisfies SheetRow[])
-          : []),
-        ...(structure?.copy
-          ? ([[["Ctrl", "D"], "Duplicate the selected part"]] satisfies SheetRow[])
-          : []),
+        ...when(info.type === "sequence", [
+          [
+            ["←", "↑", "→", "↓"],
+            "Move the selected message earlier or later, a participant along its row",
+          ],
+        ]),
+        ...when(!!structure?.copy, [[["Ctrl", "D"], "Duplicate the selected part"]]),
         [["Delete"], "Remove, with the connections"],
         [["Ctrl", "Z"], "Undo"],
         [["Ctrl", "Y"], "Redo; Ctrl+Shift+Z does too"],
@@ -764,32 +758,52 @@ const plain = (name: string) => name.toLowerCase().replace(/…$/, "");
 export function findCommands(commands: Command[], typed: string): Command[] {
   const text = typed.trim().toLowerCase(),
     words = text.split(/\s+/).filter(Boolean);
-  const diagram = (command: Command) => /Open (recent|example)/.test(command.path);
-  if (!words.length) {
-    const usual = USUAL.flatMap(
-        (name) =>
-          commands.find((command) => command.name === name && !command.path.includes("▸")) ?? [],
-      ),
-      rest = commands.filter((command) => !usual.includes(command));
-    return [...usual, ...rest.filter((command) => !diagram(command)), ...rest.filter(diagram)];
-  }
-  const rank = (command: Command) => {
-    const name = plain(command.name);
-    // A diagram to open is asked for less than a command of the same name.
-    if (diagram(command)) return 5;
-    if (name === text) return 0;
-    if (name.startsWith(text)) return 1;
-    if (name.split(/[^\p{L}\p{N}]+/u).some((word) => word.startsWith(words[0]))) return 2;
-    return words.every((word) => name.includes(word)) ? 3 : 4;
-  };
+  if (!words.length) return everyCommand(commands);
   return commands
     .filter((command) => {
       const all = `${command.path} ${command.name}`.toLowerCase();
       return words.every((word) => all.includes(word));
     })
-    .map((command) => ({ command, rank: rank(command) }))
+    .map((command) => ({ command, rank: rankOf(command, text, words) }))
     .toSorted((a, b) => a.rank - b.rank || Number(!!a.command.off) - Number(!!b.command.off))
     .map(({ command }) => command);
+}
+
+/** Whether a command opens a diagram: a recent one or an example. */
+const opensDiagram = (command: Command) => /Open (recent|example)/.test(command.path);
+
+/** Every command: the usual ones, then the menus in their order, and the diagrams to open last. */
+function everyCommand(commands: Command[]): Command[] {
+  const usual = USUAL.flatMap(
+      (name) =>
+        commands.find((command) => command.name === name && !command.path.includes("▸")) ?? [],
+    ),
+    rest = commands.filter((command) => !usual.includes(command));
+  return [
+    ...usual,
+    ...rest.filter((command) => !opensDiagram(command)),
+    ...rest.filter(opensDiagram),
+  ];
+}
+
+/** How well a command's name answers the text typed: 0 for the best. */
+function rankOf(command: Command, text: string, words: string[]): number {
+  const name = plain(command.name);
+  // A diagram to open is asked for less than a command of the same name.
+  if (opensDiagram(command)) return 5;
+  if (name === text) return 0;
+  if (name.startsWith(text)) return 1;
+  if (name.split(/[^\p{L}\p{N}]+/u).some((word) => word.startsWith(words[0]))) return 2;
+  return words.every((word) => name.includes(word)) ? 3 : 4;
+}
+
+/** What the list of commands says of a command that cannot be run now. */
+function refusalOf(command: Command): string {
+  const why =
+    typeof command.off === "string"
+      ? `${command.off[0].toLowerCase()}${command.off.slice(1)}`
+      : "it does not apply now";
+  return `${command.name} is not available: ${why}.`;
 }
 
 /**
@@ -800,8 +814,14 @@ export function findCommands(commands: Command[], typed: string): Command[] {
 export function commandDialog(commands: Command[]) {
   const existing = document.querySelector<HTMLDialogElement>("dialog.commands");
   if (existing) return existing.close();
-  const list = h("div", { class: "command-list", role: "listbox", id: "command-list" });
-  const field = h("input", {
+  new CommandList(commands).show();
+}
+
+/** The list of all commands while it is open. */
+class CommandList {
+  private readonly commands: Command[];
+  private readonly list = h("div", { class: "command-list", role: "listbox", id: "command-list" });
+  private readonly field = h("input", {
     class: "field",
     type: "text",
     autofocus: true,
@@ -812,77 +832,91 @@ export function commandDialog(commands: Command[]) {
     "aria-controls": "command-list",
     "aria-expanded": "true",
   });
-  const said = h("p", { class: "command-said", role: "status" });
-  said.hidden = true;
-  let found: Command[] = [],
-    at = 0;
-  const mark = (scroll = true) =>
-    [...list.children].forEach((row, index) => {
-      row.setAttribute("aria-selected", String(index === at));
-      if (index === at && scroll) row.scrollIntoView({ block: "nearest" });
+  private readonly said = h("p", { class: "command-said", role: "status" });
+  private readonly box: HTMLDialogElement;
+  /** The commands found for what is typed, and the one marked among them. */
+  private found: Command[] = [];
+  private at = 0;
+
+  constructor(commands: Command[]) {
+    this.commands = commands;
+    this.said.hidden = true;
+    this.field.addEventListener("input", () => this.show());
+    this.field.addEventListener("keydown", (event) => this.key(event));
+    this.box = dialog("commands", "All commands", { body: [this.field, this.list, this.said] });
+  }
+
+  /** Marks the row of the command at `at`, and brings it into view with `scroll`. */
+  private mark(scroll = true) {
+    [...this.list.children].forEach((row, index) => {
+      row.setAttribute("aria-selected", String(index === this.at));
+      if (index === this.at && scroll) row.scrollIntoView({ block: "nearest" });
     });
-  const run = (command: Command | undefined) => {
+  }
+
+  /** Runs a command, or says why it cannot be run now. */
+  private run(command: Command | undefined) {
     if (!command) return;
     if (command.off) {
-      said.textContent = `${command.name} is not available: ${
-        typeof command.off === "string"
-          ? `${command.off[0].toLowerCase()}${command.off.slice(1)}`
-          : "it does not apply now"
-      }.`;
-      said.hidden = false;
+      this.said.textContent = refusalOf(command);
+      this.said.hidden = false;
       return;
     }
-    box.close();
+    this.box.close();
     command.run();
-  };
-  const show = () => {
-    found = findCommands(commands, field.value);
-    said.hidden = true;
-    at = 0;
-    list.replaceChildren(
-      ...(found.length
-        ? found.map((command, index) => {
-            const row = h(
-              "div",
-              {
-                class: "command",
-                role: "option",
-                "aria-disabled": command.off ? "true" : undefined,
-                "data-tip": typeof command.off === "string" ? command.off : undefined,
-                "data-side": "right",
-                onClick: () => run(command),
-                onPointermove: () => {
-                  if (at === index) return;
-                  at = index;
-                  mark(false);
-                },
-              },
-              h("span", { class: "name" }, command.name),
-              h("span", { class: "path" }, command.path),
-              command.key && h("kbd", {}, command.key),
-            );
-            return row;
-          })
+  }
+
+  /** Shows the commands found for what is typed, the first marked. */
+  show() {
+    this.found = findCommands(this.commands, this.field.value);
+    this.said.hidden = true;
+    this.at = 0;
+    this.list.replaceChildren(
+      ...(this.found.length
+        ? this.found.map((command, index) => this.row(command, index))
         : [h("p", { class: "note" }, "No command has these words.")]),
     );
-    list.scrollTop = 0;
-    mark();
-  };
-  field.addEventListener("input", show);
-  field.addEventListener("keydown", (event) => {
-    const step = { ArrowDown: 1, ArrowUp: -1 }[event.key];
-    if (step && found.length) {
+    this.list.scrollTop = 0;
+    this.mark();
+  }
+
+  /** The row of a command: a click runs it, the pointer marks it. */
+  private row(command: Command, index: number) {
+    return h(
+      "div",
+      {
+        class: "command",
+        role: "option",
+        "aria-disabled": command.off ? "true" : undefined,
+        "data-tip": typeof command.off === "string" ? command.off : undefined,
+        "data-side": "right",
+        onClick: () => this.run(command),
+        onPointermove: () => {
+          if (this.at === index) return;
+          this.at = index;
+          this.mark(false);
+        },
+      },
+      h("span", { class: "name" }, command.name),
+      h("span", { class: "path" }, command.path),
+      command.key && h("kbd", {}, command.key),
+    );
+  }
+
+  /** The arrow keys go through the list, Enter runs the marked command. */
+  private key(event: KeyboardEvent) {
+    const step = { ArrowDown: 1, ArrowUp: -1 }[event.key],
+      { length } = this.found;
+    if (step && length) {
       event.preventDefault();
-      at = (at + step + found.length) % found.length;
-      said.hidden = true;
-      mark();
+      this.at = (this.at + step + length) % length;
+      this.said.hidden = true;
+      this.mark();
     } else if (event.key === "Enter") {
       event.preventDefault();
-      run(found[at]);
+      this.run(this.found[this.at]);
     }
-  });
-  const box = dialog("commands", "All commands", { body: [field, list, said] });
-  show();
+  }
 }
 
 /** What the chooser of diagram types needs from the page. */
@@ -1009,127 +1043,205 @@ export function startsOf(info: TypeInfo, recents: Recent[]): Start[] {
  * The arrow keys go through the cards and through the list; Enter creates.
  */
 export function chooser(host: ChooserHost) {
-  const existing = document.querySelector<HTMLDialogElement>("dialog.chooser");
-  if (existing) return;
-  let type = typeInfo(host.current).type,
-    source = "",
-    turn = 0;
-  const starts = h("div", { class: "starts", role: "listbox", "aria-label": "Start from" });
-  const picture = h("img", { alt: "", draggable: "false" }),
-    blank = h("span", { class: "note" }),
-    preview = h("div", { class: "start-preview" }, picture, blank);
-  const create = () => {
-    box.close();
-    host.create(source);
-  };
+  if (document.querySelector<HTMLDialogElement>("dialog.chooser")) return;
+  new Chooser(host).open();
+}
+
+/** Where the keys that move along the list of starts go from the row at `at`. */
+const START_KEYS: Record<string, (at: number, last: number) => number> = {
+  ArrowDown: (at, last) => Math.min(at + 1, last),
+  ArrowUp: (at) => Math.max(at - 1, 0),
+  Home: () => 0,
+  End: (_, last) => last,
+};
+
+/** The chooser of a new diagram while it is open. */
+class Chooser {
+  private readonly host: ChooserHost;
+  /** The type picked, the source of the start picked, and the turn of the picture being drawn. */
+  private type: DiagramType;
+  private source = "";
+  private turn = 0;
+  private readonly starts = h("div", {
+    class: "starts",
+    role: "listbox",
+    "aria-label": "Start from",
+  });
+  private readonly picture = h("img", { alt: "", draggable: "false" });
+  private readonly blank = h("span", { class: "note" });
+  private readonly cards: Map<DiagramType, HTMLButtonElement>;
+  private box: HTMLDialogElement | undefined;
+
+  constructor(host: ChooserHost) {
+    this.host = host;
+    this.type = typeInfo(host.current).type;
+    this.cards = new Map(TYPES.map((info) => [info.type, this.card(info)] as const));
+  }
+
+  /** Opens the dialog with the card of the type on show picked. */
+  open() {
+    const deck = h(
+      "div",
+      { class: "cards", role: "radiogroup", "aria-label": "Diagram type" },
+      ...this.cards.values(),
+    );
+    deck.addEventListener("keydown", (event) => this.deckKey(event));
+    this.starts.addEventListener("keydown", (event) => this.startsKey(event));
+    const preview = h("div", { class: "start-preview" }, this.picture, this.blank);
+    this.box = dialog("chooser", "New diagram", {
+      body: [
+        deck,
+        h("h2", {}, "Start from"),
+        h("div", { class: "starts-row" }, this.starts, preview),
+      ],
+      footer: [
+        this.footerNote(),
+        h(
+          "button",
+          { class: "button outlined", type: "button", onClick: () => this.box?.close() },
+          "Cancel",
+        ),
+        h(
+          "button",
+          { class: "button primary", type: "button", onClick: () => this.create() },
+          "Create",
+        ),
+      ],
+    });
+    this.pick(TYPES.find((info) => info.type === this.type) ?? TYPES[0]);
+    this.cards.get(this.type)?.focus();
+  }
+
+  /** What a new diagram does to the one on show, with a warning where that has unsaved changes. */
+  private footerNote() {
+    if (!this.host.unsaved)
+      return h(
+        "span",
+        { class: "note" },
+        "The new diagram takes the place of the one on show. Undo brings it back.",
+      );
+    return h(
+      "span",
+      { class: "note warning" },
+      icon("warning"),
+      h("span", {}, "The diagram on show has unsaved changes. Undo brings it back."),
+    );
+  }
+
+  private create() {
+    this.box?.close();
+    this.host.create(this.source);
+  }
+
+  /** The card of a type, with a small diagram of it drawn by the library and shown as an image. */
+  private card(info: TypeInfo) {
+    const thumb = h("img", { alt: "", draggable: "false" });
+    void this.host.sketch(thumbOf(info)).then((svg) => {
+      if (svg) showThumb(thumb, svg);
+    });
+    return h(
+      "button",
+      {
+        class: "card",
+        type: "button",
+        role: "radio",
+        "data-tip": info.about,
+        "data-side": "bottom",
+        onClick: () => this.pick(info),
+        onDblclick: () => this.create(),
+      },
+      h("span", { class: "thumb" }, thumb),
+      h("span", { class: "name" }, icon(info.icon), h("span", {}, info.name)),
+      h("span", { class: "badge" }, BADGES[info.mode]),
+    ) as HTMLButtonElement;
+  }
+
+  /** Picks a type: its card is checked, and the list shows what to start a diagram of it from. */
+  private pick(info: TypeInfo) {
+    this.type = info.type;
+    for (const [other, card] of this.cards) {
+      card.setAttribute("aria-checked", String(other === this.type));
+      card.tabIndex = other === this.type ? 0 : -1;
+    }
+    const list = startsOf(info, this.host.recents),
+      rows = list.map((start) => this.startRow(start));
+    this.starts.replaceChildren(...rows);
+    this.choose(rows[0], list[0]);
+    this.starts.scrollTop = 0;
+  }
+
+  /** The row of a start in the list: a click picks it, a double click creates. */
+  private startRow(start: Start) {
+    const row: HTMLElement = h(
+      "div",
+      {
+        class: "start",
+        role: "option",
+        "data-tip": start.name.length > 40 ? start.name : undefined,
+        "data-side": "top",
+        onClick: () => this.choose(row, start, true),
+        onDblclick: () => this.create(),
+      },
+      icon(start.icon),
+      h("span", { class: "name" }, start.name),
+      start.tag && h("span", { class: "tag" }, start.tag),
+    );
+    return row;
+  }
+
   /** Picks a row of the list: it is the one Create starts from, and the picture beside the list shows it. */
-  const choose = (row: HTMLElement, start: Start, focus = false) => {
-    source = start.source;
-    for (const other of starts.children) {
+  private choose(row: HTMLElement, start: Start, focus = false) {
+    this.source = start.source;
+    for (const other of this.starts.children) {
       other.setAttribute("aria-selected", String(other === row));
       (other as HTMLElement).tabIndex = other === row ? 0 : -1;
     }
     row.scrollIntoView({ block: "nearest" });
     if (focus) row.focus();
-    const mine = ++turn;
+    this.showStart(start.source);
+  }
+
+  /** Draws a start beside the list; a drawing that comes after another was asked for is dropped. */
+  private showStart(source: string) {
+    const { picture, blank } = this,
+      mine = ++this.turn;
     picture.hidden = true;
-    blank.textContent = start.source.trim() ? "" : "An empty canvas";
-    if (start.source.trim())
-      void host.sketch(start.source).then((svg) => {
-        if (mine !== turn) return;
-        if (svg) picture.src = svgUrl(svg);
-        picture.hidden = !svg;
-        blank.textContent = svg ? "" : "No picture of this one";
-      });
-  };
-  const pick = (info: TypeInfo) => {
-    type = info.type;
-    for (const [other, card] of cards) {
-      card.setAttribute("aria-checked", String(other === type));
-      card.tabIndex = other === type ? 0 : -1;
-    }
-    const list = startsOf(info, host.recents);
-    const rows = list.map((start) => {
-      const row: HTMLElement = h(
-        "div",
-        {
-          class: "start",
-          role: "option",
-          "data-tip": start.name.length > 40 ? start.name : undefined,
-          "data-side": "top",
-          onClick: () => choose(row, start, true),
-          onDblclick: create,
-        },
-        icon(start.icon),
-        h("span", { class: "name" }, start.name),
-        start.tag && h("span", { class: "tag" }, start.tag),
-      );
-      return row;
+    blank.textContent = source.trim() ? "" : "An empty canvas";
+    if (!source.trim()) return;
+    void this.host.sketch(source).then((svg) => {
+      if (mine !== this.turn) return;
+      if (svg) picture.src = svgUrl(svg);
+      picture.hidden = !svg;
+      blank.textContent = svg ? "" : "No picture of this one";
     });
-    starts.replaceChildren(...rows);
-    choose(rows[0], list[0]);
-    starts.scrollTop = 0;
-  };
-  starts.addEventListener("keydown", (event) => {
-    const rows = [...starts.children] as HTMLElement[],
-      at = rows.findIndex((row) => row.getAttribute("aria-selected") === "true"),
-      to = {
-        ArrowDown: Math.min(at + 1, rows.length - 1),
-        ArrowUp: Math.max(at - 1, 0),
-        Home: 0,
-        End: rows.length - 1,
-      }[event.key];
+  }
+
+  /** The arrow keys, Home and End go through the list of starts; Enter creates. */
+  private startsKey(event: KeyboardEvent) {
     if (event.key === "Enter") {
       event.preventDefault();
-      return create();
+      return this.create();
     }
-    if (to === undefined) return;
+    const rows = [...this.starts.children] as HTMLElement[],
+      at = rows.findIndex((row) => row.getAttribute("aria-selected") === "true"),
+      move = START_KEYS[event.key];
+    if (!move) return;
     event.preventDefault();
-    rows[to]?.click();
-  });
-  const cards = new Map(
-    TYPES.map((info) => {
-      const thumb = h("img", { alt: "", draggable: "false" });
-      // The picture is a small diagram of the type, drawn by the library and shown as an image.
-      void host.sketch(thumbOf(info)).then((svg) => {
-        if (!svg) return;
-        const [, width, height] = svg.match(/width="([\d.]+)" height="([\d.]+)"/) ?? [],
-          wide = Number(width) / Number(height);
-        thumb.classList.toggle("whole", !(wide >= FILLS.least && wide <= FILLS.most));
-        thumb.src = svgUrl(svg);
-      });
-      const card = h(
-        "button",
-        {
-          class: "card",
-          type: "button",
-          role: "radio",
-          "data-tip": info.about,
-          "data-side": "bottom",
-          onClick: () => pick(info),
-          onDblclick: create,
-        },
-        h("span", { class: "thumb" }, thumb),
-        h("span", { class: "name" }, icon(info.icon), h("span", {}, info.name)),
-        h("span", { class: "badge" }, BADGES[info.mode]),
-      );
-      return [info.type, card] as const;
-    }),
-  );
-  const deck = h(
-    "div",
-    { class: "cards", role: "radiogroup", "aria-label": "Diagram type" },
-    ...cards.values(),
-  );
-  deck.addEventListener("keydown", (event) => {
-    const list = [...cards.values()],
+    rows[move(at, rows.length - 1)]?.click();
+  }
+
+  /**
+   * The arrow keys go through the cards; Enter creates. The cards of a row stand at one height: as
+   * many as the first row has make a step up or down.
+   */
+  private deckKey(event: KeyboardEvent) {
+    const list = [...this.cards.values()],
       at = list.indexOf(document.activeElement as HTMLButtonElement);
     if (at < 0) return;
     if (event.key === "Enter") {
       event.preventDefault();
-      return create();
+      return this.create();
     }
-    // The cards of a row stand at one height: as many as the first row has make a step up or down.
     const across = list.filter((card) => card.offsetTop === list[0].offsetTop).length,
       by = { ArrowLeft: -1, ArrowRight: 1, ArrowUp: -across, ArrowDown: across }[event.key];
     if (!by) return;
@@ -1138,30 +1250,13 @@ export function chooser(host: ChooserHost) {
     if (!next) return;
     next.focus();
     next.click();
-  });
-  const box = dialog("chooser", "New diagram", {
-    body: [deck, h("h2", {}, "Start from"), h("div", { class: "starts-row" }, starts, preview)],
-    footer: [
-      host.unsaved
-        ? h(
-            "span",
-            { class: "note warning" },
-            icon("warning"),
-            h("span", {}, "The diagram on show has unsaved changes. Undo brings it back."),
-          )
-        : h(
-            "span",
-            { class: "note" },
-            "The new diagram takes the place of the one on show. Undo brings it back.",
-          ),
-      h(
-        "button",
-        { class: "button outlined", type: "button", onClick: () => box.close() },
-        "Cancel",
-      ),
-      h("button", { class: "button primary", type: "button", onClick: create }, "Create"),
-    ],
-  });
-  pick(TYPES.find((info) => info.type === type) ?? TYPES[0]);
-  cards.get(type)?.focus();
+  }
+}
+
+/** Shows a type's small diagram on its card: it fills the window of the card when it is about as wide, else shows whole. */
+function showThumb(thumb: HTMLImageElement, svg: string) {
+  const [, width, height] = svg.match(/width="([\d.]+)" height="([\d.]+)"/) ?? [],
+    wide = Number(width) / Number(height);
+  thumb.classList.toggle("whole", !(wide >= FILLS.least && wide <= FILLS.most));
+  thumb.src = svgUrl(svg);
 }
