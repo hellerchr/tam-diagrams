@@ -1737,6 +1737,29 @@ function code(text: string): string {
     .join("<br>");
 }
 
+/** The rows of a section as a Markdown table, headed as accepted statements or as refused ones. */
+function table(rows: GuideRow[]): string[] {
+  const refused = rows.every((item) => item.refused);
+  return [
+    "",
+    refused ? "| Not accepted | Why, and what to write |" : "| You write | It means |",
+    "| --- | --- |",
+    ...rows.map((item) => `| ${code(item.write)} | ${cell(item.means)} |`),
+  ];
+}
+
+/** A section of a guide as Markdown: its title, its paragraph, its rules, its table and its example. */
+function sectionMarkdown(section: GuideSection, fence: string): string[] {
+  return [
+    "",
+    `## ${section.title}`,
+    ...(section.prose ? ["", section.prose] : []),
+    ...(section.rules ? ["", ...section.rules.map((rule) => `- ${rule}`)] : []),
+    ...(section.rows?.length ? table(section.rows) : []),
+    ...(section.example ? ["", `\`\`\`${fence}`, section.example, "```"] : []),
+  ];
+}
+
 /** The guide of a type as a Markdown page: the text of docs/guides/<type>.md. */
 export function guideMarkdown(type: string): string {
   const guide = guideOf(type);
@@ -1748,21 +1771,7 @@ export function guideMarkdown(type: string): string {
     "<!-- Written by guideMarkdown in editor/reference.ts: change the guide there, not here. -->",
     "",
     `${guide.about}.`,
+    ...guide.sections.flatMap((section) => sectionMarkdown(section, fence)),
   ];
-  for (const section of guide.sections) {
-    out.push("", `## ${section.title}`);
-    if (section.prose) out.push("", section.prose);
-    if (section.rules) out.push("", ...section.rules.map((rule) => `- ${rule}`));
-    if (section.rows?.length) {
-      const refused = section.rows.every((item) => item.refused);
-      out.push(
-        "",
-        refused ? "| Not accepted | Why, and what to write |" : "| You write | It means |",
-        "| --- | --- |",
-        ...section.rows.map((item) => `| ${code(item.write)} | ${cell(item.means)} |`),
-      );
-    }
-    if (section.example) out.push("", `\`\`\`${fence}`, section.example, "```");
-  }
   return `${out.join("\n")}\n`;
 }
