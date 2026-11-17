@@ -89,79 +89,118 @@ export const escapeAttribute = (text: string) =>
     .replace(/\r/g, "&#13;")
     .replace(/\t/g, "&#9;");
 
+/** Gives up on a file that is not readable XML. */
+const fail = (message: string): never => {
+  throw new DrawioError(`The file is not readable XML: ${message}.`);
+};
+
+/** Where markup that is skipped ends: after `end`, which is to come after `from`. */
+function skipTo(text: string, from: number, end: string, message: string): number {
+  const at = text.indexOf(end, from);
+  return at < 0 ? fail(message) : at + end.length;
+}
+
+/** Where a doctype ends, with an internal subset in brackets perhaps. */
+function doctypeEnd(text: string, lt: number): number {
+  let depth = 0,
+    index = lt + 2;
+  for (; index < text.length; index++) {
+    if (text[index] === "[") depth++;
+    else if (text[index] === "]") depth--;
+    else if (text[index] === ">" && depth <= 0) break;
+  }
+  return index + 1;
+}
+
+/** An attribute of a tag, or the end of the tag (`>` or `/>`). */
+const ATTRIBUTE = /\s*([A-Za-z_:][\w:.-]*)\s*=\s*("([^"]*)"|'([^']*)')|\s*(\/?>)/y;
+
+/** An XML document read markup by markup, with the elements open at the place reached. */
+class XmlParser {
+  private readonly text: string;
+  private readonly root: XmlElement = { name: "#document", attributes: {}, children: [], text: "" };
+  private readonly open: XmlElement[] = [this.root];
+
+  constructor(text: string) {
+    this.text = text;
+  }
+
+  parse(): XmlElement {
+    const { text } = this;
+    let at = 0;
+    while (at < text.length) {
+      const lt = text.indexOf("<", at);
+      if (lt < 0) {
+        this.addText(decodeEntities(text.slice(at)));
+        break;
+      }
+      if (lt > at) this.addText(decodeEntities(text.slice(at, lt)));
+      at = this.markup(lt);
+    }
+    if (this.open.length > 1) fail(`\`<${this.open.at(-1)!.name}>\` is not closed`);
+    const [first] = this.root.children;
+    return first ?? fail("there is no element");
+  }
+
+  private addText(text: string) {
+    this.open.at(-1)!.text += text;
+  }
+
+  /** Reads the markup at `lt`; where the text goes on after it. */
+  private markup(lt: number): number {
+    const { text } = this;
+    if (text.startsWith("<!--", lt)) return skipTo(text, lt + 4, "-->", "a comment does not end");
+    if (text.startsWith("<![CDATA[", lt)) return this.cdata(lt);
+    if (text.startsWith("<?", lt)) return skipTo(text, lt + 2, "?>", "a declaration does not end");
+    if (text.startsWith("<!", lt)) return doctypeEnd(text, lt);
+    if (text[lt + 1] === "/") return this.closing(lt);
+    return this.opening(lt);
+  }
+
+  private cdata(lt: number): number {
+    const end = this.text.indexOf("]]>", lt + 9);
+    if (end < 0) fail("a CDATA section does not end");
+    this.addText(this.text.slice(lt + 9, end));
+    return end + 3;
+  }
+
+  private closing(lt: number): number {
+    const end = this.text.indexOf(">", lt);
+    if (end < 0) fail("a closing tag does not end");
+    const name = this.text.slice(lt + 2, end).trim();
+    const element = this.open.pop();
+    if (!element || element === this.root || element.name !== name)
+      fail(`\`</${name}>\` closes no open \`<${name}>\``);
+    return end + 1;
+  }
+
+  /** A tag that opens an element, or an empty element; its attributes decoded. */
+  private opening(lt: number): number {
+    const { text } = this;
+    const tag = /^<([A-Za-z_:][\w:.-]*)/.exec(text.slice(lt, lt + 200));
+    if (!tag) return fail(`\`${text.slice(lt, lt + 20)}\` is no tag`);
+    const element: XmlElement = { name: tag[1], attributes: {}, children: [], text: "" };
+    let index = lt + tag[0].length;
+    for (;;) {
+      ATTRIBUTE.lastIndex = index;
+      const match = ATTRIBUTE.exec(text) ?? fail(`the tag \`<${element.name}>\` does not end`);
+      index = ATTRIBUTE.lastIndex;
+      if (match[5]) {
+        this.open.at(-1)!.children.push(element);
+        if (match[5] === ">") this.open.push(element);
+        return index;
+      }
+      element.attributes[match[1]] = decodeEntities(match[3] ?? match[4]);
+    }
+  }
+}
+
 /**
  * Reads an XML document into its root element. It reads what draw.io and SVG files hold: elements,
  * attributes, text, CDATA; declarations, comments and doctypes are skipped. Throws DrawioError on
  * markup it cannot read.
  */
-export function parseXml(text: string): XmlElement {
-  const root: XmlElement = { name: "#document", attributes: {}, children: [], text: "" };
-  const open: XmlElement[] = [root];
-  let at = 0;
-  const fail = (message: string): never => {
-    throw new DrawioError(`The file is not readable XML: ${message}.`);
-  };
-  while (at < text.length) {
-    const lt = text.indexOf("<", at);
-    if (lt < 0) {
-      open.at(-1)!.text += decodeEntities(text.slice(at));
-      break;
-    }
-    if (lt > at) open.at(-1)!.text += decodeEntities(text.slice(at, lt));
-    if (text.startsWith("<!--", lt)) {
-      const end = text.indexOf("-->", lt + 4);
-      at = end < 0 ? fail("a comment does not end") : end + 3;
-    } else if (text.startsWith("<![CDATA[", lt)) {
-      const end = text.indexOf("]]>", lt + 9);
-      if (end < 0) fail("a CDATA section does not end");
-      open.at(-1)!.text += text.slice(lt + 9, end);
-      at = end + 3;
-    } else if (text.startsWith("<?", lt)) {
-      const end = text.indexOf("?>", lt + 2);
-      at = end < 0 ? fail("a declaration does not end") : end + 2;
-    } else if (text.startsWith("<!", lt)) {
-      // A doctype, with an internal subset in brackets perhaps.
-      let depth = 0,
-        index = lt + 2;
-      for (; index < text.length; index++) {
-        if (text[index] === "[") depth++;
-        else if (text[index] === "]") depth--;
-        else if (text[index] === ">" && depth <= 0) break;
-      }
-      at = index + 1;
-    } else if (text[lt + 1] === "/") {
-      const end = text.indexOf(">", lt);
-      if (end < 0) fail("a closing tag does not end");
-      const name = text.slice(lt + 2, end).trim();
-      const element = open.pop();
-      if (!element || element === root || element.name !== name)
-        fail(`\`</${name}>\` closes no open \`<${name}>\``);
-      at = end + 1;
-    } else {
-      const tag = /^<([A-Za-z_:][\w:.-]*)/.exec(text.slice(lt, lt + 200));
-      if (!tag) fail(`\`${text.slice(lt, lt + 20)}\` is no tag`);
-      const element: XmlElement = { name: tag![1], attributes: {}, children: [], text: "" };
-      let index = lt + tag![0].length;
-      const attribute = /\s*([A-Za-z_:][\w:.-]*)\s*=\s*("([^"]*)"|'([^']*)')|\s*(\/?>)/y;
-      for (;;) {
-        attribute.lastIndex = index;
-        const match = attribute.exec(text);
-        if (!match) fail(`the tag \`<${element.name}>\` does not end`);
-        index = attribute.lastIndex;
-        if (match![5]) {
-          open.at(-1)!.children.push(element);
-          if (match![5] === ">") open.push(element);
-          break;
-        }
-        element.attributes[match![1]] = decodeEntities(match![3] ?? match![4]);
-      }
-      at = index;
-    }
-  }
-  if (open.length > 1) fail(`\`<${open.at(-1)!.name}>\` is not closed`);
-  const [first] = root.children;
-  return first ?? fail("there is no element");
-}
+export const parseXml = (text: string): XmlElement => new XmlParser(text).parse();
 
 /** The elements under `element`, at any depth, with this name. */
 function* descendants(element: XmlElement, name: string): Generator<XmlElement> {
@@ -276,53 +315,76 @@ const round = (value: number) => String(Math.round(value * 100) / 100);
 // ---------------------------------------------------------------------------------------------
 // Writing
 
-function geometryXml(geometry: Geometry, indent: string): string {
-  const { x, y, width, height, relative, points, sourcePoint, targetPoint, offset } = geometry;
-  const attributes = [
+/** A point as draw.io writes it, with the name of what it is for. */
+const pointXml = (p: Point, as?: string) =>
+  `<mxPoint x="${round(p.x)}" y="${round(p.y)}"${as ? ` as="${as}"` : ""} />`;
+
+/** The attributes of a geometry that are not 0. */
+function geometryAttributes({ x, y, width, height, relative }: Geometry): string {
+  return [
     x ? ` x="${round(x)}"` : "",
     y ? ` y="${round(y)}"` : "",
     width ? ` width="${round(width)}"` : "",
     height ? ` height="${round(height)}"` : "",
     relative ? ` relative="1"` : "",
   ].join("");
-  const point = (p: Point, as?: string) =>
-    `<mxPoint x="${round(p.x)}" y="${round(p.y)}"${as ? ` as="${as}"` : ""} />`;
-  const inner = [
-    sourcePoint ? `${indent}  ${point(sourcePoint, "sourcePoint")}` : "",
-    targetPoint ? `${indent}  ${point(targetPoint, "targetPoint")}` : "",
+}
+
+/** The points of a geometry: an edge's loose ends, its bends, a label's offset. */
+function geometryPoints(geometry: Geometry, indent: string): string[] {
+  const { points, sourcePoint, targetPoint, offset } = geometry;
+  return [
+    sourcePoint ? `${indent}  ${pointXml(sourcePoint, "sourcePoint")}` : "",
+    targetPoint ? `${indent}  ${pointXml(targetPoint, "targetPoint")}` : "",
     points?.length
-      ? `${indent}  <Array as="points">\n${points.map((p) => `${indent}    ${point(p)}`).join("\n")}\n${indent}  </Array>`
+      ? `${indent}  <Array as="points">\n${points.map((p) => `${indent}    ${pointXml(p)}`).join("\n")}\n${indent}  </Array>`
       : "",
-    offset ? `${indent}  ${point(offset, "offset")}` : "",
+    offset ? `${indent}  ${pointXml(offset, "offset")}` : "",
   ].filter(Boolean);
+}
+
+function geometryXml(geometry: Geometry, indent: string): string {
+  const attributes = geometryAttributes(geometry);
+  const inner = geometryPoints(geometry, indent);
   return inner.length
     ? `${indent}<mxGeometry${attributes} as="geometry">\n${inner.join("\n")}\n${indent}</mxGeometry>`
     : `${indent}<mxGeometry${attributes} as="geometry" />`;
 }
 
+/** An attribute as written, or nothing for no value. */
+const attributeXml = (name: string, value: string | undefined) =>
+  value === undefined ? "" : ` ${name}="${escapeAttribute(value)}"`;
+
+/** The indent of a cell in the file. */
+const CELL_INDENT = "        ";
+
 function cellXml(cell: Cell): string {
-  const indent = "        ";
-  const attribute = (name: string, value: string | undefined) =>
-    value === undefined ? "" : ` ${name}="${escapeAttribute(value)}"`;
+  const indent = CELL_INDENT;
   const flags = [
-    attribute("style", cell.style),
+    attributeXml("style", cell.style),
     cell.vertex ? ` vertex="1"` : "",
     cell.edge ? ` edge="1"` : "",
     cell.connectable === false ? ` connectable="0"` : "",
-    attribute("parent", cell.parent),
-    attribute("source", cell.source),
-    attribute("target", cell.target),
+    attributeXml("parent", cell.parent),
+    attributeXml("source", cell.source),
+    attributeXml("target", cell.target),
   ].join("");
+  if (cell.data) return objectXml(cell, cell.data, flags);
   const body = cell.geometry ? `\n${geometryXml(cell.geometry, `${indent}  `)}\n${indent}` : "";
   const closing = body ? `>${body}</mxCell>` : " />";
-  if (!cell.data)
-    return `${indent}<mxCell${attribute("id", cell.id)}${attribute("value", cell.value)}${flags}${closing}`;
-  // Properties go on an <object> around the cell, which then carries the id and the label.
-  const data = Object.entries(cell.data)
-    .map(([name, value]) => attribute(name, value))
+  return `${indent}<mxCell${attributeXml("id", cell.id)}${attributeXml("value", cell.value)}${flags}${closing}`;
+}
+
+/** A cell with properties: they go on an <object> around the cell, which then carries the id and the label. */
+function objectXml(cell: Cell, properties: Record<string, string>, flags: string): string {
+  const indent = CELL_INDENT;
+  const data = Object.entries(properties)
+    .map(([name, value]) => attributeXml(name, value))
     .join("");
-  const inner = body ? `\n${geometryXml(cell.geometry!, `${indent}    `)}\n${indent}  ` : "";
-  return `${indent}<object${attribute("label", cell.value)}${data}${attribute("id", cell.id)}>\n${indent}  <mxCell${flags}${inner ? `>${inner}</mxCell>` : " />"}\n${indent}</object>`;
+  const inner = cell.geometry
+    ? `\n${geometryXml(cell.geometry, `${indent}    `)}\n${indent}  `
+    : "";
+  return `${indent}<object${attributeXml("label", cell.value)}${data}${attributeXml("id", cell.id)}>\n${indent}  <mxCell${flags}${inner ? `>${inner}</mxCell>` : " />"}\n${indent}</object>`;
 }
 
 /** The root and the layer every page starts with; cells with no parent of their own go in the layer. */
@@ -387,34 +449,55 @@ function readGeometry(element: XmlElement): Geometry {
 /** The cells of a graph model: `<mxCell>`s, and `<object>`/`<UserObject>`s around one. */
 function readCells(model: XmlElement): Cell[] {
   const root = model.children.find((child) => child.name === "root");
-  if (!root) return [];
-  const cells: Cell[] = [];
-  for (const element of root.children) {
-    const wrapped = element.name === "object" || element.name === "UserObject";
-    const node = wrapped ? element.children.find((child) => child.name === "mxCell") : element;
-    if (!node || node.name !== "mxCell") continue;
-    const { attributes } = node;
-    const cell: Cell = { id: (wrapped ? element : node).attributes.id ?? "" };
-    if (attributes.parent !== undefined) cell.parent = attributes.parent;
-    const value = wrapped ? element.attributes.label : attributes.value;
-    if (value !== undefined) cell.value = value;
-    if (attributes.style !== undefined) cell.style = attributes.style;
-    if (attributes.vertex === "1") cell.vertex = true;
-    if (attributes.edge === "1") cell.edge = true;
-    if (attributes.connectable === "0") cell.connectable = false;
-    if (attributes.source !== undefined) cell.source = attributes.source;
-    if (attributes.target !== undefined) cell.target = attributes.target;
-    const geometry = node.children.find((child) => child.name === "mxGeometry");
-    if (geometry) cell.geometry = readGeometry(geometry);
-    if (wrapped) {
-      const data = Object.fromEntries(
-        Object.entries(element.attributes).filter(([key]) => key !== "id" && key !== "label"),
-      );
-      if (Object.keys(data).length) cell.data = data;
-    }
-    cells.push(cell);
-  }
-  return cells;
+  return root ? root.children.flatMap((element) => readCell(element) ?? []) : [];
+}
+
+/** The attributes of a cell that are copied as they are. */
+type Copied = "parent" | "style" | "source" | "target";
+
+function copy(cell: Cell, attributes: Record<string, string>, key: Copied) {
+  if (attributes[key] !== undefined) cell[key] = attributes[key];
+}
+
+/** A cell, from an `<mxCell>` or the `<object>` around one; none from another element. */
+function readCell(element: XmlElement): Cell | undefined {
+  const wrapped = element.name === "object" || element.name === "UserObject";
+  const node = cellNode(element, wrapped);
+  if (!node) return undefined;
+  const { attributes } = node;
+  const cell: Cell = { id: (wrapped ? element : node).attributes.id ?? "" };
+  copy(cell, attributes, "parent");
+  const value = wrapped ? element.attributes.label : attributes.value;
+  if (value !== undefined) cell.value = value;
+  copy(cell, attributes, "style");
+  readFlags(cell, attributes);
+  copy(cell, attributes, "source");
+  copy(cell, attributes, "target");
+  const geometry = node.children.find((child) => child.name === "mxGeometry");
+  if (geometry) cell.geometry = readGeometry(geometry);
+  if (wrapped) addData(cell, element.attributes);
+  return cell;
+}
+
+/** The `<mxCell>` an element is, or holds as the `<object>` around it. */
+function cellNode(element: XmlElement, wrapped: boolean): XmlElement | undefined {
+  const node = wrapped ? element.children.find((child) => child.name === "mxCell") : element;
+  return node?.name === "mxCell" ? node : undefined;
+}
+
+/** Whether a cell is a vertex or an edge, and whether connections may end at it. */
+function readFlags(cell: Cell, attributes: Record<string, string>) {
+  if (attributes.vertex === "1") cell.vertex = true;
+  if (attributes.edge === "1") cell.edge = true;
+  if (attributes.connectable === "0") cell.connectable = false;
+}
+
+/** The properties on the `<object>` around a cell: its attributes but the id and the label. */
+function addData(cell: Cell, attributes: Record<string, string>) {
+  const data = Object.fromEntries(
+    Object.entries(attributes).filter(([key]) => key !== "id" && key !== "label"),
+  );
+  if (Object.keys(data).length) cell.data = data;
 }
 
 const base64Bytes = (text: string) => {
@@ -463,29 +546,27 @@ export const isDrawio = (text: string) =>
   ) ||
   (/<svg\b/.test(text) && /\bcontent="[^"]*(?:&lt;|<)mxfile/.test(text));
 
+/** The draw.io document of a file: itself, or the one in an SVG's `content` attribute. */
+function documentOf(text: string): XmlElement {
+  const document = parseXml(text.replace(/^\uFEFF/, ""));
+  if (document.name !== "svg") return document;
+  const content = document.attributes.content;
+  if (!content) throw new DrawioError("The SVG file carries no draw.io diagram.");
+  return parseXml(content);
+}
+
 /**
  * The pages of a draw.io file: an `.drawio` file (compressed or not), a bare graph model, or an
  * `.drawio.svg` with the diagram in its `content` attribute. Throws DrawioError for anything else.
  */
 export async function readDrawio(text: string): Promise<Page[]> {
-  let document = parseXml(text.replace(/^\uFEFF/, ""));
-  if (document.name === "svg") {
-    const content = document.attributes.content;
-    if (!content) throw new DrawioError("The SVG file carries no draw.io diagram.");
-    document = parseXml(content);
-  }
+  const document = documentOf(text);
   if (document.name === "mxGraphModel") return [{ name: "Page-1", cells: readCells(document) }];
   if (document.name !== "mxfile")
     throw new DrawioError(`The file is no draw.io diagram: it starts with \`<${document.name}>\`.`);
   const pages: Page[] = [];
   for (const diagram of descendants(document, "diagram")) {
-    let model = diagram.children.find((child) => child.name === "mxGraphModel");
-    if (!model && diagram.text.trim()) {
-      const xml = await inflatePage(diagram.text.trim());
-      model = parseXml(xml);
-      if (model.name !== "mxGraphModel")
-        throw new DrawioError("A compressed page of the file holds no graph model.");
-    }
+    const model = await modelOf(diagram);
     pages.push({
       name: diagram.attributes.name ?? `Page-${pages.length + 1}`,
       ...(diagram.attributes.id ? { id: diagram.attributes.id } : {}),
@@ -494,6 +575,16 @@ export async function readDrawio(text: string): Promise<Page[]> {
   }
   if (!pages.length) throw new DrawioError("The draw.io file has no pages.");
   return pages;
+}
+
+/** The graph model of a page: in it, or compressed as its text. */
+async function modelOf(diagram: XmlElement): Promise<XmlElement | undefined> {
+  const model = diagram.children.find((child) => child.name === "mxGraphModel");
+  if (model || !diagram.text.trim()) return model;
+  const inflated = parseXml(await inflatePage(diagram.text.trim()));
+  if (inflated.name !== "mxGraphModel")
+    throw new DrawioError("A compressed page of the file holds no graph model.");
+  return inflated;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -583,38 +674,43 @@ export class Drawing {
     this.boxes.set(cell.id, { x: 0, y: 0, width: 0, height: 0 });
     const geometry = cell.geometry ?? { x: 0, y: 0, width: 0, height: 0 };
     const parent = this.parentOf(cell);
-    let box: Box;
-    if (geometry.relative && parent?.edge) {
-      // A mark on an edge: x along the edge from -1 to 1, y across it, then the offset; that is the
-      // mark's corner (mxGraphView.getPoint).
-      const along = this.along(this.path(parent), (geometry.x + 1) / 2);
-      const offset = geometry.offset ?? { x: 0, y: 0 };
-      box = {
-        x: along.point.x + along.normal.x * geometry.y + offset.x,
-        y: along.point.y + along.normal.y * geometry.y + offset.y,
-        width: geometry.width,
-        height: geometry.height,
-      };
-    } else if (geometry.relative && parent?.vertex) {
-      const outer = this.box(parent),
-        offset = geometry.offset ?? { x: 0, y: 0 };
-      box = {
-        x: outer.x + geometry.x * outer.width + offset.x,
-        y: outer.y + geometry.y * outer.height + offset.y,
-        width: geometry.width,
-        height: geometry.height,
-      };
-    } else {
-      const origin = this.origin(cell);
-      box = {
-        x: origin.x + geometry.x,
-        y: origin.y + geometry.y,
-        width: geometry.width,
-        height: geometry.height,
-      };
-    }
+    const corner = geometry.relative && parent ? this.relativeCorner(geometry, parent) : undefined;
+    const origin = this.origin(cell);
+    const box = {
+      ...(corner ?? { x: origin.x + geometry.x, y: origin.y + geometry.y }),
+      width: geometry.width,
+      height: geometry.height,
+    };
     this.boxes.set(cell.id, box);
     return box;
+  }
+
+  /**
+   * The corner of a cell placed relative to its parent. A mark on an edge: x along the edge from -1
+   * to 1, y across it, then the offset (mxGraphView.getPoint). In a vertex: x and y as shares of
+   * its size, then the offset.
+   */
+  private relativeCorner(geometry: Geometry, parent: Cell): Point | undefined {
+    const offset = geometry.offset ?? { x: 0, y: 0 };
+    if (parent.edge) {
+      const along = this.along(this.path(parent), (geometry.x + 1) / 2);
+      return {
+        x: along.point.x + along.normal.x * geometry.y + offset.x,
+        y: along.point.y + along.normal.y * geometry.y + offset.y,
+      };
+    }
+    if (!parent.vertex) return undefined;
+    const outer = this.box(parent);
+    return {
+      x: outer.x + geometry.x * outer.width + offset.x,
+      y: outer.y + geometry.y * outer.height + offset.y,
+    };
+  }
+
+  /** The vertex an edge's end is connected to. */
+  private terminal(id: string | undefined): Cell | undefined {
+    const terminal = id ? this.cells.get(id) : undefined;
+    return terminal?.vertex ? terminal : undefined;
   }
 
   /**
@@ -627,115 +723,91 @@ export class Drawing {
     const known = this.paths.get(edge.id);
     if (known) return known;
     this.paths.set(edge.id, []);
-    const geometry = edge.geometry ?? { x: 0, y: 0, width: 0, height: 0 };
-    const origin = this.origin(edge);
-    const shift = (p: Point) => ({ x: p.x + origin.x, y: p.y + origin.y });
-    const bends = (geometry.points ?? []).map(shift);
-    const style = this.style(edge);
-    const orthogonal =
-      isOn(style, "orthogonal") ||
-      /^(orthogonal|elbow|entityRelation|segment|isometric)EdgeStyle$/.test(
-        style.get("edgeStyle") ?? "",
-      );
-    const terminalOf = (id: string | undefined) => {
-      const terminal = id ? this.cells.get(id) : undefined;
-      return terminal?.vertex ? terminal : undefined;
-    };
-    /** An end that does not float: pinned to its shape, or loose on the page. */
-    const fixed = (id: string | undefined, loose: Point | undefined, side: "exit" | "entry") => {
-      const terminal = terminalOf(id);
-      if (!terminal) return loose ? shift(loose) : undefined;
-      const fx = style.get(`${side}X`),
-        fy = style.get(`${side}Y`);
-      if (fx === undefined || fy === undefined) return undefined;
-      const box = this.box(terminal);
-      return {
-        x: box.x + Number(fx) * box.width + number(style.get(`${side}Dx`)),
-        y: box.y + Number(fy) * box.height + number(style.get(`${side}Dy`)),
-      };
-    };
-    const center = (id: string | undefined) => {
-      const terminal = terminalOf(id);
-      if (!terminal) return undefined;
-      const box = this.box(terminal);
-      return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
-    };
-    const pinnedStart = fixed(edge.source, geometry.sourcePoint, "exit"),
-      pinnedEnd = fixed(edge.target, geometry.targetPoint, "entry");
-    const edgeStyle = style.get("edgeStyle") ?? "";
-    const boxOf = (id: string | undefined, pinned: Point | undefined) => {
-      const terminal = terminalOf(id);
-      return pinned
-        ? { x: pinned.x, y: pinned.y, width: 0, height: 0 }
-        : terminal && this.box(terminal);
-    };
-    const sourceBox = boxOf(edge.source, pinnedStart),
-      targetBox = boxOf(edge.target, pinnedEnd);
-    // An elbow edge without bends of its own bends where draw.io's elbow router puts them, and its
-    // ends follow its bends; so do the ends of other edges, the target's after the source's.
-    let routed = bends;
-    if (!bends.length && edgeStyle === "elbowEdgeStyle" && sourceBox && targetBox)
-      routed = elbow(sourceBox, targetBox, style.get("elbow") === "vertical");
-    // draw.io's orthogonal router leaves a shape from the middle of a side; the others leave it
-    // where the line toward the next point crosses its outline.
-    const floating = (id: string | undefined, toward: Point | undefined) => {
-      const terminal = terminalOf(id)!;
-      const box = this.box(terminal);
-      if (!toward) return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
-      if (edgeStyle === "orthogonalEdgeStyle") return facing(box, toward);
-      return perimeter(box, toward, shapeOf(this.style(terminal)), orthogonal);
-    };
-    const middle = (box: Box | undefined) =>
-      box && { x: box.x + box.width / 2, y: box.y + box.height / 2 };
-    const start =
-      pinnedStart ??
-      (terminalOf(edge.source)
-        ? floating(edge.source, routed[0] ?? pinnedEnd ?? middle(targetBox))
-        : undefined);
-    const finish =
-      pinnedEnd ??
-      (terminalOf(edge.target)
-        ? floating(edge.target, routed.at(-1) ?? start ?? middle(sourceBox))
-        : undefined);
-    // An orthogonal edge without bends of its own makes an L or a Z between its ends; between two
-    // floating ends of shapes that share no span, draw.io leaves the source above or below and
-    // makes one L into the side of the target.
-    let ends = { start, finish };
-    if (!bends.length && edgeStyle === "orthogonalEdgeStyle" && start && finish) {
-      const apart =
-        !pinnedStart &&
-        !pinnedEnd &&
-        sourceBox &&
-        targetBox &&
-        terminalOf(edge.source) &&
-        terminalOf(edge.target) &&
-        !sharesSpan(sourceBox, targetBox, "x") &&
-        !sharesSpan(sourceBox, targetBox, "y");
-      if (apart) {
-        // The vertical leg stands at the upper shape: down out of the source's bottom into the
-        // side of a target below it, or out of the source's side up into a target above.
-        const s = sourceBox,
-          t = targetBox;
-        if (t.y > s.y) {
-          const leave = { x: s.x + s.width / 2, y: s.y + s.height },
-            enter = { x: t.x > s.x ? t.x : t.x + t.width, y: t.y + t.height / 2 };
-          ends = { start: leave, finish: enter };
-          routed = [{ x: leave.x, y: enter.y }];
-        } else {
-          const leave = { x: t.x > s.x ? s.x + s.width : s.x, y: s.y + s.height / 2 },
-            enter = { x: t.x + t.width / 2, y: t.y + t.height };
-          ends = { start: leave, finish: enter };
-          routed = [{ x: enter.x, y: leave.y }];
-        }
-      } else routed = route(start, finish, sourceBox, targetBox);
-    }
-    const path = [
-      ...(ends.start ? [ends.start] : []),
-      ...routed,
-      ...(ends.finish ? [ends.finish] : []),
-    ];
+    const path = this.trace(edge);
     this.paths.set(edge.id, path);
     return path;
+  }
+
+  private trace(edge: Cell): Point[] {
+    const style = this.style(edge);
+    const ends = this.terminals(edge, style);
+    // The ends follow the bends, the target's after the source's.
+    const routed = elbowed(ends, style);
+    const { start, finish } = this.floatingEnds(edge, style, ends, routed);
+    if (ends.bends.length || style.get("edgeStyle") !== "orthogonalEdgeStyle" || !start || !finish)
+      return joined(start, routed, finish);
+    const floats =
+      !ends.start && !ends.end && !!this.terminal(edge.source) && !!this.terminal(edge.target);
+    return orthogonalPath(start, finish, ends.from, ends.to, floats);
+  }
+
+  /**
+   * What an edge's own geometry and style say of its course: its bends on the page, the ends that
+   * do not float, and the boxes its ends stand on.
+   */
+  private terminals(edge: Cell, style: Style): Terminals {
+    const geometry = edge.geometry ?? { x: 0, y: 0, width: 0, height: 0 };
+    const origin = this.origin(edge);
+    const shift = (p: Point | undefined) => p && { x: p.x + origin.x, y: p.y + origin.y };
+    const bends = (geometry.points ?? []).map((p) => shift(p)!);
+    const start = this.pinned(edge.source, shift(geometry.sourcePoint), style, "exit"),
+      end = this.pinned(edge.target, shift(geometry.targetPoint), style, "entry");
+    return {
+      bends,
+      start,
+      end,
+      from: this.endBox(edge.source, start),
+      to: this.endBox(edge.target, end),
+    };
+  }
+
+  /** The ends of an edge: pinned, or floating toward the next point, the target's after the source's. */
+  private floatingEnds(edge: Cell, style: Style, ends: Terminals, routed: Point[]) {
+    const start =
+      ends.start ?? this.floating(edge.source, routed[0] ?? ends.end ?? middleOf(ends.to), style);
+    const finish =
+      ends.end ?? this.floating(edge.target, routed.at(-1) ?? start ?? middleOf(ends.from), style);
+    return { start, finish };
+  }
+
+  /** An end that does not float: pinned to its shape, or loose on the page. */
+  private pinned(
+    id: string | undefined,
+    loose: Point | undefined,
+    style: Style,
+    side: "exit" | "entry",
+  ): Point | undefined {
+    const terminal = this.terminal(id);
+    if (!terminal) return loose;
+    const fx = style.get(`${side}X`),
+      fy = style.get(`${side}Y`);
+    if (fx === undefined || fy === undefined) return undefined;
+    const box = this.box(terminal);
+    return {
+      x: box.x + Number(fx) * box.width + number(style.get(`${side}Dx`)),
+      y: box.y + Number(fy) * box.height + number(style.get(`${side}Dy`)),
+    };
+  }
+
+  /** The box an end stands on: the point it is pinned to, else its shape's. */
+  private endBox(id: string | undefined, pinned: Point | undefined): Box | undefined {
+    if (pinned) return { x: pinned.x, y: pinned.y, width: 0, height: 0 };
+    const terminal = this.terminal(id);
+    return terminal && this.box(terminal);
+  }
+
+  /**
+   * A floating end on its shape, toward the next point. draw.io's orthogonal router leaves a shape
+   * from the middle of a side; the others leave it where the line toward the next point crosses
+   * its outline.
+   */
+  private floating(id: string | undefined, toward: Point | undefined, style: Style) {
+    const terminal = this.terminal(id);
+    if (!terminal) return undefined;
+    const box = this.box(terminal);
+    if (!toward) return middleOf(box);
+    if (style.get("edgeStyle") === "orthogonalEdgeStyle") return facing(box, toward);
+    return perimeter(box, toward, shapeOf(this.style(terminal)), isOrthogonal(style));
   }
 
   /** The point at a share (0 to 1) of a path's length, and the normal draw.io moves a label along with its y. */
@@ -759,6 +831,77 @@ export class Drawing {
     }
     return { point: path.at(-1)!, normal: { x: 0, y: -1 } };
   }
+}
+
+/** Whether an edge runs at right angles. */
+const isOrthogonal = (style: Style) =>
+  isOn(style, "orthogonal") ||
+  /^(orthogonal|elbow|entityRelation|segment|isometric)EdgeStyle$/.test(
+    style.get("edgeStyle") ?? "",
+  );
+
+/** The middle of a box, if there is one. */
+const middleOf = (box: Box | undefined): Point | undefined =>
+  box && { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+
+/**
+ * The bends of an edge: its own, or for an elbow edge without any where draw.io's elbow router
+ * puts them.
+ */
+function elbowed({ bends, from, to }: Terminals, style: Style): Point[] {
+  if (bends.length || style.get("edgeStyle") !== "elbowEdgeStyle" || !from || !to) return bends;
+  return elbow(from, to, style.get("elbow") === "vertical");
+}
+
+/** A path from its ends, where it has them, and its bends. */
+const joined = (start: Point | undefined, bends: Point[], finish: Point | undefined) => [
+  ...(start ? [start] : []),
+  ...bends,
+  ...(finish ? [finish] : []),
+];
+
+/** An edge's own bends, its pinned ends, and the boxes its ends stand on. */
+interface Terminals {
+  bends: Point[];
+  start?: Point;
+  end?: Point;
+  from?: Box;
+  to?: Box;
+}
+
+/**
+ * An orthogonal edge without bends of its own: an L or a Z between its ends; between two floating
+ * ends of shapes that share no span, draw.io leaves the source above or below and makes one L into
+ * the side of the target.
+ */
+function orthogonalPath(
+  start: Point,
+  finish: Point,
+  from: Box | undefined,
+  to: Box | undefined,
+  floats: boolean,
+): Point[] {
+  if (floats && from && to && apart(from, to)) return lBetween(from, to);
+  return [start, ...route(start, finish, from, to), finish];
+}
+
+/** Whether two boxes share no span, across or down. */
+const apart = (a: Box, b: Box) => !sharesSpan(a, b, "x") && !sharesSpan(a, b, "y");
+
+/**
+ * The L of an orthogonal edge between shapes that share no span. Its upright leg stands at the
+ * upper shape: down out of the source's bottom into the side of a target below it, or out of the
+ * source's side up into a target above.
+ */
+function lBetween(s: Box, t: Box): Point[] {
+  if (t.y > s.y) {
+    const leave = { x: s.x + s.width / 2, y: s.y + s.height },
+      enter = { x: t.x > s.x ? t.x : t.x + t.width, y: t.y + t.height / 2 };
+    return [leave, { x: leave.x, y: enter.y }, enter];
+  }
+  const leave = { x: t.x > s.x ? s.x + s.width : s.x, y: s.y + s.height / 2 },
+    enter = { x: t.x + t.width / 2, y: t.y + t.height };
+  return [leave, { x: enter.x, y: leave.y }, enter];
 }
 
 /** The middle of the side of a box that faces a point. */
@@ -803,21 +946,24 @@ function route(start: Point, end: Point, from: Box | undefined, to: Box | undefi
   if (Math.abs(start.x - end.x) < 0.5 || Math.abs(start.y - end.y) < 0.5) return [];
   const leaves = across(from, start) ?? true,
     enters = across(to, end) ?? leaves;
-  if (leaves && enters) {
+  if (leaves !== enters) return [leaves ? { x: end.x, y: start.y } : { x: start.x, y: end.y }];
+  return zBends(start, end, leaves);
+}
+
+/** The two bends of a Z halfway between two points: across from side to side, or else down. */
+function zBends(start: Point, end: Point, sideways: boolean): Point[] {
+  if (sideways) {
     const x = (start.x + end.x) / 2;
     return [
       { x, y: start.y },
       { x, y: end.y },
     ];
   }
-  if (!leaves && !enters) {
-    const y = (start.y + end.y) / 2;
-    return [
-      { x: start.x, y },
-      { x: end.x, y },
-    ];
-  }
-  return [leaves ? { x: end.x, y: start.y } : { x: start.x, y: end.y }];
+  const y = (start.y + end.y) / 2;
+  return [
+    { x: start.x, y },
+    { x: end.x, y },
+  ];
 }
 
 /**
@@ -827,41 +973,38 @@ function route(start: Point, end: Point, from: Box | undefined, to: Box | undefi
  * out; where fewer than two are left, one stands in the middle of the span between the boxes.
  */
 function elbow(from: Box, to: Box, vertical: boolean): Point[] {
-  const inside = (box: Box, point: Point) =>
-    point.x >= box.x &&
-    point.x <= box.x + box.width &&
-    point.y >= box.y &&
-    point.y <= box.y + box.height;
-  const outside = (point: Point) => !inside(from, point) && !inside(to, point);
-  /** The middle of the gap between the boxes along an axis, or of the span they share. */
-  const middle = (axis: "x" | "y") => {
-    const size = axis === "x" ? "width" : "height";
-    const low = Math.max(from[axis], to[axis]),
-      high = Math.min(from[axis] + from[size], to[axis] + to[size]);
-    return high + (low - high) / 2;
-  };
-  if (vertical) {
-    const y = middle("y");
-    const points = [
-      { x: from.x + from.width / 2, y },
-      { x: to.x + to.width / 2, y },
-    ].filter(outside);
-    if (points.length < 2) {
-      const extra = { x: middle("x"), y };
-      if (outside(extra) && !points.some((point) => point.x === extra.x)) points.push(extra);
-    }
-    return points;
-  }
-  const x = middle("x");
+  const outside = (point: Point) => !holds(from, point) && !holds(to, point);
+  const [along, across]: ("x" | "y")[] = vertical ? ["y", "x"] : ["x", "y"];
+  const point = (at: number, side: number): Point =>
+    vertical ? { x: side, y: at } : { x: at, y: side };
+  const middle = (axis: "x" | "y") => gapMiddle(from, to, axis);
+  const at = middle(along);
+  const size = across === "x" ? "width" : "height";
   const points = [
-    { x, y: from.y + from.height / 2 },
-    { x, y: to.y + to.height / 2 },
+    point(at, from[across] + from[size] / 2),
+    point(at, to[across] + to[size] / 2),
   ].filter(outside);
   if (points.length < 2) {
-    const extra = { x, y: middle("y") };
-    if (outside(extra) && !points.some((point) => point.y === extra.y)) points.push(extra);
+    const extra = point(at, middle(across));
+    if (outside(extra) && !points.some((item) => item[across] === extra[across]))
+      points.push(extra);
   }
   return points;
+}
+
+/** Whether a box holds a point, its outline included. */
+const holds = (box: Box, point: Point) =>
+  point.x >= box.x &&
+  point.x <= box.x + box.width &&
+  point.y >= box.y &&
+  point.y <= box.y + box.height;
+
+/** The middle of the gap between two boxes along an axis, or of the span they share. */
+function gapMiddle(from: Box, to: Box, axis: "x" | "y"): number {
+  const size = axis === "x" ? "width" : "height";
+  const low = Math.max(from[axis], to[axis]),
+    high = Math.min(from[axis] + from[size], to[axis] + to[size]);
+  return high + (low - high) / 2;
 }
 
 /**
@@ -875,34 +1018,49 @@ function perimeter(box: Box, next: Point, shape: string, orthogonal: boolean): P
   const dx = next.x - cx,
     dy = next.y - cy;
   if (!dx && !dy) return { x: cx, y: cy };
-  if (shape === "ellipse" || shape === "doubleEllipse" || shape === "rhombus") {
-    const a = box.width / 2 || 1,
-      b = box.height / 2 || 1;
-    const t =
-      shape === "rhombus"
-        ? 1 / (Math.abs(dx) / a + Math.abs(dy) / b)
-        : 1 / Math.sqrt((dx * dx) / (a * a) + (dy * dy) / (b * b));
-    return { x: exact(cx + dx * t), y: exact(cy + dy * t) };
-  }
-  const alpha = Math.atan2(dy, dx),
-    t = Math.atan2(box.height, box.width);
-  const point =
-    alpha < -Math.PI + t || alpha > Math.PI - t
-      ? { x: box.x, y: cy - (box.width * Math.tan(alpha)) / 2 }
-      : alpha < -t
-        ? { x: cx - box.height / (2 * Math.tan(alpha)), y: box.y }
-        : alpha < t
-          ? { x: box.x + box.width, y: cy + (box.width * Math.tan(alpha)) / 2 }
-          : { x: cx + box.height / (2 * Math.tan(alpha)), y: box.y + box.height };
-  if (orthogonal) {
-    if (next.x >= box.x && next.x <= box.x + box.width) point.x = next.x;
-    else if (next.y >= box.y && next.y <= box.y + box.height) point.y = next.y;
-    if (next.x < box.x) point.x = box.x;
-    else if (next.x > box.x + box.width) point.x = box.x + box.width;
-    if (next.y < box.y) point.y = box.y;
-    else if (next.y > box.y + box.height) point.y = box.y + box.height;
-  }
-  return { x: exact(point.x), y: exact(point.y) };
+  if (shape === "ellipse" || shape === "doubleEllipse" || shape === "rhombus")
+    return roundPerimeter(box, dx, dy, shape === "rhombus");
+  const point = rectanglePerimeter(box, Math.atan2(dy, dx));
+  const meets = orthogonal ? orthogonalPerimeter(point, box, next) : point;
+  return { x: exact(meets.x), y: exact(meets.y) };
+}
+
+/** Where the line from an ellipse's or a rhombus's middle toward `dx`, `dy` crosses its outline. */
+function roundPerimeter(box: Box, dx: number, dy: number, rhombus: boolean): Point {
+  const a = box.width / 2 || 1,
+    b = box.height / 2 || 1;
+  const t = rhombus
+    ? 1 / (Math.abs(dx) / a + Math.abs(dy) / b)
+    : 1 / Math.sqrt((dx * dx) / (a * a) + (dy * dy) / (b * b));
+  return { x: exact(box.x + box.width / 2 + dx * t), y: exact(box.y + box.height / 2 + dy * t) };
+}
+
+/** Where a line from a box's middle at the angle `alpha` crosses its outline. */
+export function rectanglePerimeter(box: Box, alpha: number): Point {
+  const cx = box.x + box.width / 2,
+    cy = box.y + box.height / 2,
+    corner = Math.atan2(box.height, box.width);
+  if (alpha < -Math.PI + corner || alpha > Math.PI - corner)
+    return { x: box.x, y: cy - (box.width * Math.tan(alpha)) / 2 };
+  if (alpha < -corner) return { x: cx - box.height / (2 * Math.tan(alpha)), y: box.y };
+  if (alpha < corner) return { x: box.x + box.width, y: cy + (box.width * Math.tan(alpha)) / 2 };
+  return { x: cx + box.height / (2 * Math.tan(alpha)), y: box.y + box.height };
+}
+
+/**
+ * Where an orthogonal edge meets a shape: straight across from the next point where that lies
+ * within the shape's width or height, on the side toward it otherwise.
+ */
+export function orthogonalPerimeter(point: Point, box: Box, next: Point): Point {
+  const right = box.x + box.width,
+    bottom = box.y + box.height;
+  const acrossX = next.x >= box.x && next.x <= right,
+    acrossY = next.y >= box.y && next.y <= bottom;
+  if (acrossX) point.x = next.x;
+  else if (acrossY) point.y = next.y;
+  if (!acrossX) point.x = next.x < box.x ? box.x : right;
+  if (!acrossY) point.y = next.y < box.y ? box.y : bottom;
+  return point;
 }
 
 /** A coordinate without the dust of floating point. */

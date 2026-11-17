@@ -35,6 +35,7 @@ import {
   labelAt,
   readingOrder,
   pageTitle,
+  quotedOr,
   roleOf,
   titleCell,
   TAMSHAPES,
@@ -42,7 +43,12 @@ import {
 } from "./drawio-shapes.ts";
 import { around, type Box, inside, type Point, type Scene, type SceneShape } from "./scene.ts";
 import { chainOf, sceneTree } from "./scene-tree.ts";
-import { parseStateDiagram, type StateDiagram } from "./uml-state.ts";
+import {
+  parseStateDiagram,
+  type StateDiagram,
+  type StateNote,
+  type UmlState,
+} from "./uml-state.ts";
 import { escapeText } from "./uml-state-edit.ts";
 import { STYLING } from "./uml.ts";
 
@@ -89,161 +95,180 @@ const centerOf = (box: Box): Point => ({ x: box.x + box.width / 2, y: box.y + bo
 /** The choice a diamond that splits a crowded choice belongs to (`check#join1` belongs to `check`). */
 const splitOwner = (id: string) => id.match(/^(.*)#(?:join|branch)\d+$/)?.[1];
 
+type CellStyle = Record<string, string | number | undefined>;
+
+/** How a pseudostate or a region is drawn: the fields of its cell, its style and its role. */
+interface Drawn {
+  fields: Partial<Cell>;
+  style: CellStyle;
+  role: string;
+}
+
+/** The pseudostates and regions, each drawn as one cell. */
+const ONE_CELL: Partial<Record<UmlState["kind"], Drawn>> = {
+  region: {
+    fields: { value: "", connectable: false },
+    style: {
+      rounded: 0,
+      html: 1,
+      fillColor: "none",
+      strokeColor: "none",
+      container: 1,
+      collapsible: 0,
+    },
+    role: ROLE.region,
+  },
+  initial: { fields: { value: "" }, style: TAMSHAPES.initial, role: ROLE.initial },
+  choice: { fields: { value: "" }, style: TAMSHAPES.decision, role: ROLE.choice },
+  fork: { fields: { value: "" }, style: TAMSHAPES.bar, role: ROLE.fork },
+  join: { fields: { value: "" }, style: TAMSHAPES.bar, role: ROLE.join },
+};
+
 /** The cells that draw a state machine diagram as the scene lays it out. */
 function exportCells(source: string, scene: Scene): Cell[] {
-  const diagram = parseStateDiagram(source);
-  const tree = sceneTree(scene);
-  const shapes = new Map(scene.shapes.map((shape) => [shape.id, shape]));
-  const notes = new Map(diagram.notes.map((note) => [note.id, note]));
-  const cells: Cell[] = [];
-  const parentOf = (id: string) => tree.parent.get(id);
-  const boxOf = (id: string | undefined) => (id === undefined ? undefined : shapes.get(id)?.box);
-  const texts = (owner: string, role: string) =>
-    scene.texts.filter((text) => text.owner === owner && text.role === role);
+  return new StateCells(parseStateDiagram(source), scene).cells;
+}
 
-  const vertex = (
-    shape: SceneShape,
-    fields: Partial<Cell>,
-    style: Record<string, string | number | undefined>,
-    role: string,
-  ) => {
-    const parent = parentOf(shape.id);
-    cells.push(
+/** The cells of a state machine diagram, made shape by shape and wire by wire. */
+class StateCells {
+  readonly cells: Cell[] = [];
+  private readonly diagram: StateDiagram;
+  private readonly scene: Scene;
+  private readonly tree: ReturnType<typeof sceneTree>;
+  private readonly shapes: Map<string, SceneShape>;
+  private readonly notes: Map<string, StateNote>;
+  private readonly transitions: Map<string, StateDiagram["transitions"][number]>;
+
+  constructor(diagram: StateDiagram, scene: Scene) {
+    this.diagram = diagram;
+    this.scene = scene;
+    this.tree = sceneTree(scene);
+    this.shapes = new Map(scene.shapes.map((shape) => [shape.id, shape]));
+    this.notes = new Map(diagram.notes.map((note) => [note.id, note]));
+    this.transitions = new Map(diagram.transitions.map((item) => [item.id, item]));
+    // Shapes outside in: a container before what it holds, so draw.io draws them in that order.
+    const depth = (id: string) => chainOf(this.tree, id).length;
+    for (const shape of scene.shapes.toSorted((a, b) => depth(a.id) - depth(b.id)))
+      this.drawShape(shape);
+    scene.lines
+      .filter((line) => line.dashed && line.points.length === 2)
+      .forEach((line, index) => this.cells.push(this.separatorCell(line.points, index)));
+    for (const wire of scene.wires) this.drawWire(wire);
+    const title = titleCell(scene);
+    if (title) this.cells.push(title);
+  }
+
+  private boxOf(id: string | undefined) {
+    return id === undefined ? undefined : this.shapes.get(id)?.box;
+  }
+
+  private texts(owner: string, role: string) {
+    return this.scene.texts.filter((text) => text.owner === owner && text.role === role);
+  }
+
+  private vertex(shape: SceneShape, { fields, style, role }: Drawn) {
+    const parent = this.tree.parent.get(shape.id);
+    this.cells.push(
       cell(
         {
           id: shape.id,
           parent: parent ?? LAYER,
           vertex: true,
-          geometry: vertexGeometry(shape.box, boxOf(parent)),
+          geometry: vertexGeometry(shape.box, this.boxOf(parent)),
           ...fields,
           style,
         },
         role,
       ),
     );
-  };
+  }
 
-  const drawState = (shape: SceneShape) => {
-    const state = diagram.states.get(shape.id);
-    const owner = splitOwner(shape.id);
-    if (!state && owner) {
-      vertex(shape, { value: "" }, { ...TAMSHAPES.decision }, ROLE.split);
-      return;
-    }
-    if (!state) {
-      const note = notes.get(shape.id);
-      if (note)
-        vertex(
-          shape,
-          { value: html(note.text) },
-          { ...TAMSHAPES.note, fontSize: FONT_SIZE },
-          note.side === "left" ? ROLE.noteLeft : ROLE.noteRight,
-        );
-      return;
-    }
-    switch (state.kind) {
-      case "region":
-        vertex(
-          shape,
-          { value: "", connectable: false },
-          {
-            rounded: 0,
-            html: 1,
-            fillColor: "none",
-            strokeColor: "none",
-            container: 1,
-            collapsible: 0,
-          },
-          ROLE.region,
-        );
-        return;
-      case "initial":
-        vertex(shape, { value: "" }, { ...TAMSHAPES.initial }, ROLE.initial);
-        return;
-      case "final":
-        drawFinal(shape);
-        return;
-      case "choice":
-        vertex(shape, { value: "" }, { ...TAMSHAPES.decision }, ROLE.choice);
-        return;
-      case "fork":
-      case "join":
-        vertex(
-          shape,
-          { value: "" },
-          { ...TAMSHAPES.bar },
-          state.kind === "fork" ? ROLE.fork : ROLE.join,
-        );
-        return;
-    }
+  /** A shape of the scene: a state or pseudostate, a diamond of a split choice, or a note. */
+  private drawShape(shape: SceneShape) {
+    const state = this.diagram.states.get(shape.id);
+    if (state) return this.drawStateOf(shape, state);
+    if (splitOwner(shape.id))
+      return this.vertex(shape, {
+        fields: { value: "" },
+        style: TAMSHAPES.decision,
+        role: ROLE.split,
+      });
+    const note = this.notes.get(shape.id);
+    if (note)
+      this.vertex(shape, {
+        fields: { value: html(note.text) },
+        style: { ...TAMSHAPES.note, fontSize: FONT_SIZE },
+        role: note.side === "left" ? ROLE.noteLeft : ROLE.noteRight,
+      });
+  }
+
+  private drawStateOf(shape: SceneShape, state: UmlState) {
+    const one = ONE_CELL[state.kind];
+    if (one) this.vertex(shape, one);
+    else if (state.kind === "final") this.drawFinal(shape);
+    else this.drawState(shape, state);
+  }
+
+  /** A state with its name, and below a line its descriptions; a composite state holds others. */
+  private drawState(shape: SceneShape, state: UmlState) {
     const composite = state.children.length > 0;
     const header = shape.dividers?.[0];
-    const style: Record<string, string | number | undefined> = {
-      ...TAMSHAPES.state,
-      fillColor: fillOf(shape),
-      fontSize: FONT_SIZE,
-      ...(header !== undefined ? { verticalAlign: "top", spacingTop: 4 } : {}),
-      ...(composite
-        ? { container: 1, collapsible: 0, fontStyle: 1, absoluteArcSize: 1, arcSize: 24 }
-        : {}),
-    };
-    vertex(shape, { value: html(state.label) }, style, composite ? ROLE.composite : ROLE.state);
+    this.vertex(shape, {
+      fields: { value: html(state.label) },
+      style: {
+        ...TAMSHAPES.state,
+        fillColor: fillOf(shape),
+        fontSize: FONT_SIZE,
+        ...(header !== undefined ? { verticalAlign: "top", spacingTop: 4 } : {}),
+        ...(composite
+          ? { container: 1, collapsible: 0, fontStyle: 1, absoluteArcSize: 1, arcSize: 24 }
+          : {}),
+      },
+      role: composite ? ROLE.composite : ROLE.state,
+    });
     if (header === undefined) return;
-    // The line under the name compartment, and the descriptions below it.
-    cells.push(
-      cell(
-        {
-          id: `${shape.id}#divider`,
-          parent: shape.id,
-          vertex: true,
-          connectable: false,
-          value: "",
-          geometry: { x: 0, y: header - shape.box.y - 5, width: shape.box.width, height: 10 },
-          style: { line: "", strokeWidth: 1, html: 1, editable: 0, movable: 0, resizable: 0 },
-        },
-        ROLE.divider,
-      ),
-    );
-    if (state.descriptions.length) {
-      const lines = texts(shape.id, "member");
-      const top = lines.length ? Math.min(...lines.map((text) => text.box.y)) - 2 : header + 4;
-      cells.push(
-        cell(
-          {
-            id: `${shape.id}#description`,
-            parent: shape.id,
-            vertex: true,
-            connectable: false,
-            value: state.descriptions.map(html).join("<br>"),
-            geometry: {
-              x: PAD - 4,
-              y: top - shape.box.y,
-              width: shape.box.width - 2 * (PAD - 4),
-              height: shape.box.y + shape.box.height - top - 2,
-            },
-            style: {
-              ...TAMSHAPES.text,
-              align: "left",
-              verticalAlign: "top",
-              spacing: 0,
-              fontSize: FONT_SIZE,
-            },
-          },
-          ROLE.description,
-        ),
-      );
-    }
-  };
+    this.cells.push(dividerCell(shape, header));
+    if (state.descriptions.length) this.cells.push(this.descriptionCell(shape, state, header));
+  }
 
-  const drawFinal = (shape: SceneShape) => {
-    vertex(
-      shape,
-      { value: "", connectable: true },
-      { group: "", aspect: "fixed", rotatable: 0, resizable: 0 },
-      ROLE.final,
+  /** The descriptions of a state, in a text below its name compartment. */
+  private descriptionCell(shape: SceneShape, state: UmlState, header: number): Cell {
+    const lines = this.texts(shape.id, "member");
+    const top = lines.length ? Math.min(...lines.map((text) => text.box.y)) - 2 : header + 4;
+    return cell(
+      {
+        id: `${shape.id}#description`,
+        parent: shape.id,
+        vertex: true,
+        connectable: false,
+        value: state.descriptions.map(html).join("<br>"),
+        geometry: {
+          x: PAD - 4,
+          y: top - shape.box.y,
+          width: shape.box.width - 2 * (PAD - 4),
+          height: shape.box.y + shape.box.height - top - 2,
+        },
+        style: {
+          ...TAMSHAPES.text,
+          align: "left",
+          verticalAlign: "top",
+          spacing: 0,
+          fontSize: FONT_SIZE,
+        },
+      },
+      ROLE.description,
     );
+  }
+
+  /** A final state: TAM-AD's End of Activity, a white ring around a black dot in a group. */
+  private drawFinal(shape: SceneShape) {
+    this.vertex(shape, {
+      fields: { value: "", connectable: true },
+      style: { group: "", aspect: "fixed", rotatable: 0, resizable: 0 },
+      role: ROLE.final,
+    });
     const { width, height } = shape.box;
-    cells.push(
+    this.cells.push(
       cell(
         {
           id: `${shape.id}#ring`,
@@ -272,70 +297,71 @@ function exportCells(source: string, scene: Scene): Cell[] {
         ROLE.dot,
       ),
     );
-  };
+  }
 
-  // Shapes outside in: a container before what it holds, so draw.io draws them in that order.
-  const depth = (id: string) => chainOf(tree, id).length;
-  const order = scene.shapes.toSorted((a, b) => depth(a.id) - depth(b.id));
-  for (const shape of order) drawState(shape);
+  /** A dashed line between concurrent regions, in the composite state it parts. */
+  private separatorCell(points: Point[], index: number): Cell {
+    const middle = centerOf(around(points.map(pointBox)));
+    const holder = this.scene.shapes
+      .filter(
+        (shape) =>
+          shape.container && shape.kind !== "region" && inside(pointBox(middle), shape.box, 0.5),
+      )
+      .toSorted((a, b) => area(a.box) - area(b.box))[0];
+    const corner = holder?.box ?? { x: 0, y: 0 };
+    const shift = (p: Point) => ({ x: p.x - corner.x, y: p.y - corner.y });
+    return cell(
+      {
+        id: `separator${index + 1}`,
+        parent: holder?.id ?? LAYER,
+        edge: true,
+        geometry: {
+          x: 0,
+          y: 0,
+          width: 0,
+          height: 0,
+          relative: true,
+          sourcePoint: shift(points[0]),
+          targetPoint: shift(points[1]),
+        },
+        style: { endArrow: "none", startArrow: "none", dashed: 1, html: 1, strokeWidth: 1 },
+      },
+      ROLE.separator,
+    );
+  }
 
-  // The dashed lines between concurrent regions, in the composite state they part.
-  scene.lines
-    .filter((line) => line.dashed && line.points.length === 2)
-    .forEach((line, index) => {
-      const middle = centerOf(around(line.points.map((p) => ({ ...p, width: 0, height: 0 }))));
-      const holder = scene.shapes
-        .filter(
-          (shape) =>
-            shape.container &&
-            shape.kind !== "region" &&
-            inside({ ...middle, width: 0, height: 0 }, shape.box, 0.5),
-        )
-        .toSorted((a, b) => a.box.width * a.box.height - b.box.width * b.box.height)[0];
-      const parent = holder?.box;
-      const shift = (p: Point) => ({ x: p.x - (parent?.x ?? 0), y: p.y - (parent?.y ?? 0) });
-      cells.push(
-        cell(
-          {
-            id: `separator${index + 1}`,
-            parent: holder?.id ?? LAYER,
-            edge: true,
-            geometry: {
-              x: 0,
-              y: 0,
-              width: 0,
-              height: 0,
-              relative: true,
-              sourcePoint: shift(line.points[0]),
-              targetPoint: shift(line.points[1]),
-            },
-            style: { endArrow: "none", startArrow: "none", dashed: 1, html: 1, strokeWidth: 1 },
-          },
-          ROLE.separator,
-        ),
-      );
-    });
-
-  // Transitions, the links between split choices, and the dashed lines from notes to their states.
-  const common = (a: string, b: string) => {
-    const outer = new Set(chainOf(tree, b).slice(1));
-    return chainOf(tree, a)
+  /** The innermost state that holds both ends of a connection, which draw.io nests it in. */
+  private common(a: string, b: string) {
+    const outer = new Set(chainOf(this.tree, b).slice(1));
+    return chainOf(this.tree, a)
       .slice(1)
       .find((id) => outer.has(id));
-  };
-  const transitions = new Map(diagram.transitions.map((transition) => [transition.id, transition]));
-  for (const wire of scene.wires) {
-    if (wire.points.length < 2) continue;
-    const note = wire.edge.endsWith(":link") ? notes.get(wire.edge.slice(0, -5)) : undefined;
-    const transition = transitions.get(wire.edge);
+  }
+
+  /** What a wire of the scene draws: a note's line or a transition, and the shapes it joins. */
+  private wireEnds(wire: Scene["wires"][number]) {
+    const note = this.noteOfLink(wire.edge);
+    const transition = this.transitions.get(wire.edge);
     const from = wire.from ?? transition?.source ?? note?.id,
       to = wire.to ?? transition?.target ?? note?.target;
-    if (!from || !to || !shapes.has(from) || !shapes.has(to)) continue;
-    const parent = common(from, to);
-    const route = edgeRoute(wire.points, boxOf(from), boxOf(to), boxOf(parent));
+    return { note, transition, from, to };
+  }
+
+  /** The note a wire joins to its state: the wire's id is the note's with `:link`. */
+  private noteOfLink(edge: string) {
+    return edge.endsWith(":link") ? this.notes.get(edge.slice(0, -5)) : undefined;
+  }
+
+  /** A transition, a link between split choices, or the dashed line from a note to its state. */
+  private drawWire(wire: Scene["wires"][number]) {
+    if (wire.points.length < 2) return;
+    const { note, transition, from, to } = this.wireEnds(wire);
+    if (!from || !to || !this.shapes.has(from) || !this.shapes.has(to)) return;
+    const parent = this.common(from, to);
+    const route = edgeRoute(wire.points, this.boxOf(from), this.boxOf(to), this.boxOf(parent));
     const fields = { id: wire.edge, parent: parent ?? LAYER, edge: true, source: from, target: to };
-    if (note) {
-      cells.push(
+    if (note)
+      this.cells.push(
         cell(
           {
             ...fields,
@@ -345,35 +371,54 @@ function exportCells(source: string, scene: Scene): Cell[] {
           ROLE.noteLink,
         ),
       );
-      continue;
-    }
-    const labels = texts(wire.edge, "label");
+    else this.cells.push(this.transitionCell(wire, fields, route, transition));
+  }
+
+  /** A transition with its label where the scene draws it, or a link between split choices. */
+  private transitionCell(
+    wire: Scene["wires"][number],
+    fields: Omit<Cell, "style">,
+    route: ReturnType<typeof edgeRoute>,
+    transition: StateDiagram["transitions"][number] | undefined,
+  ): Cell {
     const label = transition?.label;
+    const labels = this.texts(wire.edge, "label");
     const geometry =
       label && labels.length
         ? labelAt(route.geometry, wire.points, centerOf(around(labels.map((text) => text.box))))
         : route.geometry;
-    cells.push(
-      cell(
-        {
-          ...fields,
-          value: label ? html(label) : "",
-          geometry,
-          style: {
-            ...TAMSHAPES.connection,
-            ...route.style,
-            endArrow: "classic",
-            endFill: 1,
-            fontSize: FONT_SIZE,
-          },
+    return cell(
+      {
+        ...fields,
+        value: label ? html(label) : "",
+        geometry,
+        style: {
+          ...TAMSHAPES.connection,
+          ...route.style,
+          endArrow: "classic",
+          endFill: 1,
+          fontSize: FONT_SIZE,
         },
-        transition ? ROLE.transition : ROLE.splitLink,
-      ),
+      },
+      transition ? ROLE.transition : ROLE.splitLink,
     );
   }
-  const title = titleCell(scene);
-  if (title) cells.push(title);
-  return cells;
+}
+
+/** The line under a state's name compartment. */
+function dividerCell(shape: SceneShape, header: number): Cell {
+  return cell(
+    {
+      id: `${shape.id}#divider`,
+      parent: shape.id,
+      vertex: true,
+      connectable: false,
+      value: "",
+      geometry: { x: 0, y: header - shape.box.y - 5, width: shape.box.width, height: 10 },
+      style: { line: "", strokeWidth: 1, html: 1, editable: 0, movable: 0, resizable: 0 },
+    },
+    ROLE.divider,
+  );
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -490,33 +535,50 @@ function barBox(style: Style, box: Box): Box {
     : { x: shown.x, y: middle.y - thickness / 2, width: shown.width, height: thickness };
 }
 
+/** What a vertex is by its shape alone. */
+const KINDS_BY_SHAPE = new Map<string, Kind>([
+  ["startState", "initial"],
+  // The End of Activity of the tam-drawio plugin is a shape of its own.
+  ["endState", "final"],
+  ["endactivity", "final"],
+  ["rhombus", "choice"],
+  ["note", "note"],
+  ["note2", "note"],
+  ["text", "text"],
+  ["edgeLabel", "text"],
+]);
+
 /** What a vertex is by its picture alone. */
 function kindByPicture(drawing: Drawing, vertex: Cell): Kind {
   const style = drawing.style(vertex),
     shape = shapeOf(style);
-  if (shape === "group") {
-    const inner = drawing
-      .children(vertex.id)
-      .filter((child) => shapeOf(drawing.style(child)) === "ellipse");
-    const dark = inner.some((child) => isDark(drawing.style(child))),
-      light = inner.some((child) => !isDark(drawing.style(child)));
-    return dark && light ? "final" : "ignore";
-  }
-  if (shape === "startState") return "initial";
-  // The End of Activity of the tam-drawio plugin is a shape of its own.
-  if (shape === "endState" || shape === "endactivity") return "final";
-  if (shape === "ellipse" || shape === "doubleEllipse") {
-    if (drawing.label(vertex)) return "state";
-    return filled(style) ? "dot" : "ring";
-  }
-  if (shape === "rhombus") return "choice";
-  if (shape === "note" || shape === "note2") return "note";
-  // A thick line is a fork or join bar; a thin one a line (dashed, it parts regions).
-  if (shape === "line")
-    return Number(style.get("strokeWidth") ?? 1) >= 4 && !drawing.label(vertex) ? "bar" : "line";
-  if (shape === "text" || shape === "edgeLabel" || invisible(style)) return "text";
-  if (filled(style)) return "bar";
-  return "state";
+  if (shape === "group") return groupKind(drawing, vertex);
+  const named = KINDS_BY_SHAPE.get(shape);
+  if (named) return named;
+  if (shape === "ellipse" || shape === "doubleEllipse") return circleKind(drawing, vertex, style);
+  if (shape === "line") return lineKind(drawing, vertex, style);
+  if (invisible(style)) return "text";
+  return filled(style) ? "bar" : "state";
+}
+
+/** A circle with a name is a state; without, a black dot or a white ring. */
+function circleKind(drawing: Drawing, vertex: Cell, style: Style): Kind {
+  if (drawing.label(vertex)) return "state";
+  return filled(style) ? "dot" : "ring";
+}
+
+/** A thick line is a fork or join bar; a thin one a line (dashed, it parts regions). */
+const lineKind = (drawing: Drawing, vertex: Cell, style: Style): Kind =>
+  Number(style.get("strokeWidth") ?? 1) >= 4 && !drawing.label(vertex) ? "bar" : "line";
+
+/** A group with a white circle and a black one is a final state; another group is not read. */
+function groupKind(drawing: Drawing, group: Cell): Kind {
+  const inner = drawing
+    .children(group.id)
+    .filter((child) => shapeOf(drawing.style(child)) === "ellipse");
+  const dark = inner.some((child) => isDark(drawing.style(child))),
+    light = inner.some((child) => !isDark(drawing.style(child)));
+  return dark && light ? "final" : "ignore";
 }
 
 /** The kind a role names, or the picture's when the cell has no role of this module. */
@@ -620,7 +682,7 @@ class PageReader {
 
   private named = (cell: Cell) => {
     const text = this.drawing.label(cell).replace(/\s+/g, " ");
-    return text ? `“${text.length > 40 ? `${text.slice(0, 39)}…` : text}”` : `\`${cell.id}\``;
+    return quotedOr(text.length > 40 ? `${text.slice(0, 39)}…` : text, `\`${cell.id}\``);
   };
 
   /** A part as a warning names it: its label, else what it is. */
@@ -665,37 +727,39 @@ class PageReader {
   private readVertices() {
     const { drawing } = this;
     for (const vertex of drawing.parts) {
-      if (!vertex.vertex) continue;
-      const holder = drawing.parentOf(vertex);
-      // Labels on edges are read with their edge; the cells of a final state with it.
-      if (holder?.edge) continue;
-      if (holder && this.byCell.get(holder.id)?.kind === "final") continue;
+      if (!vertex.vertex || this.isPiece(vertex)) continue;
       const kind = kindOf(drawing, vertex);
-      if (kind === "ignore") continue;
-      if (kind === "line") {
-        const box = drawing.box(vertex);
-        if (!dashed(drawing.style(vertex)) && !upright(drawing.style(vertex)))
-          this.rules.push({ ...box, y: box.y + box.height / 2, height: 0 });
-        if (dashed(drawing.style(vertex))) {
-          const middle = box.y + box.height / 2;
-          this.separators.push({
-            points:
-              box.width >= box.height
-                ? [
-                    { x: box.x, y: middle },
-                    { x: box.x + box.width, y: middle },
-                  ]
-                : [
-                    { x: box.x + box.width / 2, y: box.y },
-                    { x: box.x + box.width / 2, y: box.y + box.height },
-                  ],
-            role: false,
-          });
-        }
-        continue;
-      }
-      this.add(vertex, kind);
+      if (kind === "line") this.readLine(drawing.box(vertex), drawing.style(vertex));
+      else if (kind !== "ignore") this.add(vertex, kind);
     }
+  }
+
+  /** Labels on edges are read with their edge; the cells of a final state with it. */
+  private isPiece(vertex: Cell) {
+    const holder = this.drawing.parentOf(vertex);
+    return !!holder?.edge || (!!holder && this.byCell.get(holder.id)?.kind === "final");
+  }
+
+  /** A line shape: dashed it parts regions, solid and across it may be a rule in a state. */
+  private readLine(box: Box, style: Style) {
+    const middle = box.y + box.height / 2;
+    if (!dashed(style)) {
+      if (!upright(style)) this.rules.push({ ...box, y: middle, height: 0 });
+      return;
+    }
+    this.separators.push({
+      points:
+        box.width >= box.height
+          ? [
+              { x: box.x, y: middle },
+              { x: box.x + box.width, y: middle },
+            ]
+          : [
+              { x: box.x + box.width / 2, y: box.y },
+              { x: box.x + box.width / 2, y: box.y + box.height },
+            ],
+      role: false,
+    });
   }
 
   /** A white ring with a black dot in it is a final state, a black dot alone the initial state. */
@@ -775,98 +839,132 @@ class PageReader {
   }
 
   private readEdges() {
+    for (const edge of this.drawing.parts) if (edge.edge) this.readEdge(edge);
+    this.settleSplits();
+  }
+
+  /** An end of an edge: the part it is attached to, else the part at its loose end. */
+  private endAt(id: string | undefined, point: Point | undefined): End {
+    return id ? { part: this.partOf(id) } : this.partAt(point);
+  }
+
+  /** An edge's label: its own, and the label cells draw.io adds on it. */
+  private edgeLabel(edge: Cell) {
     const { drawing } = this;
-    for (const edge of drawing.parts) {
-      if (!edge.edge) continue;
-      const style = drawing.style(edge),
-        role = roleOf(drawing, edge);
-      if (role === ROLE.splitLink) continue;
-      const path = drawing.path(edge);
-      const loose = (id: string | undefined, point: Point | undefined) =>
-        id ? { part: this.partOf(id) } : this.partAt(point);
-      const start = loose(edge.source, path[0]),
-        finish = loose(edge.target, path.at(-1));
-      const source = start.part,
-        target = finish.part;
-      const label = [
-        drawing.label(edge),
-        ...drawing
-          .children(edge.id)
-          .filter((child) => child.vertex)
-          .map((child) => drawing.label(child)),
-      ]
-        .filter(Boolean)
-        .join("\n");
-      // A line from a note, dashed or not, joins it to the state at its other end.
-      const note = source?.kind === "note" ? source : target?.kind === "note" ? target : undefined;
-      if (note || role === ROLE.noteLink) {
-        const other = note === source ? target : source;
-        if (note && other && other.kind !== "note") this.links.push({ note, target: other });
-        continue;
-      }
-      const drawn = !edge.source && !edge.target && !label && path.length >= 2;
-      if (role === ROLE.separator || (dashed(style) && drawn)) {
-        if (path.length >= 2)
-          this.separators.push({ points: [path[0], path.at(-1)!], role: role === ROLE.separator });
-        continue;
-      }
-      // A plain line drawn across a state, from side to side, is a rule in it.
-      const [first, last] = [path[0], path.at(-1)!];
-      if (
-        drawn &&
-        !hasArrow(style, "start") &&
-        !hasArrow(style, "end") &&
-        Math.abs(first.y - last.y) < Math.abs(first.x - last.x) / 10 &&
-        this.parts.some(
-          (part) =>
-            part.kind === "state" &&
-            inside(pointBox(first), part.box, 6) &&
-            inside(pointBox(last), part.box, 6),
-        )
-      ) {
-        this.rules.push({
-          x: Math.min(first.x, last.x),
-          y: (first.y + last.y) / 2,
-          width: Math.abs(first.x - last.x),
-          height: 0,
-        });
-        continue;
-      }
-      if (!source || !target) {
-        this.warnings.push(
-          `The connection ${label ? `“${label.replace(/\s+/g, " ")}”` : `\`${edge.id}\``} is not attached to a state at ${!source ? "its start" : "its end"} and is not read.`,
-        );
-        continue;
-      }
-      for (const [end, part] of [
-        [start, source],
-        [finish, target],
-      ] as const)
-        if (end.near)
-          this.warnings.push(
-            `The connection ${label ? `“${label.replace(/\s+/g, " ")}”` : `\`${edge.id}\``} ends short of ${this.describe(part)} and is read as joined to it.`,
-          );
-      const backward = !hasArrow(style, "end") && hasArrow(style, "start");
-      this.transitions.push({
-        cell: edge,
-        source: backward ? target : source,
-        target: backward ? source : target,
-        label,
-      });
+    return [
+      drawing.label(edge),
+      ...drawing
+        .children(edge.id)
+        .filter((child) => child.vertex)
+        .map((child) => drawing.label(child)),
+    ]
+      .filter(Boolean)
+      .join("\n");
+  }
+
+  /** An edge: a note's line, a separator of regions, a rule in a state, or a transition. */
+  private readEdge(edge: Cell) {
+    const { drawing } = this;
+    const style = drawing.style(edge),
+      role = roleOf(drawing, edge);
+    if (role === ROLE.splitLink) return;
+    const path = drawing.path(edge);
+    const start = this.endAt(edge.source, path[0]),
+      finish = this.endAt(edge.target, path.at(-1));
+    const label = this.edgeLabel(edge);
+    if (this.readNoteLine(start.part, finish.part, role)) return;
+    const drawn = !edge.source && !edge.target && !label && path.length >= 2;
+    if (this.readSeparator(path, role, style, drawn)) return;
+    if (drawn && this.readRule(path, style)) return;
+    this.readTransition(edge, style, label, start, finish);
+  }
+
+  /** A line from a note, dashed or not, joins it to the state at its other end. */
+  private readNoteLine(source: Part | undefined, target: Part | undefined, role?: string) {
+    const note = [source, target].find((end) => end?.kind === "note");
+    if (!note && role !== ROLE.noteLink) return false;
+    const other = note === source ? target : source;
+    if (note && other && other.kind !== "note") this.links.push({ note, target: other });
+    return true;
+  }
+
+  /** A dashed line that joins nothing parts concurrent regions. */
+  private readSeparator(path: Point[], role: string | undefined, style: Style, drawn: boolean) {
+    if (role !== ROLE.separator && !(dashed(style) && drawn)) return false;
+    if (path.length >= 2)
+      this.separators.push({ points: [path[0], path.at(-1)!], role: role === ROLE.separator });
+    return true;
+  }
+
+  /** A plain line drawn across a state, from side to side, is a rule in it. */
+  private readRule(path: Point[], style: Style) {
+    const [first, last] = [path[0], path.at(-1)!];
+    if (hasArrow(style, "start") || hasArrow(style, "end")) return false;
+    if (!isLevel(first, last) || !this.stateHolds(first, last)) return false;
+    this.rules.push({
+      x: Math.min(first.x, last.x),
+      y: (first.y + last.y) / 2,
+      width: Math.abs(first.x - last.x),
+      height: 0,
+    });
+    return true;
+  }
+
+  /** Whether a state holds both points. */
+  private stateHolds(a: Point, b: Point) {
+    return this.parts.some(
+      (part) =>
+        part.kind === "state" &&
+        inside(pointBox(a), part.box, 6) &&
+        inside(pointBox(b), part.box, 6),
+    );
+  }
+
+  /** A transition: between the parts at its ends, read the way its head points. */
+  private readTransition(edge: Cell, style: Style, label: string, start: End, finish: End) {
+    const source = start.part,
+      target = finish.part;
+    const name = label ? `“${label.replace(/\s+/g, " ")}”` : `\`${edge.id}\``;
+    if (!source || !target) {
+      this.warnings.push(
+        `The connection ${name} is not attached to a state at ${!source ? "its start" : "its end"} and is not read.`,
+      );
+      return;
     }
-    // A transition to or from a diamond that splits a crowded choice is one of that choice.
+    for (const end of [start, finish].filter((end) => end.near))
+      this.warnings.push(
+        `The connection ${name} ends short of ${this.describe(end.part!)} and is read as joined to it.`,
+      );
+    const backward = !hasArrow(style, "end") && hasArrow(style, "start");
+    this.transitions.push({
+      cell: edge,
+      source: backward ? target : source,
+      target: backward ? source : target,
+      label,
+    });
+  }
+
+  /** A transition to or from a diamond that splits a crowded choice is one of that choice. */
+  private settleSplits() {
     const owners = new Map<Part, Part>();
     for (const split of this.parts.filter((part) => part.kind === "split")) {
-      const base = splitOwner(split.cell.id);
-      const owner = base === undefined ? undefined : this.byCell.get(base);
-      if (owner && owner.kind === "choice") owners.set(split, owner);
+      const owner = this.choiceOf(split);
+      if (owner) owners.set(split, owner);
       else split.kind = "choice";
     }
+    const ownerOf = (part: Part) => owners.get(part) ?? part;
     for (const transition of this.transitions) {
-      transition.source = owners.get(transition.source) ?? transition.source;
-      transition.target = owners.get(transition.target) ?? transition.target;
+      transition.source = ownerOf(transition.source);
+      transition.target = ownerOf(transition.target);
     }
-    for (const link of this.links) link.target = owners.get(link.target) ?? link.target;
+    for (const link of this.links) link.target = ownerOf(link.target);
+  }
+
+  /** The choice a diamond of a split choice belongs to, by its id from our export. */
+  private choiceOf(split: Part): Part | undefined {
+    const base = splitOwner(split.cell.id);
+    const owner = base === undefined ? undefined : this.byCell.get(base);
+    return owner?.kind === "choice" ? owner : undefined;
   }
 
   /** The topmost rule drawn across most of a box, below its top. */
@@ -888,25 +986,29 @@ class PageReader {
    * name, and without a rule the lines up to the first line of behavior (`entry / …`).
    */
   private nameStates() {
-    for (const state of this.parts.filter((part) => part.kind === "state" && !part.parted)) {
-      const style = this.drawing.style(state.cell);
-      const lines = state.label.split("\n");
-      if (lines.length < 2 || shapeOf(style) === "swimlane") continue;
-      const rule = this.ruleIn(state.box);
-      const above = rule ? linesAbove(style, state.box, lines.length, rule.y) : 0;
-      const { label, descriptions } =
-        above > 0
-          ? { label: lines.slice(0, above).join("\n"), descriptions: lines.slice(above) }
-          : partByBehavior(lines);
-      state.label = label;
-      state.descriptions = descriptions.filter(Boolean);
-    }
+    for (const state of this.parts.filter((part) => part.kind === "state" && !part.parted))
+      this.splitName(state);
     for (const state of this.parts.filter(
       (part) => part.kind === "state" && part.members.length && part.descriptions.length,
     ))
       this.warnings.push(
         `The text below the name of ${this.named(state.cell)} is not read: a composite state has a name only.`,
       );
+  }
+
+  /** A state's label of several lines, parted into its name and its descriptions. */
+  private splitName(state: Part) {
+    const style = this.drawing.style(state.cell);
+    const lines = state.label.split("\n");
+    if (lines.length < 2 || shapeOf(style) === "swimlane") return;
+    const rule = this.ruleIn(state.box);
+    const above = rule ? linesAbove(style, state.box, lines.length, rule.y) : 0;
+    const { label, descriptions } =
+      above > 0
+        ? { label: lines.slice(0, above).join("\n"), descriptions: lines.slice(above) }
+        : partByBehavior(lines);
+    state.label = label;
+    state.descriptions = descriptions.filter(Boolean);
   }
 
   /**
@@ -920,43 +1022,60 @@ class PageReader {
       .filter((part) => part.kind === "state")
       .toSorted((a, b) => area(a.box) - area(b.box));
     const unlabeled = new Set(this.transitions.filter((item) => !item.label));
-    const written = new Map<Part, { box: Box; lines: string[] }[]>();
+    const written = new Map<Part, Written[]>();
     for (const text of this.parts.filter(
       (part) => part.kind === "text" || part.kind === "description",
     )) {
-      const lines = text.label.split("\n").filter(Boolean);
-      const holder = states.find((state) => inside(pointBox(centerOf(text.box)), state.box, 0));
-      const beside =
-        text.kind === "text" && lines.length && !(holder && !holder.members.length)
-          ? this.transitionBeside(text.box, unlabeled)
-          : undefined;
-      if (beside) {
-        beside.label = beside.label ? `${beside.label} ${lines.join(" ")}` : lines.join("\n");
-        unlabeled.delete(beside);
-      } else if (holder && !holder.members.length) {
-        if (lines.length)
-          written.set(holder, [...(written.get(holder) ?? []), { box: text.box, lines }]);
-      } else if (lines.length)
-        this.warnings.push(
-          `The text ${this.named(text.cell)} belongs to no state and is not read.`,
-        );
+      this.placeText(text, states, unlabeled, written);
       text.kind = "ignore";
     }
-    for (const [state, texts] of written) {
-      texts.sort((a, b) => a.box.y - b.box.y || a.box.x - b.box.x);
-      if (!state.label) {
-        const { box, lines } = texts.shift()!;
-        const rule = this.ruleIn(state.box);
-        const { label, descriptions } =
-          rule && centerOf(box).y < rule.y
-            ? { label: lines.join("\n"), descriptions: [] }
-            : partByBehavior(lines);
-        state.label = label;
-        state.descriptions.push(...descriptions);
-      }
-      for (const { lines } of texts) state.descriptions.push(...lines);
-    }
+    for (const [state, texts] of written) this.writeInto(state, texts);
     this.parts.splice(0, this.parts.length, ...this.parts.filter((part) => part.kind !== "ignore"));
+  }
+
+  /**
+   * Where a text goes: into the state without states that holds it, else to the transition
+   * beside it; otherwise it is not read.
+   */
+  private placeText(
+    text: Part,
+    states: Part[],
+    unlabeled: Set<Transition>,
+    written: Map<Part, Written[]>,
+  ) {
+    const lines = text.label.split("\n").filter(Boolean);
+    const leaf = leafAt(states, centerOf(text.box));
+    const beside = leaf ? undefined : this.labelFor(text, lines, unlabeled);
+    if (beside) {
+      beside.label = beside.label ? `${beside.label} ${lines.join(" ")}` : lines.join("\n");
+      unlabeled.delete(beside);
+    } else if (leaf) {
+      if (lines.length) written.set(leaf, [...(written.get(leaf) ?? []), { box: text.box, lines }]);
+    } else if (lines.length)
+      this.warnings.push(`The text ${this.named(text.cell)} belongs to no state and is not read.`);
+  }
+
+  /** The transition a text of its own labels, when it stands beside one. */
+  private labelFor(text: Part, lines: string[], unlabeled: Set<Transition>) {
+    return text.kind === "text" && lines.length
+      ? this.transitionBeside(text.box, unlabeled)
+      : undefined;
+  }
+
+  /** The texts in a state, top to bottom: the first names a state without a label. */
+  private writeInto(state: Part, texts: Written[]) {
+    texts.sort((a, b) => a.box.y - b.box.y || a.box.x - b.box.x);
+    if (!state.label) {
+      const { box, lines } = texts.shift()!;
+      const rule = this.ruleIn(state.box);
+      const { label, descriptions } =
+        rule && centerOf(box).y < rule.y
+          ? { label: lines.join("\n"), descriptions: [] }
+          : partByBehavior(lines);
+      state.label = label;
+      state.descriptions.push(...descriptions);
+    }
+    for (const { lines } of texts) state.descriptions.push(...lines);
   }
 
   /**
@@ -988,60 +1107,53 @@ class PageReader {
     const regions = this.parts.filter((part) => part.kind === "region");
     for (const composite of this.parts.filter(
       (part) => part.kind === "state" && part.members.length,
-    )) {
-      let boxes = regions
-        .filter((region) => region.parent === composite)
-        .toSorted(
-          (a, b) => regionNumber(a) - regionNumber(b) || a.box.x - b.box.x + (a.box.y - b.box.y),
-        );
-      if (boxes.length < 2) boxes = this.cutRegions(composite);
-      if (boxes.length < 2) continue;
-      composite.regionStart = regionNumber(boxes[0]) || undefined;
-      const used = new Set<number>();
-      for (const member of composite.members) {
-        const middle = centerOf(member.box);
-        const distance = (box: Box) =>
-          Math.hypot(
-            Math.max(box.x - middle.x, 0, middle.x - box.x - box.width),
-            Math.max(box.y - middle.y, 0, middle.y - box.y - box.height),
-          );
-        let best = 0;
-        boxes.forEach((region, index) => {
-          if (distance(region.box) < distance(boxes[best].box)) best = index;
-        });
-        member.region = best;
-        used.add(best);
-      }
-      // Regions that hold nothing are dropped, and the rest numbered without gaps.
-      const kept = [...used].toSorted((a, b) => a - b);
-      for (const member of composite.members)
-        member.region = kept.length > 1 ? kept.indexOf(member.region!) : undefined;
-    }
+    ))
+      this.divide(composite, regions);
     this.parts.splice(0, this.parts.length, ...this.parts.filter((part) => part.kind !== "region"));
+  }
+
+  /** Each part in a composite state goes to the region its middle lies in, or lies nearest. */
+  private divide(composite: Part, regions: Part[]) {
+    let boxes = regions
+      .filter((region) => region.parent === composite)
+      .toSorted(
+        (a, b) => regionNumber(a) - regionNumber(b) || a.box.x - b.box.x + (a.box.y - b.box.y),
+      );
+    if (boxes.length < 2) boxes = this.cutRegions(composite);
+    if (boxes.length < 2) return;
+    composite.regionStart = regionNumber(boxes[0]) || undefined;
+    const used = new Set<number>();
+    for (const member of composite.members) {
+      member.region = nearestRegion(centerOf(member.box), boxes);
+      used.add(member.region);
+    }
+    // Regions that hold nothing are dropped, and the rest numbered without gaps.
+    const kept = [...used].toSorted((a, b) => a - b);
+    for (const member of composite.members)
+      member.region = kept.length > 1 ? kept.indexOf(member.region!) : undefined;
+  }
+
+  /** The smallest state that holds a point. */
+  private stateAt(point: Point) {
+    return this.parts
+      .filter((part) => part.kind === "state" && inside(pointBox(point), part.box, 0.5))
+      .toSorted((a, b) => area(a.box) - area(b.box))[0];
   }
 
   /** Regions of a composite state from the dashed lines across it. */
   private cutRegions(composite: Part): Part[] {
     const box = composite.box;
-    const holder = (point: Point) =>
-      this.parts
-        .filter((part) => part.kind === "state" && inside(pointBox(point), part.box, 0.5))
-        .toSorted((a, b) => area(a.box) - area(b.box))[0];
-    const xs: number[] = [],
-      ys: number[] = [];
+    const cuts = { x: [] as number[], y: [] as number[] };
     for (const { points } of this.separators) {
       const [a, b] = points;
-      if (holder(centerOf(around([pointBox(a), pointBox(b)]))) !== composite) continue;
-      const vertical = Math.abs(a.x - b.x) < Math.abs(a.y - b.y) / 10,
-        horizontal = Math.abs(a.y - b.y) < Math.abs(a.x - b.x) / 10;
-      if (vertical && Math.abs(a.y - b.y) >= box.height / 3) xs.push((a.x + b.x) / 2);
-      else if (horizontal && Math.abs(a.x - b.x) >= box.width / 3) ys.push((a.y + b.y) / 2);
+      if (this.stateAt(centerOf(around([pointBox(a), pointBox(b)]))) !== composite) continue;
+      const cut = cutAcross(a, b, box);
+      if (cut) cuts[cut.along].push(cut.at);
     }
-    const cuts = xs.length >= ys.length ? xs : ys;
-    if (!cuts.length) return [];
-    const along = xs.length >= ys.length ? "x" : "y",
-      size = along === "x" ? "width" : "height";
-    const edges = [box[along], ...cuts.toSorted((a, b) => a - b), box[along] + box[size]];
+    const along = cuts.x.length >= cuts.y.length ? "x" : "y";
+    if (!cuts[along].length) return [];
+    const size = along === "x" ? "width" : "height";
+    const edges = [box[along], ...cuts[along].toSorted((a, b) => a - b), box[along] + box[size]];
     return edges.slice(1).map((end, index) => ({
       cell: composite.cell,
       kind: "region" as Kind,
@@ -1083,6 +1195,47 @@ class PageReader {
       bar.kind = out > into ? "fork" : "join";
     }
   }
+}
+
+/** An end of an edge: the part there, and whether the end stops a little short of it. */
+type End = { part?: Part; near?: boolean };
+
+/** A text written in a state, and where it stands. */
+type Written = { box: Box; lines: string[] };
+
+/** The smallest state that holds a point, when it holds no states. */
+function leafAt(states: Part[], point: Point): Part | undefined {
+  const holder = states.find((state) => inside(pointBox(point), state.box, 0));
+  return holder && !holder.members.length ? holder : undefined;
+}
+
+/** Whether a line runs level: it climbs less than a tenth of its run. */
+const isLevel = (a: Point, b: Point) => Math.abs(a.y - b.y) < Math.abs(a.x - b.x) / 10;
+
+/**
+ * Where a dashed line cuts a box into regions: upright and a third of its height long, or level
+ * and a third of its width long.
+ */
+function cutAcross(a: Point, b: Point, box: Box): { along: "x" | "y"; at: number } | undefined {
+  const upright = Math.abs(a.x - b.x) < Math.abs(a.y - b.y) / 10;
+  if (upright && Math.abs(a.y - b.y) >= box.height / 3) return { along: "x", at: (a.x + b.x) / 2 };
+  if (isLevel(a, b) && Math.abs(a.x - b.x) >= box.width / 3)
+    return { along: "y", at: (a.y + b.y) / 2 };
+  return undefined;
+}
+
+/** The index of the region nearest a point; the first of equals. */
+function nearestRegion(middle: Point, regions: Part[]): number {
+  const distance = (box: Box) =>
+    Math.hypot(
+      Math.max(box.x - middle.x, 0, middle.x - box.x - box.width),
+      Math.max(box.y - middle.y, 0, middle.y - box.y - box.height),
+    );
+  let best = 0;
+  regions.forEach((region, index) => {
+    if (distance(region.box) < distance(regions[best].box)) best = index;
+  });
+  return best;
 }
 
 /** The number in a region's id from our export (`Active#region2`), for their order. */
@@ -1153,53 +1306,63 @@ class StateIds {
   of(cellId: string, label: string, fallback: string): string {
     const free = (id: string) =>
       STATE_ID.test(id) && !KEYWORDS.test(id) && !STYLING.test(id) && !this.taken.has(id);
-    let id = cellId;
+    let id = free(cellId) ? cellId : madeId(label, fallback);
     if (!free(id)) {
-      const made = label
-        .normalize("NFKD")
-        .replace(/[\u0300-\u036f]/g, "")
-        .replace(/[^\p{L}\p{N}_]+/gu, "_")
-        .replace(/^_+|_+$/g, "")
-        .slice(0, 40);
-      id = made && /^[\p{L}_]/u.test(made) ? made : made ? `${fallback}_${made}` : fallback;
-      if (!free(id)) {
-        let index = 1;
-        while (!free(`${id}${index}`)) index++;
-        id = `${id}${index}`;
-      }
+      let index = 1;
+      while (!free(`${id}${index}`)) index++;
+      id = `${id}${index}`;
     }
     this.taken.add(id);
     return id;
   }
 }
 
+/** An id made from a label: its letters, digits and underscores, after `fallback` where it needs one. */
+function madeId(label: string, fallback: string): string {
+  const made = label
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^\p{L}\p{N}_]+/gu, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 40);
+  if (!made) return fallback;
+  return /^[\p{L}_]/u.test(made) ? made : `${fallback}_${made}`;
+}
+
+type Direction = "TB" | "BT" | "LR" | "RL";
+
 /** The way the layout runs, read from where the transitions lead: most go that way. */
-function directionOf(reader: PageReader): "TB" | "BT" | "LR" | "RL" {
+function directionOf(reader: PageReader): Direction {
   const votes = { TB: 0, BT: 0, LR: 0, RL: 0 };
   for (const { source, target } of reader.transitions) {
-    if (source === target) continue;
-    if (inside(source.box, target.box, 2) || inside(target.box, source.box, 2)) continue;
-    const a = centerOf(source.box),
-      b = centerOf(target.box),
-      dx = b.x - a.x,
-      dy = b.y - a.y;
-    if (Math.abs(dx) > Math.abs(dy)) votes[dx > 0 ? "LR" : "RL"]++;
-    else votes[dy > 0 ? "TB" : "BT"]++;
+    const way = wayOf(source, target);
+    if (way) votes[way]++;
   }
-  const bars = reader.parts.filter((part) => part.kind === "fork" || part.kind === "join");
-  const across = bars.length
-    ? bars.every((bar) => bar.box.height > bar.box.width)
-      ? "horizontal"
-      : "vertical"
-    : undefined;
-  const keys = (
-    across === "horizontal"
-      ? ["LR", "RL"]
-      : across === "vertical"
-        ? ["TB", "BT"]
-        : ["TB", "LR", "BT", "RL"]
-  ) as (keyof typeof votes)[];
+  const keys = candidates(
+    reader.parts.filter((part) => part.kind === "fork" || part.kind === "join"),
+  );
   return keys.reduce((best, key) => (votes[key] > votes[best] ? key : best), keys[0]);
+}
+
+/** The way a transition leads, unless it leads to its own state or into or out of one around it. */
+function wayOf(source: Part, target: Part): Direction | undefined {
+  if (source === target) return undefined;
+  if (inside(source.box, target.box, 2) || inside(target.box, source.box, 2)) return undefined;
+  const a = centerOf(source.box),
+    b = centerOf(target.box),
+    dx = b.x - a.x,
+    dy = b.y - a.y;
+  if (Math.abs(dx) > Math.abs(dy)) return dx > 0 ? "LR" : "RL";
+  return dy > 0 ? "TB" : "BT";
+}
+
+/**
+ * The ways the layout may run, the first preferred on a tie: bars standing upright say it runs
+ * across, bars lying down that it runs down; without bars any way.
+ */
+function candidates(bars: Part[]): Direction[] {
+  if (!bars.length) return ["TB", "LR", "BT", "RL"];
+  return bars.every((bar) => bar.box.height > bar.box.width) ? ["LR", "RL"] : ["TB", "BT"];
 }
 
 /** A scope of `[*]`: the whole machine, a composite state, or one of its regions. */
@@ -1226,13 +1389,7 @@ class SourceWriter {
   write(title: string | undefined): string {
     const { reader } = this;
     const order = readingOrder(reader.parts, (part) => part.box);
-    for (const part of order)
-      if (["state", "choice", "fork", "join"].includes(part.kind))
-        part.id = this.ids.of(
-          part.cell.id,
-          part.label,
-          part.kind === "state" ? "state" : part.kind,
-        );
+    for (const part of order) if (NAMED_KINDS.has(part.kind)) part.id = this.idOf(part);
     if (title) this.lines.push("---", `title: ${title.replace(/\s+/g, " ")}`, "---");
     this.lines.push("stateDiagram-v2");
     const direction = directionOf(reader);
@@ -1240,17 +1397,27 @@ class SourceWriter {
     this.scope({}, order, 1);
     for (const transition of this.ordered(reader.transitions))
       if (transition.source.id && transition.target.id) this.transition(transition, 1);
+    this.writeNotes(order, direction);
+    return this.lines.join("\n") + "\n";
+  }
+
+  private idOf(part: Part) {
+    return this.ids.of(part.cell.id, part.label, part.kind === "state" ? "state" : part.kind);
+  }
+
+  /** The notes, each on the side of its state it stands on. */
+  private writeNotes(order: Part[], direction: string) {
+    const { noteTargets } = this.reader;
     this.notes = order
-      .filter((part) => reader.noteTargets.has(part))
+      .filter((part) => noteTargets.has(part))
       .toSorted((a, b) => noteNumber(a) - noteNumber(b));
     for (const note of this.notes) {
-      const target = reader.noteTargets.get(note)!;
+      const target = noteTargets.get(note)!;
       const side = note.side ?? sideOf(note.box, target.box, direction);
       this.lines.push(
         `  note ${side} of ${target.id} : ${escapeText(note.label, false)}`.trimEnd(),
       );
     }
-    return this.lines.join("\n") + "\n";
   }
 
   /** Transitions in the order of the export's ids (`t3`), else as the page has them. */
@@ -1279,111 +1446,157 @@ class SourceWriter {
 
   /** The states of a scope, the composite states in it with theirs, then its `[*]` transitions. */
   private scope(scope: Scope, order: Part[], depth: number) {
-    const { reader } = this;
     const pad = "  ".repeat(depth);
     const members = this.members(scope, order);
-    for (const part of members) {
-      if (part.kind === "choice" || part.kind === "fork" || part.kind === "join")
-        this.lines.push(`${pad}state ${part.id} <<${part.kind}>>`);
-      else if (part.kind === "state" && !part.members.length) {
-        const name = escapeText(part.label, true);
-        this.lines.push(
-          `${pad}${name && name !== part.id ? `state "${name}" as ${part.id}` : KEYWORDS.test(part.id!) || STYLING.test(part.id!) ? `state ${part.id}` : part.id}`,
-        );
-        for (const line of part.descriptions)
-          this.lines.push(`${pad}${part.id} : ${escapeText(line, false)}`);
-      }
-    }
-    const subtree = (part: Part): Part[] => [part, ...part.members.flatMap(subtree)];
-    const firstFinal = (part: Part) =>
-      Math.min(
-        ...subtree(part)
-          .filter((item) => item.kind === "final")
-          .map(finalNumber),
-      );
-    const firstRegion = (part: Part) =>
-      Math.min(...subtree(part).map((item) => item.regionStart ?? Infinity));
-    const composites = members
-      .filter((part) => part.kind === "state" && part.members.length)
-      .map((part, index) => ({ part, index }))
-      .toSorted(
-        (a, b) =>
-          firstFinal(a.part) - firstFinal(b.part) ||
-          firstRegion(a.part) - firstRegion(b.part) ||
-          a.index - b.index,
-      )
-      .map(({ part }) => part);
-    for (const composite of composites) {
-      const name = escapeText(composite.label, true);
-      this.lines.push(
-        `${pad}${name && name !== composite.id ? `state "${name}" as ${composite.id}` : `state ${composite.id}`} {`,
-      );
-      const regions = [...new Set(composite.members.map((part) => part.region))].toSorted(
-        (a, b) => (a ?? 0) - (b ?? 0),
-      );
-      regions.forEach((region, index) => {
-        if (index) this.lines.push(`${pad}  --`);
-        this.scope({ composite, region }, order, depth + 1);
-      });
-      this.lines.push(`${pad}}`);
-    }
+    for (const part of members) this.declare(part, pad);
+    for (const composite of compositesInOrder(members))
+      this.writeComposite(composite, order, depth);
     // The `[*]` transitions of the scope: from its initial state, then to its final states.
+    this.writeInitials(scope, members, depth);
+    const finals = byNumber(
+      members.filter((part) => part.kind === "final"),
+      finalNumber,
+    );
+    for (const final of finals) this.writeFinal(scope, final, depth);
+  }
+
+  /** A pseudostate, or a simple state with its name and descriptions. */
+  private declare(part: Part, pad: string) {
+    if (part.kind === "choice" || part.kind === "fork" || part.kind === "join") {
+      this.lines.push(`${pad}state ${part.id} <<${part.kind}>>`);
+      return;
+    }
+    if (part.kind !== "state" || part.members.length) return;
+    this.lines.push(`${pad}${stateLine(part)}`);
+    for (const line of part.descriptions)
+      this.lines.push(`${pad}${part.id} : ${escapeText(line, false)}`);
+  }
+
+  /** A composite state, its regions parted by `--`. */
+  private writeComposite(composite: Part, order: Part[], depth: number) {
+    const pad = "  ".repeat(depth);
+    const name = escapeText(composite.label, true);
+    this.lines.push(
+      `${pad}${name && name !== composite.id ? `state "${name}" as ${composite.id}` : `state ${composite.id}`} {`,
+    );
+    const regions = [...new Set(composite.members.map((part) => part.region))].toSorted(
+      (a, b) => (a ?? 0) - (b ?? 0),
+    );
+    regions.forEach((region, index) => {
+      if (index) this.lines.push(`${pad}  --`);
+      this.scope({ composite, region }, order, depth + 1);
+    });
+    this.lines.push(`${pad}}`);
+  }
+
+  /** The transitions out of a scope's initial states, which the source writes as one `[*]`. */
+  private writeInitials(scope: Scope, members: Part[], depth: number) {
+    const { warnings } = this.reader;
     const initials = members.filter((part) => part.kind === "initial");
     if (initials.length > 1)
-      reader.warnings.push(
+      warnings.push(
         `${initials.length} initial states stand in ${scope.composite ? `“${scope.composite.label}”` : "the diagram"}; they are read as one.`,
       );
     for (const initial of initials) {
-      const out = this.ordered(reader.transitions.filter((item) => item.source === initial));
+      const out = this.ordered(this.reader.transitions.filter((item) => item.source === initial));
       if (!out.length)
-        reader.warnings.push(
-          `An initial state${scope.composite ? ` in “${scope.composite.label}”` : ""} has no transition and is not read.`,
-        );
-      for (const transition of out) {
-        if (transition.target.kind === "initial") {
-          reader.warnings.push(`A transition into an initial state is not read.`);
-          continue;
-        }
-        if (transition.target.kind === "final" && !this.same(transition.target, initial)) {
-          reader.warnings.push(
-            `A transition from an initial state to a final state in another scope is not read.`,
-          );
-          continue;
-        }
-        this.starred.set(this.lines.length + 1, initial);
-        if (transition.target.kind === "final")
-          this.starred.set(-(this.lines.length + 1), transition.target);
-        this.transition(transition, depth);
-      }
+        warnings.push(`An initial state${inScope(scope)} has no transition and is not read.`);
+      for (const transition of out) this.writeFromInitial(initial, transition, depth);
     }
-    const finals = members
-      .filter((part) => part.kind === "final")
-      .map((part, index) => ({ part, index }))
-      .toSorted((a, b) => finalNumber(a.part) - finalNumber(b.part) || a.index - b.index)
-      .map(({ part }) => part);
-    for (const final of finals) {
-      const into = this.ordered(reader.transitions.filter((item) => item.target === final));
-      if (!into.length)
-        reader.warnings.push(
-          `A final state${scope.composite ? ` in “${scope.composite.label}”` : ""} has no transition into it and is not read.`,
-        );
-      if (into.length > 1)
-        reader.warnings.push(
-          `A final state has ${into.length} transitions into it; each draws a final state of its own.`,
-        );
-      if (reader.transitions.some((item) => item.source === final))
-        reader.warnings.push(`A transition out of a final state is not read.`);
-      for (const transition of into) {
-        if (transition.source.kind === "final" || transition.source.kind === "initial") continue;
-        this.starred.set(-(this.lines.length + 1), final);
-        this.transition(transition, depth);
-      }
+  }
+
+  /** A transition out of an initial state, unless UML has no such transition. */
+  private writeFromInitial(initial: Part, transition: Transition, depth: number) {
+    const { target } = transition;
+    if (target.kind === "initial") {
+      this.reader.warnings.push(`A transition into an initial state is not read.`);
+      return;
+    }
+    const final = target.kind === "final";
+    if (final && !this.same(target, initial)) {
+      this.reader.warnings.push(
+        `A transition from an initial state to a final state in another scope is not read.`,
+      );
+      return;
+    }
+    this.starred.set(this.lines.length + 1, initial);
+    if (final) this.starred.set(-(this.lines.length + 1), target);
+    this.transition(transition, depth);
+  }
+
+  /** The transitions into a final state, each written to `[*]`. */
+  private writeFinal(scope: Scope, final: Part, depth: number) {
+    const { reader } = this;
+    const into = this.ordered(reader.transitions.filter((item) => item.target === final));
+    if (!into.length)
+      reader.warnings.push(
+        `A final state${inScope(scope)} has no transition into it and is not read.`,
+      );
+    if (into.length > 1)
+      reader.warnings.push(
+        `A final state has ${into.length} transitions into it; each draws a final state of its own.`,
+      );
+    if (reader.transitions.some((item) => item.source === final))
+      reader.warnings.push(`A transition out of a final state is not read.`);
+    for (const transition of into) {
+      if (transition.source.kind === "final" || transition.source.kind === "initial") continue;
+      this.starred.set(-(this.lines.length + 1), final);
+      this.transition(transition, depth);
     }
   }
 
   private same(a: Part, b: Part) {
     return a.parent === b.parent && a.region === b.region;
   }
+}
+
+/** The kinds of part that take an id in the source. */
+const NAMED_KINDS = new Set<Kind>(["state", "choice", "fork", "join"]);
+
+/** Where a warning says a pseudostate stands: in a composite state, or nothing for the diagram. */
+const inScope = (scope: Scope) => (scope.composite ? ` in “${scope.composite.label}”` : "");
+
+/** A simple state's line: its id, with its name where that differs, and kept from the keywords. */
+function stateLine(part: Part): string {
+  const id = part.id!;
+  const name = escapeText(part.label, true);
+  if (name && name !== id) return `state "${name}" as ${id}`;
+  return KEYWORDS.test(id) || STYLING.test(id) ? `state ${id}` : id;
+}
+
+/** Parts in the order of the numbers in their ids, else in the order they come. */
+const byNumber = (parts: Part[], number: (part: Part) => number) =>
+  parts
+    .map((part, index) => ({ part, index }))
+    .toSorted((a, b) => number(a.part) - number(b.part) || a.index - b.index)
+    .map(({ part }) => part);
+
+/** A part and every part inside it, at any depth. */
+const subtree = (part: Part): Part[] => [part, ...part.members.flatMap(subtree)];
+
+/**
+ * The composite states of a scope in the order the export wrote them: by the numbers of the final
+ * states and regions they hold, else as they come.
+ */
+function compositesInOrder(members: Part[]): Part[] {
+  const firstFinal = (part: Part) =>
+    Math.min(
+      ...subtree(part)
+        .filter((item) => item.kind === "final")
+        .map(finalNumber),
+    );
+  const firstRegion = (part: Part) =>
+    Math.min(...subtree(part).map((item) => item.regionStart ?? Infinity));
+  return members
+    .filter((part) => part.kind === "state" && part.members.length)
+    .map((part, index) => ({ part, index }))
+    .toSorted(
+      (a, b) =>
+        firstFinal(a.part) - firstFinal(b.part) ||
+        firstRegion(a.part) - firstRegion(b.part) ||
+        a.index - b.index,
+    )
+    .map(({ part }) => part);
 }
 
 /** The number in a note's id from our export (`note2`), for their order. */
@@ -1398,25 +1611,32 @@ function sideOf(note: Box, state: Box, direction: string): "left" | "right" {
   return centerOf(note).x < centerOf(state).x ? "left" : "right";
 }
 
+/** The sizes the layout gives the symbols of a fixed size. */
+const SYMBOL_SIZES: Partial<Record<Kind, { width: number; height: number }>> = {
+  initial: { width: 15, height: 15 },
+  final: { width: 17, height: 17 },
+  choice: { width: 18, height: 18 },
+  split: { width: 18, height: 18 },
+};
+
 /** The size the layout gives a symbol, which is placed by its middle: a state by its corner. */
 function symbolSize(
   part: Part,
   diagram: StateDiagram,
   vertical: boolean,
 ): { width: number; height: number } | undefined {
-  if (part.kind === "initial") return { width: 15, height: 15 };
-  if (part.kind === "final") return { width: 17, height: 17 };
-  if (part.kind === "choice" || part.kind === "split") return { width: 18, height: 18 };
-  if (part.kind === "fork" || part.kind === "join") {
-    const id = part.id!;
-    const into = diagram.transitions.filter(
-        (item) => item.target === id && item.source !== id,
-      ).length,
-      out = diagram.transitions.filter((item) => item.source === id && item.target !== id).length;
-    const length = Math.max(60, Math.max(into, out) * 46);
-    return vertical ? { width: length, height: 5 } : { width: 5, height: length };
-  }
-  return undefined;
+  if (part.kind === "fork" || part.kind === "join") return barSize(part.id!, diagram, vertical);
+  return SYMBOL_SIZES[part.kind];
+}
+
+/** A bar grows with the transitions on its busier side, across the way the layout runs. */
+function barSize(id: string, diagram: StateDiagram, vertical: boolean) {
+  const into = diagram.transitions.filter(
+      (item) => item.target === id && item.source !== id,
+    ).length,
+    out = diagram.transitions.filter((item) => item.source === id && item.target !== id).length;
+  const length = Math.max(60, Math.max(into, out) * 46);
+  return vertical ? { width: length, height: 5 } : { width: 5, height: length };
 }
 
 /** The place of a part: its corner, or for a symbol the corner that puts its middle where the page has it. */
@@ -1428,17 +1648,15 @@ function placeOf(box: Box, size: { width: number; height: number } | undefined):
 
 const DEFAULT_NAMES = /^(State machine diagram|Page-\d+|)$/;
 
+/** The kinds of part that make a page a state machine. */
+const STATE_KINDS = new Set<Kind>(["state", "initial", "final", "choice", "fork", "join"]);
+
 function readPage(drawing: Drawing): Imported {
   const reader = new PageReader(drawing);
-  if (
-    !reader.parts.some((part) =>
-      ["state", "initial", "final", "choice", "fork", "join"].includes(part.kind),
-    )
-  )
+  if (!reader.parts.some((part) => STATE_KINDS.has(part.kind)))
     throw new DrawioError(`The page “${drawing.name}” holds no states.`);
   const writer = new SourceWriter(reader);
-  const title = pageTitle(drawing, DEFAULT_NAMES);
-  let source = writer.write(title);
+  const source = writer.write(pageTitle(drawing, DEFAULT_NAMES));
   let diagram: StateDiagram;
   try {
     diagram = parseStateDiagram(source);
@@ -1447,33 +1665,69 @@ function readPage(drawing: Drawing): Imported {
       `The page “${drawing.name}” does not make a state machine diagram: ${(error as Error).message}`,
     );
   }
-  // The ids the parser gave the `[*]` states, by the lines that wrote them.
-  const generated = new Map<Part, string[]>();
-  for (const transition of diagram.transitions) {
-    const line = transition.line;
-    const initial = writer.starred.get(line),
-      final = writer.starred.get(-line);
-    if (initial && !generated.has(initial)) generated.set(initial, [transition.source]);
-    if (final) generated.set(final, [...(generated.get(final) ?? []), transition.target]);
+  const places = new Placer(reader, writer, diagram).places();
+  return {
+    source: places.length ? source + places.join("\n") + "\n" : source,
+    kind: "state",
+    warnings: reader.warnings,
+  };
+}
+
+/** The places of the parts of a page, under the ids the parser gave them. */
+class Placer {
+  private readonly reader: PageReader;
+  private readonly writer: SourceWriter;
+  private readonly diagram: StateDiagram;
+  /** The ids the parser gave the `[*]` states, by the lines that wrote them. */
+  private readonly generated = new Map<Part, string[]>();
+  private readonly vertical: boolean;
+
+  constructor(reader: PageReader, writer: SourceWriter, diagram: StateDiagram) {
+    this.reader = reader;
+    this.writer = writer;
+    this.diagram = diagram;
+    this.vertical = diagram.direction === "TB" || diagram.direction === "BT";
+    for (const transition of diagram.transitions) this.starOf(transition);
   }
-  const vertical = diagram.direction === "TB" || diagram.direction === "BT";
-  const places: string[] = [];
-  const place = (id: string, at: Point) => places.push(`%% @${id} ${at.x},${at.y}`);
-  for (const part of readingOrder(reader.parts, (item) => item.box)) {
-    const size = symbolSize(part, diagram, vertical);
-    if (part.kind === "note") {
-      const id = diagram.notes[writer.notes.indexOf(part)]?.id;
-      if (id) place(id, placeOf(part.box, undefined));
-    } else if (part.kind === "split") {
-      const base = splitOwner(part.cell.id),
-        owner = reader.parts.find((item) => item.cell.id === base);
-      if (owner?.id) place(owner.id + part.cell.id.slice(base!.length), placeOf(part.box, size));
-    } else if (part.kind === "initial" || part.kind === "final") {
-      for (const id of generated.get(part) ?? []) place(id, placeOf(part.box, size));
-    } else if (part.id && !part.members.length) place(part.id, placeOf(part.box, size));
+
+  private starOf({ line, source, target }: StateDiagram["transitions"][number]) {
+    const initial = this.writer.starred.get(line),
+      final = this.writer.starred.get(-line);
+    if (initial && !this.generated.has(initial)) this.generated.set(initial, [source]);
+    if (final) this.generated.set(final, [...(this.generated.get(final) ?? []), target]);
   }
-  if (places.length) source += places.join("\n") + "\n";
-  return { source, kind: "state", warnings: reader.warnings };
+
+  places(): string[] {
+    return readingOrder(this.reader.parts, (item) => item.box).flatMap((part) => {
+      const at = placeOf(part.box, this.sizeOf(part));
+      return this.idsOf(part).map((id) => `%% @${id} ${at.x},${at.y}`);
+    });
+  }
+
+  /** The size a part is placed by: a note by its corner, a symbol by its middle. */
+  private sizeOf(part: Part) {
+    return part.kind === "note" ? undefined : symbolSize(part, this.diagram, this.vertical);
+  }
+
+  /** The ids a part is placed under: none for a composite state, which its states place. */
+  private idsOf(part: Part): string[] {
+    if (part.kind === "note") return this.noteIds(part);
+    if (part.kind === "split") return this.splitIds(part);
+    if (part.kind === "initial" || part.kind === "final") return this.generated.get(part) ?? [];
+    return part.id && !part.members.length ? [part.id] : [];
+  }
+
+  private noteIds(note: Part): string[] {
+    const id = this.diagram.notes[this.writer.notes.indexOf(note)]?.id;
+    return id ? [id] : [];
+  }
+
+  /** A diamond of a split choice, under its choice's id with its own suffix. */
+  private splitIds(split: Part): string[] {
+    const base = splitOwner(split.cell.id)!,
+      owner = this.reader.parts.find((item) => item.cell.id === base);
+    return owner?.id ? [owner.id + split.cell.id.slice(base.length)] : [];
+  }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1518,30 +1772,32 @@ const PSEUDOSTATE_WEIGHT: Partial<Record<Kind, number>> = {
 function likeness(drawing: Drawing): number {
   let score = 0;
   for (const part of drawing.parts) {
-    const role = roleOf(drawing, part);
-    if (role?.startsWith("state")) {
-      score += 3;
-      continue;
-    }
-    if (part.edge) {
-      if (TRANSITION_LABEL.test(drawing.label(part))) score += 2;
-      if (part.source && part.source === part.target) score += 2;
-      continue;
-    }
-    if (!part.vertex) continue;
-    // The circles inside a final state's group count with the group.
-    const holder = drawing.parentOf(part);
-    if (holder?.vertex && shapeOf(drawing.style(holder)) === "group") continue;
-    const style = drawing.style(part);
-    if (looksLikeState(style)) score += 4;
-    else if (looksLikeAction(style)) score -= 2;
-    else {
-      const kind = kindByPicture(drawing, part);
-      score += PSEUDOSTATE_WEIGHT[kind] ?? 0;
-      if (kind === "final" && shapeOf(style) === "group") score += 1;
-    }
+    if (roleOf(drawing, part)?.startsWith("state")) score += 3;
+    else if (part.edge) score += edgeScore(drawing, part);
+    else if (part.vertex) score += vertexScore(drawing, part);
   }
   return Math.max(0, score);
+}
+
+/** What an edge weighs: a transition's label, and a transition back to its state. */
+function edgeScore(drawing: Drawing, edge: Cell): number {
+  let score = 0;
+  if (TRANSITION_LABEL.test(drawing.label(edge))) score += 2;
+  if (edge.source && edge.source === edge.target) score += 2;
+  return score;
+}
+
+/** What a vertex weighs: a state much, an action against, a pseudostate as for an activity. */
+function vertexScore(drawing: Drawing, vertex: Cell): number {
+  // The circles inside a final state's group count with the group.
+  const holder = drawing.parentOf(vertex);
+  if (holder?.vertex && shapeOf(drawing.style(holder)) === "group") return 0;
+  const style = drawing.style(vertex);
+  if (looksLikeState(style)) return 4;
+  if (looksLikeAction(style)) return -2;
+  const kind = kindByPicture(drawing, vertex);
+  const group = kind === "final" && shapeOf(style) === "group" ? 1 : 0;
+  return (PSEUDOSTATE_WEIGHT[kind] ?? 0) + group;
 }
 
 export const stateDrawio: DrawioType = {
