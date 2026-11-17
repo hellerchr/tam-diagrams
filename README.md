@@ -227,6 +227,7 @@ npx tam-diagrams check docs/*.tam docs/*.mmd
 npx tam-diagrams convert diagram.tam -o diagram.drawio
 npx tam-diagrams convert diagram.drawio -o diagram.tam
 npx tam-diagrams edit diagram.tam
+npx tam-diagrams guide flowchart
 ```
 
 `render` writes the SVG to the file given with `-o`, or to stdout; with `--rounded`, `render` and
@@ -235,7 +236,9 @@ draw.io file and a draw.io file into its source; `render` and `check` read draw.
 diagrams they draw, and every command prints what a draw.io page holds that the diagram leaves out
 as `<file>: warning: …` on stderr. `check` reads every file, prints
 nothing when they are valid and a `<file>:<line>: <message>` for each broken file (`<stdin>` for
-`-`). To check diagram sources before each commit, add a local hook to `.pre-commit-config.yaml`:
+`-`). `guide` prints the notation of a diagram type, the text of [docs/guides](docs/guides), and
+without a type lists the types. To check diagram sources before each commit, add a local hook to
+`.pre-commit-config.yaml`:
 
 ```yaml
 repos:
@@ -267,6 +270,11 @@ Exit codes: `0` success, `1` a diagram error, `2` a usage or I/O error, `3` an i
 bug in tam-diagrams; `check` still checks the other files). A source with no elements, such as an
 empty or comment-only file, is a diagram error. The command line measures text with Arial/Helvetica
 widths and names that font stack in the SVG, so the picture is exact where those fonts are installed.
+
+Coding agents learn to draw with the command line from the skill in
+[.agents/skills/tam-diagrams](.agents/skills/tam-diagrams/SKILL.md): which diagram answers which
+question, and how to write, check, render and hand over its source. Agents that read `.agents/skills`
+find it in this repository; link the folder into an agent's skills folder to use it elsewhere.
 
 ## API
 

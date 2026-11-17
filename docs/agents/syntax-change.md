@@ -12,7 +12,7 @@ A change to what a source may say ripples through every place that reads or writ
    - completion in `editor/completion.ts` or `completion-uml.ts`
    - the tokenizer in `editor/syntax.ts`
    - the inspector, where the change has a property
-5. **Guide**: `editor/reference.ts`, then regenerate `docs/guides/` (see Done in SKILL.md).
+5. **Guide**: `editor/reference.ts`, then regenerate `docs/guides/` (see Done in AGENTS.md).
 6. **draw.io**: the type's `src/drawio-<type>.ts`, both export and import (see [drawio.md](drawio.md)).
 7. **README**: its syntax section.
 

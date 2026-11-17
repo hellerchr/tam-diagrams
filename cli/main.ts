@@ -1,4 +1,5 @@
 import { type Command, parseCommand, USAGE, UsageError } from "./args.ts";
+import { GUIDES, guideMarkdown, guideOf } from "../editor/reference.ts";
 import { runEdit } from "./edit.ts";
 import { checkSource, convertSource, isDiagramError, renderSource, sourceOf } from "./diagram.ts";
 import { diagramMessage, inputName, internalMessage, ioMessage, warningLines } from "./report.ts";
@@ -96,6 +97,23 @@ async function runCheck(command: Extract<Command, { kind: "check" }>, io: CliIo)
   return worst;
 }
 
+/** Prints the guide of a type, or the types and what each shows; a type without a guide exits 2. */
+function runGuide(type: string | undefined, io: CliIo): number {
+  if (type === undefined) {
+    io.stdout(
+      GUIDES.map((guide) => `${guide.type.padEnd(10)} ${guide.name}: ${guide.about}.\n`).join(""),
+    );
+    return OK;
+  }
+  if (!guideOf(type)) {
+    const types = GUIDES.map((guide) => guide.type).join(", ");
+    io.stderr(`tam-diagrams: there is no guide for \`${type}\`; there are guides for ${types}.\n`);
+    return USAGE_OR_IO_ERROR;
+  }
+  io.stdout(guideMarkdown(type));
+  return OK;
+}
+
 /**
  * Runs one invocation and returns its exit code. It never exits the process, so output to a pipe
  * can drain.
@@ -114,5 +132,6 @@ export async function main(argv: string[], io: CliIo): Promise<number> {
     return OK;
   }
   if (command.kind === "edit") return runEdit(command, io);
+  if (command.kind === "guide") return runGuide(command.type, io);
   return command.kind === "check" ? runCheck(command, io) : runRender(command, io);
 }

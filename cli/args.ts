@@ -6,7 +6,8 @@ export type Command =
   | { kind: "render"; input: string; output?: string; rounded?: boolean }
   | { kind: "convert"; input: string; output?: string; rounded?: boolean }
   | { kind: "check"; inputs: string[] }
-  | { kind: "edit"; file?: string; port?: number; noOpen?: boolean };
+  | { kind: "edit"; file?: string; port?: number; noOpen?: boolean }
+  | { kind: "guide"; type?: string };
 
 /** A command line that cannot be run; main prints it with the usage text and exits 2. */
 export class UsageError extends Error {}
@@ -19,6 +20,8 @@ export const USAGE = `Usage:
                                                   a draw.io file drawn with the TAM shapes
   tam-diagrams edit [<file>] [--port <n>]         open the editor in the browser; Save writes back to
                                                   the file, which need not exist yet
+  tam-diagrams guide [<type>]                     the notation of a diagram type as Markdown; without
+                                                  a type, the types and what each shows
 
 Every command reads draw.io files (.drawio, .drawio.svg) as the diagrams they draw.
 
@@ -111,11 +114,20 @@ function toEdit(inputs: string[], options: Options): Command {
   };
 }
 
+/** The guide of one diagram type, or the list of types. */
+function toGuide(inputs: string[], options: Options): Command {
+  withoutRenderOptions(options);
+  withoutEditOptions(options);
+  if (inputs.length > 1) throw new UsageError("guide takes one type at most.");
+  return { kind: "guide", ...(inputs.length ? { type: inputs[0] } : {}) };
+}
+
 function toCommand(positionals: string[], options: Options): Command {
   const [name, ...inputs] = positionals;
   if (name === "render" || name === "convert") return toRender(name, inputs, options);
   if (name === "check") return toCheck(inputs, options);
   if (name === "edit") return toEdit(inputs, options);
+  if (name === "guide") return toGuide(inputs, options);
   throw new UsageError(name ? `unknown command \`${name}\`.` : "missing command.");
 }
 

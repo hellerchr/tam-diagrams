@@ -28,6 +28,8 @@ describe("parseCommand", () => {
     ],
     [["edit", "--port=8080"], { kind: "edit", port: 8080 }],
     [["edit", "--", "-a.tam"], { kind: "edit", file: "-a.tam" }],
+    [["guide"], { kind: "guide" }],
+    [["guide", "tam"], { kind: "guide", type: "tam" }],
     [["-h"], { kind: "help" }],
     [["--help"], { kind: "help" }],
   ])("reads %j", (argv, expected) => {
@@ -36,6 +38,8 @@ describe("parseCommand", () => {
 
   it.each([
     ["no arguments", [], /missing command/],
+    ["two guides", ["guide", "tam", "state"], /guide takes one type at most/],
+    ["an option for a guide", ["guide", "tam", "-o", "x"], /-o applies to render and convert only/],
     ["an unknown command", ["draw", "a.tam"], /unknown command `draw`/],
     ["an unknown option", ["render", "a.tam", "--dark"], /--dark/],
     ["render without an input", ["render"], /exactly one input/],
@@ -89,6 +93,7 @@ describe("parseCommand", () => {
     expect(USAGE).toMatch(/convert <file \| ->/);
     expect(USAGE).toMatch(/edit \[<file>\] \[--port <n>\]/);
     expect(USAGE).toMatch(/--no-open/);
+    expect(USAGE).toMatch(/guide \[<type>\]/);
     expect(USAGE).toMatch(/0 success, 1 diagram error, 2 usage or I\/O error/);
   });
 });

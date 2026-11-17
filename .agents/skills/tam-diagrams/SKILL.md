@@ -1,34 +1,43 @@
 ---
 name: tam-diagrams
-description: Conventions, checks and gotchas for changing the tam-diagrams code. Use when editing src/, editor/ or cli/, changing a notation's syntax, working on the draw.io import or export, or checking the editor in a browser.
+description: Architecture and behaviour diagrams drawn from text as SVG with tam-diagrams: block diagrams of a system's structure (TAM/FMC agents, storages, channels), and activity, sequence, state, class, ER and use case diagrams. Use when presenting a system, a process or a data model visually, when asked to draw or diagram something, or when reading or writing a draw.io file.
 ---
 
-# tam-diagrams
+# Drawing with tam-diagrams
 
-## Voice
+A diagram is a **source**: a short text the picture is rendered from. You write the source, render it, look at the picture, and hand over both.
 
-- Comments are plain full sentences in the domain's words (agent, storage, channel, access, lane, message, place, picture, source): what a function stands for, or why the code is as it is. Read the file around your change and match it.
-- Messages a user sees (errors, warnings, tooltips) are full sentences that name what to write instead.
-- A commit title is one plain sentence saying what the code does now ("The command line opens the editor on a file"); a short prose body follows.
+`tam-diagrams --help` lists the commands. Where `tam-diagrams` is not on the PATH: `npx tam-diagrams` in a project that installs the package, else `npm install && npm link` in a checkout of github.com/hellerchr/tam-diagrams.
 
-## Format
+## Steps
 
-The repo has no Prettier config: format with `npx prettier --print-width 100 --write <the files you changed>`. The README keeps its own style; leave it unformatted.
+1. **One question per diagram.** Pick the type by the question the picture answers:
 
-## Pristine
+   | The question | Diagram | Type |
+   | --- | --- | --- |
+   | What does the system consist of, and what talks to or stores in what? | Block diagram | `tam` |
+   | In what order is the work done, and by whom? | Activity diagram, lanes for who | `flowchart` |
+   | Who sends what to whom, in one scenario? | Sequence diagram | `sequence` |
+   | Which states does one thing pass through? | State machine | `state` |
+   | How are classes built and related? | Class diagram | `class` |
+   | What data is kept, and how does it relate? | ER diagram | `er` |
+   | Who uses the system for what: what is in scope? | Use case diagram | `usecase` |
 
-Every function you add or change stays under cyclomatic complexity 10 by `crapper --no-coverage <files>`, and `dryer -s src -s editor -s cli --threshold 0.8` reports no duplicate you made. Reuse before you write a helper: box and point geometry lives in `src/scene.ts` (`around`, `aroundSome`, `centerOf`, `areaOf`, `middlesApart`), the text of sources in `src/source-text.ts` (lines, indents, one-line texts, fresh ids), Mermaid label codings in `src/uml.ts`, draw.io cell helpers and ids in `src/drawio-shapes.ts`, what holds what in `src/scene-tree.ts`. Both tools write `.metrics/`, which git ignores.
+   An architecture starts with a block diagram. In it, the system is an agent that holds its parts, with people and outside systems beside it; whatever acts is an agent (a service, a job, a browser; a person is `human`), whatever keeps data is a storage (a database, a cache, a bucket), and agents exchange over channels: `calls` for request and response, `sends data` for a stream or a queue. A flow through the system then gets a diagram of its own: a sequence diagram has agents as lifelines, and an agent reading or writing a storage sends itself a message that names it. Done when each diagram answers one question, said in one sentence that can be its title.
 
-## Done
+2. **Read the guide.** `tam-diagrams guide <type>` prints the notation: its rules, every statement, an example, and what is refused with what to write instead. The Mermaid types read a subset of Mermaid under TAM's rules, and the block diagram borrows Mermaid's arrows only, so write from the guide rather than from memory of Mermaid. Done when every statement you write matches a row of the guide.
 
-- `npx tsc --noEmit -p .` is clean.
-- `npx vitest run` is green. `test/tam-placed-routing.test.ts` › "FMC travel agency" fails now and then under full-suite load: rerun it alone before believing it.
-- Every sample renders with a clean layout audit: the sample tests check it, so a layout change that moves a wire into an element shows up there.
-- A changed guide is regenerated: `docs/guides/*.md` are written from `editor/reference.ts` by `UPDATE_GUIDES=1 npx vitest run test/editor-reference.test.ts`.
-- `npm run build` makes both the command line (`dist/cli.js`) and the editor (`dist/editor`), which `tam-diagrams edit` serves.
+3. **Write the source** to a file: `<name>.tam` for a block diagram, `<name>.mmd` for the others. Names are labels in boxes: a few words each, `<br>` to break one.
 
-## Branches
+4. **Check.** `tam-diagrams check <file>` until it prints nothing. Each error names the line and what to write instead.
 
-- Changing what a source may say (a keyword, a shape, a connection, a position line): read [syntax-change.md](syntax-change.md).
-- The draw.io export or import, or its fixtures: read [drawio.md](drawio.md).
-- Checking the editor in a browser: read [editor-check.md](editor-check.md).
+5. **Render and look.** `tam-diagrams render <file> -o <name>.svg`, turn it into a PNG (`rsvg-convert -z 2 <name>.svg -o <name>.png`), and read the image. Done when every element of the source is in the picture, every label reads, and no wire runs through a box. To fix one that fails, in this order: `direction LR` for a long chain, shorter names, two diagrams instead of one, and last, positions by hand (the guide's `@x,y` rows).
+
+6. **Hand it over** where the user needs it (below).
+
+## Where it goes
+
+- **In a conversation**: the source in a fenced block (`tam` or `mermaid`), and the paths of the source and the SVG. Offer to open the SVG (`xdg-open <name>.svg`).
+- **In a repository's docs**: the source beside its SVG (`docs/diagrams/<name>.tam` and `<name>.svg`), the SVG embedded (`![Title](diagrams/<name>.svg)`), and rendered again whenever the source changes. GitHub shows a `tam` fence as text and draws a `mermaid` fence with Mermaid's own renderer, so the SVG is what readers see.
+- **For draw.io**: `tam-diagrams convert <file> -o <name>.drawio` writes a page drawn with the TAMshapes stencils. A draw.io file goes the other way: `tam-diagrams convert <name>.drawio` prints its source, and stderr names what the source leaves out.
+- **For the user to arrange by hand**: `tam-diagrams edit <file>` opens the editor in their browser and writes the file on Save; it runs until stopped. It opens a window on the user's screen, so offer it and start it in the background once they agree.

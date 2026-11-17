@@ -1,4 +1,5 @@
 // @vitest-environment node
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { type CliIo, main } from "../cli/main.ts";
 
@@ -186,4 +187,30 @@ describe("usage", () => {
       expect(port.stdout()).toBe("");
     },
   );
+});
+
+describe("guide", () => {
+  it("lists the diagram types with what each shows", async () => {
+    const port = memoryIo();
+    expect(await main(["guide"], port.io)).toBe(0);
+    for (const type of ["tam", "flowchart", "state", "sequence", "class", "er", "usecase"])
+      expect(port.stdout()).toMatch(new RegExp(`^${type} +\\S`, "m"));
+    expect(port.stdout()).toMatch(/Compositional structure of a system/);
+  });
+
+  it("prints the guide of a type as the docs hold it", async () => {
+    const port = memoryIo();
+    expect(await main(["guide", "tam"], port.io)).toBe(0);
+    expect(port.stdout()).toBe(readFileSync("docs/guides/tam.md", "utf8"));
+    const lanes = memoryIo();
+    expect(await main(["guide", "swimlane"], lanes.io)).toBe(0);
+    expect(lanes.stdout()).toBe(readFileSync("docs/guides/flowchart.md", "utf8"));
+  });
+
+  it("exits 2 for a type without a guide, and names the types there are", async () => {
+    const port = memoryIo();
+    expect(await main(["guide", "pie"], port.io)).toBe(2);
+    expect(port.stderr()).toMatch(/no guide for `pie`.*tam, class/);
+    expect(port.stdout()).toBe("");
+  });
 });
