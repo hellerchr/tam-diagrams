@@ -208,39 +208,74 @@ function signatures(structure: StructureParts): Map<string, string> {
 /** The parts and joins a structure reads from a source. */
 type StructureParts = ReturnType<Structure["read"]>;
 
+/** Pairs found so far between what was before an edit and what is after it, by id. */
+class Pairing {
+  readonly found = new Map<string, string>();
+  readonly taken = new Set<string>();
+
+  pair(from: string, to: string) {
+    this.found.set(from, to);
+    this.taken.add(to);
+  }
+}
+
 /**
  * Which part of the source after an edit each part before it is, by id: the same id where the
  * part still says the same, else the part that says the same, else the same id, and at last the
  * one part of a kind that went for the one that came (it was given another id). Parts that are
  * gone are left out.
  */
-export function followParts(was: StructureParts, now: StructureParts): Map<string, string> {
+function followParts(was: StructureParts, now: StructureParts): Map<string, string> {
   const before = signatures(was),
     after = signatures(now),
-    kinds = (parts: StructureParts) => new Map(parts.nodes.map((node) => [node.id, node.kind]));
-  const kindBefore = kinds(was),
-    kindAfter = kinds(now);
-  const found = new Map<string, string>(),
-    taken = new Set<string>();
-  const pair = (from: string, to: string) => {
-    found.set(from, to);
-    taken.add(to);
-  };
-  for (const [id, said] of before) if (after.get(id) === said) pair(id, id);
-  for (const [id, said] of before) {
-    if (found.has(id)) continue;
-    const same = [...after].find(([other, text]) => !taken.has(other) && text === said);
-    if (same) pair(id, same[0]);
-  }
-  for (const id of before.keys())
-    if (!found.has(id) && !taken.has(id) && kindAfter.get(id) === kindBefore.get(id)) pair(id, id);
-  for (const kind of new Set(kindBefore.values())) {
-    const gone = [...before.keys()].filter((id) => !found.has(id) && kindBefore.get(id) === kind),
-      come = [...after.keys()].filter((id) => !taken.has(id) && kindAfter.get(id) === kind);
-    if (gone.length === 1 && come.length === 1) pair(gone[0], come[0]);
-  }
+    kindBefore = kindsOf(was),
+    kindAfter = kindsOf(now);
+  const pairing = new Pairing(),
+    { found } = pairing;
+  for (const [id, said] of before) if (after.get(id) === said) pairing.pair(id, id);
+  for (const [id, said] of before) if (!found.has(id)) pairSaid(pairing, after, id, said);
+  for (const id of before.keys()) pairKept(pairing, id, kindBefore, kindAfter);
+  for (const kind of new Set(kindBefore.values())) pairLone(pairing, kind, kindBefore, kindAfter);
   return found;
 }
+
+/** Pairs a part with the part of its id after the edit, where that is still free and of its kind. */
+function pairKept(
+  pairing: Pairing,
+  id: string,
+  kindBefore: Map<string, string>,
+  kindAfter: Map<string, string>,
+) {
+  if (pairing.found.has(id) || pairing.taken.has(id)) return;
+  if (kindAfter.get(id) === kindBefore.get(id)) pairing.pair(id, id);
+}
+
+/** The kind of each part, by id. */
+const kindsOf = (parts: StructureParts) => new Map(parts.nodes.map((node) => [node.id, node.kind]));
+
+/** Pairs the one part of a kind still unpaired before the edit with the one not yet taken after it. */
+function pairLone(
+  pairing: Pairing,
+  kind: string,
+  kindBefore: Map<string, string>,
+  kindAfter: Map<string, string>,
+) {
+  const gone = [...kindBefore.keys()].filter(
+      (id) => !pairing.found.has(id) && kindBefore.get(id) === kind,
+    ),
+    come = [...kindAfter.keys()].filter(
+      (id) => !pairing.taken.has(id) && kindAfter.get(id) === kind,
+    );
+  if (gone.length === 1 && come.length === 1) pairing.pair(gone[0], come[0]);
+}
+
+/** Pairs a part with the first part not yet taken that says the same. */
+function pairSaid(pairing: Pairing, after: Map<string, string>, id: string, said: string) {
+  const same = [...after].find(([other, text]) => !pairing.taken.has(other) && text === said);
+  if (same) pairing.pair(id, same[0]);
+}
+
+type Join = StructureParts["edges"][number];
 
 /**
  * Which join of the source after an edit each join before it is, by id, given which part each part
@@ -253,36 +288,50 @@ function followJoins(
   now: StructureParts,
   parts: Map<string, string>,
 ): Map<string, string> {
-  const found = new Map<string, string>(),
-    taken = new Set<string>();
-  const ends = (edge: StructureParts["edges"][number]) =>
-    `${parts.get(edge.source) ?? ""}\u0000${parts.get(edge.target) ?? ""}\u0000${edge.kind}`;
-  const between = (edge: StructureParts["edges"][number]) =>
-    `${edge.source}\u0000${edge.target}\u0000${edge.kind}`;
+  const pairing = new Pairing();
   for (const edge of was.edges) {
-    const same = now.edges.find(
-      (other) =>
-        !taken.has(other.id) &&
-        between(other) === ends(edge) &&
-        (other.label ?? "") === (edge.label ?? ""),
+    const same = alike(pairing, now, parts, edge).find(
+      (other) => (other.label ?? "") === (edge.label ?? ""),
     );
-    if (same) {
-      found.set(edge.id, same.id);
-      taken.add(same.id);
-    }
+    if (same) pairing.pair(edge.id, same.id);
   }
   for (const edge of was.edges) {
-    if (found.has(edge.id)) continue;
-    const alike = now.edges.filter(
-      (other) => !taken.has(other.id) && between(other) === ends(edge),
-    );
-    if (alike.length === 1) {
-      found.set(edge.id, alike[0].id);
-      taken.add(alike[0].id);
-    }
+    if (pairing.found.has(edge.id)) continue;
+    const found = alike(pairing, now, parts, edge);
+    if (found.length === 1) pairing.pair(edge.id, found[0].id);
   }
-  return found;
+  return pairing.found;
 }
+
+/** The joins after an edit not yet taken that run where a join before it runs now: between the parts its ends became, of its kind. */
+function alike(pairing: Pairing, now: StructureParts, parts: Map<string, string>, edge: Join) {
+  const ends = `${parts.get(edge.source) ?? ""}\u0000${parts.get(edge.target) ?? ""}\u0000${edge.kind}`;
+  return now.edges.filter((other) => !pairing.taken.has(other.id) && between(other) === ends);
+}
+
+/** A join's ends and kind, as one key. */
+const between = (edge: Join) => `${edge.source}\u0000${edge.target}\u0000${edge.kind}`;
+
+/**
+ * Marks by the id of what they are about, followed through an edit: one about something the
+ * source had goes with it where it went, and goes when it is gone; one about something the source
+ * never had stays.
+ */
+function followed<T>(
+  marks: Map<string, T>,
+  had: (id: string) => boolean,
+  follow: Map<string, string>,
+): Map<string, T> {
+  const kept = new Map<string, T>();
+  for (const [id, value] of marks)
+    if (!had(id)) kept.set(id, value);
+    else if (follow.has(id)) kept.set(follow.get(id)!, value);
+  return kept;
+}
+
+/** The part a place belongs to: a place is a part's, or that of one of its drawings. */
+const ownerOf = (ids: string[], key: string) =>
+  ids.find((id) => key === id || (key.startsWith(id) && DRAWING.test(key.slice(id.length))));
 
 /**
  * The source after an edit of its structure with its block in step: the place of a part goes
@@ -296,25 +345,19 @@ export function followPlaces(read: Structure["read"], before: string, after: str
   const was = read(before),
     now = read(after),
     parts = followParts(was, now),
-    joins = followJoins(was, now, parts),
     ids = was.nodes.map((node) => node.id).toSorted((a, b) => b.length - a.length);
   const places = new Map<string, Point>();
   for (const [key, at] of marks.places) {
-    // A place is a part's, or that of one of its drawings; any other stays as it is.
-    const owner = ids.find(
-      (id) => key === id || (key.startsWith(id) && DRAWING.test(key.slice(id.length))),
-    );
+    const owner = ownerOf(ids, key);
     if (owner === undefined) places.set(key, at);
     else if (parts.has(owner)) places.set(parts.get(owner)! + key.slice(owner.length), at);
   }
-  // A label's place is a join's, a width a lane's; one of something the source never had stays.
-  const labels = new Map<string, Point>();
-  for (const [edge, at] of marks.labels)
-    if (!was.edges.some((item) => item.id === edge)) labels.set(edge, at);
-    else if (joins.has(edge)) labels.set(joins.get(edge)!, at);
-  const lanes = new Map<string, number>();
-  for (const [lane, width] of marks.lanes)
-    if (!was.nodes.some((node) => node.id === lane)) lanes.set(lane, width);
-    else if (parts.has(lane)) lanes.set(parts.get(lane)!, width);
+  // A label's place is a join's, a width a lane's.
+  const labels = followed(
+    marks.labels,
+    (edge) => was.edges.some((item) => item.id === edge),
+    followJoins(was, now, parts),
+  );
+  const lanes = followed(marks.lanes, (lane) => was.nodes.some((node) => node.id === lane), parts);
   return withMarks(after, { places, labels, lanes });
 }

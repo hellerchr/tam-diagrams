@@ -16,7 +16,7 @@ import { hugLabels, smallSize, wrapSmall } from "./labels.ts";
 import { MARKER_LENGTH } from "./markers.ts";
 import { type Box, emptyScene, type Scene } from "./scene.ts";
 import { addText, breaks, finishBounds, FONT, LINE, type Measure, SMALL, wrap } from "./text.ts";
-import type { Cardinality, ErAttribute, ErDiagram, ErEntity } from "./uml-er.ts";
+import type { Cardinality, ErAttribute, ErDiagram, ErEntity, ErRelationship } from "./uml-er.ts";
 import { addWire, attachEnds, straightenScene } from "./wires.ts";
 
 const PAD = 10,
@@ -124,54 +124,19 @@ export async function layoutErDiagram(
   const boxes = new Map(
     [...diagram.entities.values()].map((entity) => [entity.id, measureEntity(entity, measure)]),
   );
-  // An entity with many relationships grows along the sides where they arrive, so their symbols keep apart.
-  const degree = new Map<string, number>();
-  for (const relationship of diagram.relationships)
-    if (relationship.source !== relationship.target)
-      for (const end of [relationship.source, relationship.target])
-        degree.set(end, (degree.get(end) ?? 0) + 1);
-  const loops = new Map<string, string[]>();
-  for (const relationship of diagram.relationships)
-    if (relationship.source === relationship.target)
-      loops.set(relationship.source, [...(loops.get(relationship.source) ?? []), relationship.id]);
-  const roots: GraphNode[] = [...diagram.entities.values()].map((entity) => {
-    const box = boxes.get(entity.id)!,
-      room = ((degree.get(entity.id) ?? 0) + 1) * 16 + 8,
-      looped = loops.get(entity.id)?.length ?? 0;
-    // Several loops end side by side on the top side, and in vertical layouts on the right side too.
-    return {
-      id: entity.id,
-      width: Math.max(box.width, vertical ? room : 0, loopRoom(looped)),
-      height: Math.max(
-        box.height,
-        vertical ? 0 : room,
-        vertical && looped > 1 ? looped * LOOP_STEP + 10 : 0,
-      ),
-    };
-  });
+  const degree = degreesOf(diagram),
+    loops = loopsOf(diagram);
+  const roots: GraphNode[] = [...diagram.entities.values()].map((entity) =>
+    entityNode(entity.id, boxes.get(entity.id)!, degree, loops, vertical),
+  );
   const labels = new Map(
     diagram.relationships
       .filter((relationship) => relationship.label)
       .map((relationship) => [relationship.id, wrapSmall(relationship.label!, measure)]),
   );
-  const edges: GraphEdge[] = diagram.relationships.map((relationship) => ({
-    id: relationship.id,
-    source: relationship.source,
-    target: relationship.target,
-    // The entity there is one of stands above the many that belong to it, whichever way it is written.
-    reversed: many(relationship.sourceCardinality) && !many(relationship.targetCardinality),
-    label: labels.has(relationship.id)
-      ? smallSize(labels.get(relationship.id)!, measure)
-      : undefined,
-    // A loop holds the symbols of both its ends.
-    room:
-      relationship.source === relationship.target
-        ? Math.max(
-            MARKER_LENGTH[relationship.sourceCardinality],
-            MARKER_LENGTH[relationship.targetCardinality],
-          )
-        : undefined,
-  }));
+  const edges = diagram.relationships.map((relationship) =>
+    relationshipEdge(relationship, labels, measure),
+  );
 
   const build = async ({ elk, scale }: { elk: Record<string, string>; scale: number }) => {
     const graph: Graph = { direction: diagram.direction, children: roots, edges };
@@ -187,49 +152,8 @@ export async function layoutErDiagram(
     }
     const scene = emptyScene();
     for (const entity of diagram.entities.values()) {
-      const box = placement.boxes.get(entity.id),
-        size = boxes.get(entity.id)!;
-      if (!box) continue;
-      // An entity without attributes is just its name, centred in the box.
-      const bare = !entity.attributes.length;
-      scene.shapes.push({
-        id: entity.id,
-        kind: "rect",
-        box,
-        container: false,
-        depth: 0,
-        fill: "page",
-        dividers: bare ? [] : [box.y + size.header],
-      });
-      let y = box.y + 8 + (bare ? (box.height - size.header) / 2 : 0);
-      for (const line of size.name) {
-        addText(scene, measure, line, box.x + box.width / 2, y + LINE / 2, {
-          size: FONT,
-          weight: 600,
-          role: "node",
-          owner: entity.id,
-        });
-        y += LINE;
-      }
-      entity.attributes.forEach((attribute, index) => {
-        const middle = box.y + size.header + 5 + ROW / 2 + index * ROW;
-        for (const column of COLUMNS) {
-          const text = cell(attribute, column),
-            x = size.columns[column];
-          if (!text || x === undefined) continue;
-          const primary = column === "name" && attribute.keys.includes("PK");
-          addText(scene, measure, text, box.x + x, middle, {
-            size: SMALL,
-            anchor: "start",
-            weight: weightOf(attribute, column),
-            underline: primary,
-            italic: column === "comment",
-            tone: column === "name" ? "text" : "secondary",
-            role: "member",
-            owner: entity.id,
-          });
-        }
-      });
+      const box = placement.boxes.get(entity.id);
+      if (box) drawEntity(scene, measure, entity, box, boxes.get(entity.id)!);
     }
     const shapes = new Map(scene.shapes.map((shape) => [shape.id, shape]));
     for (const relationship of diagram.relationships)
@@ -259,4 +183,127 @@ export async function layoutErDiagram(
     ...STRATEGIES.map((elk) => ({ elk, scale: 1 })),
     ...STRATEGIES.slice(0, 2).map((elk) => ({ elk, scale: 1.5 })),
   ]);
+}
+
+/** How many relationships each entity takes part in with another one. */
+function degreesOf(diagram: ErDiagram) {
+  const degree = new Map<string, number>();
+  for (const { source, target } of diagram.relationships)
+    if (source !== target)
+      for (const end of [source, target]) degree.set(end, (degree.get(end) ?? 0) + 1);
+  return degree;
+}
+
+/** The relationships of each entity with itself, by its id. */
+function loopsOf(diagram: ErDiagram) {
+  const loops = new Map<string, string[]>();
+  for (const { source, target, id } of diagram.relationships)
+    if (source === target) loops.set(source, [...(loops.get(source) ?? []), id]);
+  return loops;
+}
+
+/**
+ * An entity as a node of the graph. An entity with many relationships grows along the sides
+ * where they arrive, so their symbols keep apart; several loops end side by side on the top
+ * side, and in vertical layouts on the right side too.
+ */
+function entityNode(
+  id: string,
+  box: EntityBox,
+  degree: Map<string, number>,
+  loops: Map<string, string[]>,
+  vertical: boolean,
+): GraphNode {
+  const room = ((degree.get(id) ?? 0) + 1) * 16 + 8,
+    looped = loops.get(id)?.length ?? 0;
+  return {
+    id,
+    width: Math.max(box.width, vertical ? room : 0, loopRoom(looped)),
+    height: Math.max(
+      box.height,
+      vertical ? 0 : room,
+      vertical && looped > 1 ? looped * LOOP_STEP + 10 : 0,
+    ),
+  };
+}
+
+/** A relationship as an edge of the graph. */
+function relationshipEdge(
+  relationship: ErRelationship,
+  labels: Map<string, string>,
+  measure: Measure,
+): GraphEdge {
+  const label = labels.get(relationship.id);
+  return {
+    id: relationship.id,
+    source: relationship.source,
+    target: relationship.target,
+    // The entity there is one of stands above the many that belong to it, whichever way it is written.
+    reversed: many(relationship.sourceCardinality) && !many(relationship.targetCardinality),
+    label: label !== undefined ? smallSize(label, measure) : undefined,
+    // A loop holds the symbols of both its ends.
+    room:
+      relationship.source === relationship.target
+        ? Math.max(
+            MARKER_LENGTH[relationship.sourceCardinality],
+            MARKER_LENGTH[relationship.targetCardinality],
+          )
+        : undefined,
+  };
+}
+
+/** An entity's box, its name and its attributes; an entity without attributes is just its name, centred in the box. */
+function drawEntity(scene: Scene, measure: Measure, entity: ErEntity, box: Box, size: EntityBox) {
+  const bare = !entity.attributes.length;
+  scene.shapes.push({
+    id: entity.id,
+    kind: "rect",
+    box,
+    container: false,
+    depth: 0,
+    fill: "page",
+    dividers: bare ? [] : [box.y + size.header],
+  });
+  let y = box.y + 8 + (bare ? (box.height - size.header) / 2 : 0);
+  for (const line of size.name) {
+    addText(scene, measure, line, box.x + box.width / 2, y + LINE / 2, {
+      size: FONT,
+      weight: 600,
+      role: "node",
+      owner: entity.id,
+    });
+    y += LINE;
+  }
+  entity.attributes.forEach((attribute, index) => {
+    const middle = box.y + size.header + 5 + ROW / 2 + index * ROW;
+    for (const column of COLUMNS) {
+      const x = size.columns[column];
+      if (x !== undefined)
+        drawCell(scene, measure, entity.id, attribute, column, box.x + x, middle);
+    }
+  });
+}
+
+/** An attribute's text in a column, if it has one there; the name of a primary key is underlined. */
+function drawCell(
+  scene: Scene,
+  measure: Measure,
+  owner: string,
+  attribute: ErAttribute,
+  column: Column,
+  x: number,
+  middle: number,
+) {
+  const text = cell(attribute, column);
+  if (!text) return;
+  addText(scene, measure, text, x, middle, {
+    size: SMALL,
+    anchor: "start",
+    weight: weightOf(attribute, column),
+    underline: column === "name" && attribute.keys.includes("PK"),
+    italic: column === "comment",
+    tone: column === "name" ? "text" : "secondary",
+    role: "member",
+    owner,
+  });
 }

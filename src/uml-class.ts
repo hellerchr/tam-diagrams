@@ -129,33 +129,36 @@ export function generics(text: string): string {
 /** A member line as Mermaid shows it: methods as `name(params) : Return`, `$` underlined, `*` italic. */
 export function parseMember(raw: string): ClassMember {
   const input = raw.trim();
-  if (input.includes("(")) {
-    const match = input.match(/^([#+~-])?(.+)\((.*)\)([\s$*])?(.*)$/);
-    if (match) {
-      let [, visibility = "", name, parameters, classifier = "", returns] = match;
-      classifier = classifier.trim();
-      // A return type may follow a colon of its own (`total(): Money`), which is not part of it.
-      returns = returns.trim().replace(/^:\s*/, "");
-      if (!classifier && /[$*]$/.test(returns)) {
-        classifier = returns.slice(-1);
-        returns = returns.slice(0, -1).trim();
-      }
-      const text = `${visibility}${generics(name.trim())}(${generics(parameters.trim())})${returns ? ` : ${generics(returns)}` : ""}`;
-      return {
-        text,
-        method: true,
-        underline: classifier === "$",
-        italic: classifier === "*",
-        visibility,
-      };
-    }
-  }
+  const method = input.includes("(") ? parseMethod(input) : undefined;
+  if (method) return method;
   const visibility = /^[#+~-]/.test(input) ? input[0] : "";
   const classifier = /[$*]$/.test(input) ? input.slice(-1) : "";
   const body = input.slice(visibility ? 1 : 0, classifier ? -1 : undefined).trim();
   return {
     text: `${visibility}${generics(body)}`,
     method: false,
+    underline: classifier === "$",
+    italic: classifier === "*",
+    visibility,
+  };
+}
+
+/** A method member, `name(params)` with its return type; undefined for a line that reads as none. */
+function parseMethod(input: string): ClassMember | undefined {
+  const match = input.match(/^([#+~-])?(.+)\((.*)\)([\s$*])?(.*)$/);
+  if (!match) return undefined;
+  let [, visibility = "", name, parameters, classifier = "", returns] = match;
+  classifier = classifier.trim();
+  // A return type may follow a colon of its own (`total(): Money`), which is not part of it.
+  returns = returns.trim().replace(/^:\s*/, "");
+  if (!classifier && /[$*]$/.test(returns)) {
+    classifier = returns.slice(-1);
+    returns = returns.slice(0, -1).trim();
+  }
+  const text = `${visibility}${generics(name.trim())}(${generics(parameters.trim())})${returns ? ` : ${generics(returns)}` : ""}`;
+  return {
+    text,
+    method: true,
     underline: classifier === "$",
     italic: classifier === "*",
     visibility,

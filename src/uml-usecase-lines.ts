@@ -131,77 +131,165 @@ export function drawLine(
   const a = shapes.get(link.source),
     b = shapes.get(link.target);
   if (!a || !b) return false;
-  const taken = endsOf(scene);
-  const ca0 = centerOf(a.box),
-    cb0 = centerOf(b.box),
-    d = unit(ca0, cb0),
-    n = { x: -d.y, y: d.x },
-    chord = distance(ca0, cb0);
-  const middle = { x: (ca0.x + cb0.x) / 2, y: (ca0.y + cb0.y) / 2 };
-  // The corners of the shapes between the two elements, a little outside them: a curve whose
-  // middle lies on one costs as much as it leaves the straight line there.
-  const corners: { ka: number; kb: number; bend: number; base: number; through?: Point }[] = around
-    ? [...shapes.values()]
-        .filter(
-          (shape) =>
-            shape !== a &&
-            shape !== b &&
-            !shape.container &&
-            crossesBox(ca0, cb0, grow(shape.box, 60)),
-        )
-        .flatMap(({ box }) =>
-          [
-            { x: box.x - PASS, y: box.y - PASS },
-            { x: box.x + box.width + PASS, y: box.y - PASS },
-            { x: box.x - PASS, y: box.y + box.height + PASS },
-            { x: box.x + box.width + PASS, y: box.y + box.height + PASS },
-          ].map((through) => ({
-            ka: 0,
-            kb: 0,
-            bend: 1,
-            base: 10 + 1.5 * distanceToLine(through, ca0, cb0) + 0.2 * distance(through, middle),
-            through,
-          })),
-        )
-    : [];
+  const chord = chordOf(a, b);
   const candidates = [
-    ...AIMS.flatMap(([ka, kb]) =>
-      BENDS.filter((bend) => Math.abs(bend) <= Math.max(44, chord / 2)).map((bend) => ({
-        ka,
-        kb,
-        bend,
-        base: Math.abs(bend) + 5 * (Math.abs(ka) + Math.abs(kb)),
-        through: undefined as Point | undefined,
-      })),
-    ),
-    ...corners,
+    ...bends(distance(chord.ca, chord.cb)),
+    ...(around ? corners(chord, shapes.values()) : []),
   ].toSorted((p, q) => p.base - q.base);
-  let best: { cost: number; points: Point[]; control?: Point } | null = null;
-  for (const { ka, kb, bend, base, through } of candidates) {
-    if (best && best.cost <= base) break;
-    const ca = { x: ca0.x + n.x * ka * 9, y: ca0.y + n.y * ka * 9 },
-      cb = { x: cb0.x + n.x * kb * 9, y: cb0.y + n.y * kb * 9 };
-    // A quadratic curve's middle lies halfway between the chord and its control point.
-    const control = through
-      ? { x: 2 * through.x - middle.x, y: 2 * through.y - middle.y }
-      : bend
-        ? { x: (ca.x + cb.x) / 2 + n.x * 2 * bend, y: (ca.y + cb.y) / 2 + n.y * 2 * bend }
-        : undefined;
-    const start = entryPoint(control ?? cb, ca, outline(a), a.box),
-      end = entryPoint(control ?? ca, cb, outline(b), b.box);
-    if (!start || !end || distance(start, end) < 16) continue;
-    if (
-      !apart(scene, control ?? end, start, link.start, taken) ||
-      !apart(scene, control ?? start, end, link.end, taken)
-    )
-      continue;
-    const points = control ? sampleCurve(start, control, end) : [start, end];
-    const cost = base + 1000 * conflicts(scene, home, points) + 40 * crossings(scene, points);
-    if (!best || cost < best.cost) best = { cost, points, control };
-  }
+  const best = cheapest(scene, chord, candidates, link, home);
   if (!best) return false;
-  const { points, control } = best,
-    start = points[0],
+  addLine(scene, link, home, best);
+  return true;
+}
+
+function chordOf(a: SceneShape, b: SceneShape): Chord {
+  const ca = centerOf(a.box),
+    cb = centerOf(b.box),
+    d = unit(ca, cb);
+  return {
+    a,
+    b,
+    ca,
+    cb,
+    n: { x: -d.y, y: d.x },
+    middle: { x: (ca.x + cb.x) / 2, y: (ca.y + cb.y) / 2 },
+  };
+}
+
+/** The cheapest line of the candidates, tried from the cheapest before what they meet on until none can be cheaper. */
+function cheapest(
+  scene: Scene,
+  chord: Chord,
+  candidates: Candidate[],
+  link: Link,
+  home: Set<string>,
+): Line | null {
+  const taken = endsOf(scene);
+  let best: Line | null = null;
+  for (const candidate of candidates) {
+    if (best && best.cost <= candidate.base) break;
+    const line = lineOf(scene, chord, candidate, link, home, taken);
+    if (line && (!best || line.cost < best.cost)) best = line;
+  }
+  return best;
+}
+
+/** The two elements a line joins, their middles, the normal to the chord between them and its middle. */
+interface Chord {
+  a: SceneShape;
+  b: SceneShape;
+  ca: Point;
+  cb: Point;
+  n: Point;
+  middle: Point;
+}
+
+/**
+ * A way to draw a line: its ends aimed `ka` and `kb` steps beside the middles, bent `bend` off the
+ * chord or through the point `through`, at a cost before what it meets of `base`.
+ */
+interface Candidate {
+  ka: number;
+  kb: number;
+  bend: number;
+  base: number;
+  through?: Point;
+}
+
+/** A line drawn, with its cost and the control point of its curve. */
+interface Line {
+  cost: number;
+  points: Point[];
+  control?: Point;
+}
+
+/** The aims and bends of a line along a chord this long, the least bent and least aside first. */
+const bends = (chord: number): Candidate[] =>
+  AIMS.flatMap(([ka, kb]) =>
+    BENDS.filter((bend) => Math.abs(bend) <= Math.max(44, chord / 2)).map((bend) => ({
+      ka,
+      kb,
+      bend,
+      base: Math.abs(bend) + 5 * (Math.abs(ka) + Math.abs(kb)),
+      through: undefined,
+    })),
+  );
+
+/**
+ * The corners of the shapes between the two elements, a little outside them: a curve whose
+ * middle lies on one costs as much as it leaves the straight line there.
+ */
+function corners(chord: Chord, shapes: Iterable<SceneShape>): Candidate[] {
+  const { a, b, ca, cb, middle } = chord;
+  return [...shapes]
+    .filter(
+      (shape) =>
+        shape !== a && shape !== b && !shape.container && crossesBox(ca, cb, grow(shape.box, 60)),
+    )
+    .flatMap(({ box }) =>
+      [
+        { x: box.x - PASS, y: box.y - PASS },
+        { x: box.x + box.width + PASS, y: box.y - PASS },
+        { x: box.x - PASS, y: box.y + box.height + PASS },
+        { x: box.x + box.width + PASS, y: box.y + box.height + PASS },
+      ].map((through) => ({
+        ka: 0,
+        kb: 0,
+        bend: 1,
+        base: 10 + 1.5 * distanceToLine(through, ca, cb) + 0.2 * distance(through, middle),
+        through,
+      })),
+    );
+}
+
+/** The control point of a candidate's curve; none for a straight line. A quadratic curve's middle lies halfway between the chord and its control point. */
+function controlOf(chord: Chord, { bend, through }: Candidate, ca: Point, cb: Point) {
+  const { n, middle } = chord;
+  if (through) return { x: 2 * through.x - middle.x, y: 2 * through.y - middle.y };
+  return bend
+    ? { x: (ca.x + cb.x) / 2 + n.x * 2 * bend, y: (ca.y + cb.y) / 2 + n.y * 2 * bend }
+    : undefined;
+}
+
+/** The line a candidate draws and its cost; null where its ends crowd each other or the ends of other lines. */
+function lineOf(
+  scene: Scene,
+  chord: Chord,
+  candidate: Candidate,
+  link: Link,
+  home: Set<string>,
+  taken: ReturnType<typeof endsOf>,
+): Line | null {
+  const { a, b, n } = chord,
+    { ka, kb } = candidate;
+  const ca = { x: chord.ca.x + n.x * ka * 9, y: chord.ca.y + n.y * ka * 9 },
+    cb = { x: chord.cb.x + n.x * kb * 9, y: chord.cb.y + n.y * kb * 9 };
+  const control = controlOf(chord, candidate, ca, cb);
+  const start = entryPoint(control ?? cb, ca, outline(a), a.box),
+    end = entryPoint(control ?? ca, cb, outline(b), b.box);
+  if (!start || !end || !endsApart(scene, start, end, control, link, taken)) return null;
+  const points = control ? sampleCurve(start, control, end) : [start, end];
+  const cost =
+    candidate.base + 1000 * conflicts(scene, home, points) + 40 * crossings(scene, points);
+  return { cost, points, control };
+}
+
+/** Whether a line's ends keep apart: from each other, and with their markers from the ends of other lines. */
+const endsApart = (
+  scene: Scene,
+  start: Point,
+  end: Point,
+  control: Point | undefined,
+  link: Link,
+  taken: ReturnType<typeof endsOf>,
+) =>
+  distance(start, end) >= 16 &&
+  apart(scene, control ?? end, start, link.start, taken) &&
+  apart(scene, control ?? start, end, link.end, taken);
+
+/** Adds a line to the scene with its markers. */
+function addLine(scene: Scene, link: Link, home: Set<string>, { points, control }: Line) {
+  const start = points[0],
     end = points.at(-1)!;
   scene.wires.push({
     edge: link.id,
@@ -227,7 +315,6 @@ export function drawLine(
       direction: unit(control ?? start, end),
       wire: link.id,
     });
-  return true;
 }
 
 /** A relation of a use case with itself: a loop out of its top right. */

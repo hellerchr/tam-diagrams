@@ -1,6 +1,6 @@
 /** What holds what in a scene, read from its geometry: the scene model has no parents. */
 
-import { type Box, inside, type Scene, type SceneText } from "./scene.ts";
+import { type Box, inside, type Scene, type SceneShape, type SceneText } from "./scene.ts";
 
 /** What holds what in a scene: the container around each shape, and the shapes in each container. */
 export interface SceneTree {
@@ -21,18 +21,19 @@ export function sceneTree(scene: Scene): SceneTree {
   const parent = new Map<string, string | undefined>(),
     children = new Map<string, string[]>();
   for (const shape of scene.shapes) {
-    const holder = containers.find(
-      (item) =>
-        item !== shape &&
-        (item.depth < shape.depth ||
-          (item.kind === "region" && shape.kind !== "region" && item.depth === shape.depth)) &&
-        inside(shape.box, item.box, 0.5),
-    );
+    const holder = containers.find((item) => holds(item, shape));
     parent.set(shape.id, holder?.id);
     if (holder) children.set(holder.id, [...(children.get(holder.id) ?? []), shape.id]);
   }
   return { parent, children };
 }
+
+/** Whether a container holds a shape: it lies around it, less deep or a region of its depth. */
+const holds = (item: SceneShape, shape: SceneShape) =>
+  item !== shape &&
+  (item.depth < shape.depth ||
+    (item.kind === "region" && shape.kind !== "region" && item.depth === shape.depth)) &&
+  inside(shape.box, item.box, 0.5);
 
 /** A shape and the containers around it, innermost first. */
 export function chainOf(tree: SceneTree, id: string): string[] {
