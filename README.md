@@ -237,8 +237,9 @@ draw.io file and a draw.io file into its source; `render` and `check` read draw.
 diagrams they draw, and every command prints what a draw.io page holds that the diagram leaves out
 as `<file>: warning: …` on stderr. `check` reads every file, prints
 nothing when they are valid and a `<file>:<line>: <message>` for each broken file (`<stdin>` for
-`-`). `guide` prints the notation of a diagram type, the text of [docs/guides](docs/guides), and
-without a type lists the types. To check diagram sources before each commit, add a local hook to
+`-`). `guide` prints the guide of a diagram type compactly, each statement under a comment that says what
+it means (the pages of [docs/guides](docs/guides) without their tables), and without a type lists
+the types. To check diagram sources before each commit, add a local hook to
 `.pre-commit-config.yaml`:
 
 ```yaml

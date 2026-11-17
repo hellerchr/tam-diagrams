@@ -1,7 +1,7 @@
 // @vitest-environment node
-import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { type CliIo, main } from "../cli/main.ts";
+import { guideText } from "../editor/reference.ts";
 
 const TAM = "agent web[Web Server]\nstorage db[Orders]\nweb -- reads/writes --> db";
 const BAD_TAM = "agent a\nagent b\nx -- reads --> a";
@@ -209,13 +209,13 @@ describe("guide", () => {
     expect(port.stdout()).toMatch(/Compositional structure of a system/);
   });
 
-  it("prints the guide of a type as the docs hold it", async () => {
+  it("prints the guide of a type in its compact text", async () => {
     const port = memoryIo();
     expect(await main(["guide", "tam"], port.io)).toBe(0);
-    expect(port.stdout()).toBe(readFileSync("docs/guides/tam.md", "utf8"));
+    expect(port.stdout()).toBe(guideText("tam"));
     const lanes = memoryIo();
     expect(await main(["guide", "swimlane"], lanes.io)).toBe(0);
-    expect(lanes.stdout()).toBe(readFileSync("docs/guides/flowchart.md", "utf8"));
+    expect(lanes.stdout()).toBe(guideText("flowchart"));
   });
 
   it("exits 2 for a type without a guide, and names the types there are", async () => {

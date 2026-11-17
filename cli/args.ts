@@ -20,7 +20,7 @@ export const USAGE = `Usage:
                                                   a draw.io file drawn with the TAM shapes
   tam-diagrams edit [<file>] [--port <n>]         open the editor in the browser; Save writes back to
                                                   the file, which need not exist yet
-  tam-diagrams guide [<type>]                     the notation of a diagram type as Markdown; without
+  tam-diagrams guide [<type>]                     the notation of a diagram type, compact; without
                                                   a type, the types and what each shows
 
 Every command reads draw.io files (.drawio, .drawio.svg) as the diagrams they draw.

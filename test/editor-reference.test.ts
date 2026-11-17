@@ -16,6 +16,7 @@ import {
   GUIDES,
   guideMarkdown,
   guideOf,
+  guideText,
   rowSource,
 } from "../editor/reference.ts";
 import { type GuideHost, GuideSheet } from "../editor/reference-dialog.ts";
@@ -270,6 +271,33 @@ describe("the guides as pages", () => {
     expect(guideMarkdown("flowchart")).toContain("## Lanes");
     expect(() => guideMarkdown("nothing")).toThrow();
   });
+
+  it("writes a compact text: each statement as written, under a comment that says what it means", () => {
+    const text = guideText("tam");
+    expect(text).toMatch(/^# TAM block diagram guide\nCompositional structure of a system/);
+    expect(text).toContain(
+      "%% A request/response channel: `a` is the client, `b` the server.\na -- calls --> b\n",
+    );
+    expect(text).toContain(
+      "agent shop[Web Shop] {\n  agent api[Order API]\n  storage cart[Cart]\n}\n",
+    );
+    expect(text).toContain("## Example\ntitle Order system\n");
+    expect(text).not.toMatch(/&nbsp;|<br>&|\| --- \||<!--/);
+    expect(guideText("swimlane")).toBe(guideText("flowchart"));
+    expect(() => guideText("nothing")).toThrow();
+  });
+
+  it.each(GUIDES.map((guide) => [guide.type, guide] as const))(
+    "keeps every statement and meaning of the %s guide in its compact text, in fewer tokens",
+    (type, guide) => {
+      const text = guideText(type);
+      for (const [, item] of rowsOf(guide))
+        expect(text).toContain(`%% ${item.means}\n${item.write}\n`);
+      // Words, numbers and marks, roughly as a tokenizer splits them: markup such as `&nbsp;` costs.
+      const tokens = (page: string) => (page.match(/[A-Za-z]+|\d+|[^\sA-Za-z\d]/g) ?? []).length;
+      expect(tokens(text)).toBeLessThan(tokens(guideMarkdown(type)) * 0.85);
+    },
+  );
 });
 
 describe("the guide sheet", () => {

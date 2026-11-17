@@ -1775,3 +1775,32 @@ export function guideMarkdown(type: string): string {
   ];
   return `${out.join("\n")}\n`;
 }
+
+/** A row as compact text: what it means as a comment, above the statement as it is written. */
+const rowText = (item: GuideRow) => [`%% ${item.means}`, item.write];
+
+/** A section of a guide as compact text: its title, its paragraph, its rules, its rows and its example. */
+function sectionText(section: GuideSection): string[] {
+  return [
+    "",
+    `## ${section.title}`,
+    ...(section.prose ? [section.prose] : []),
+    ...(section.rules ?? []).map((rule) => `- ${rule}`),
+    ...(section.rows ?? []).flatMap(rowText),
+    ...(section.example ? [section.example] : []),
+  ];
+}
+
+/**
+ * The guide of a type as compact text, for the command line and for agents: the Markdown page's
+ * content without its tables, each statement as it is written under a comment that says what it
+ * means. What the diagram shows is left to the line under the title: whoever reads the text has
+ * chosen the type already.
+ */
+export function guideText(type: string): string {
+  const guide = guideOf(type);
+  if (!guide) throw new Error(`There is no guide for \`${type}\`.`);
+  const sections = guide.sections.filter((section) => section.id !== "about");
+  const out = [`# ${guide.name} guide`, `${guide.about}.`, ...sections.flatMap(sectionText)];
+  return `${out.join("\n")}\n`;
+}

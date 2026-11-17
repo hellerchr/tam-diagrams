@@ -1,5 +1,5 @@
 import { type Command, parseCommand, USAGE, UsageError } from "./args.ts";
-import { GUIDES, guideMarkdown, guideOf } from "../editor/reference.ts";
+import { GUIDES, guideOf, guideText } from "../editor/reference.ts";
 import { runEdit } from "./edit.ts";
 import { checkSource, convertSource, isDiagramError, renderSource, sourceOf } from "./diagram.ts";
 import { diagramMessage, inputName, internalMessage, ioMessage, warningLines } from "./report.ts";
@@ -110,7 +110,7 @@ function runGuide(type: string | undefined, io: CliIo): number {
     io.stderr(`tam-diagrams: there is no guide for \`${type}\`; there are guides for ${types}.\n`);
     return USAGE_OR_IO_ERROR;
   }
-  io.stdout(guideMarkdown(type));
+  io.stdout(guideText(type));
   return OK;
 }
 
