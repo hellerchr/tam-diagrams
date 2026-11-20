@@ -189,9 +189,9 @@ function likeliest(drawing: Drawing): DrawioType {
   const scored = TYPES.map((type) => ({ type, score: type.likeness(drawing) })).toSorted(
     (a, b) => b.score - a.score,
   );
-  if (!scored[0].score)
+  if (!scored[0]!.score)
     throw new DrawioError(
       `Nothing on the page “${drawing.name}” reads as a TAM block, activity, state machine or sequence diagram.`,
     );
-  return scored[0].type;
+  return scored[0]!.type;
 }

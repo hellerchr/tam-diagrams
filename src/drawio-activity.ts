@@ -19,9 +19,11 @@ import {
   textToHtml,
 } from "./drawio-file.ts";
 import {
+  aroundSome,
   arrowAt,
   cell,
   dashed,
+  distanceToPath,
   edgeRoute,
   fillOf,
   FONT_SIZE,
@@ -36,7 +38,6 @@ import {
 import type { DrawioKind, DrawioType, Imported } from "./drawio.ts";
 import {
   areaOf,
-  aroundSome,
   type Box,
   centerOf,
   contains,
@@ -177,7 +178,7 @@ function besideStyle(shape: Box, text: Box): Record<string, string> {
 }
 
 /** How a label beside a shape aligns: toward the shape. */
-const ALIGN_BESIDE: Record<string, string> = {
+const ALIGN_BESIDE: Record<"left" | "center" | "right" | "top" | "middle" | "bottom", string> = {
   right: "left",
   left: "right",
   center: "center",
@@ -203,7 +204,7 @@ const valueOf = (label: string) => textToHtml(label.replace(/<br\s*\/?>/gi, "\n"
 
 /** The font size a scene text is written in, as draw.io gets it. */
 const fontOf = (texts: SceneText[]) =>
-  texts.length ? Math.round((texts[0].size * FONT_SIZE) / FONT) : FONT_SIZE;
+  texts.length ? Math.round((texts[0]!.size * FONT_SIZE) / FONT) : FONT_SIZE;
 
 // ---------------------------------------------------------------------------------------------
 // Export: cells
@@ -217,7 +218,7 @@ function originalOf(chart: Flowchart, id: string): string {
 
 /** The frame of a swimlane scene: the closed line around the lanes. */
 const isFrame = ({ points }: { points: Point[] }) =>
-  points.length === 5 && points[0].x === points[4].x && points[0].y === points[4].y;
+  points.length === 5 && points[0]!.x === points[4]!.x && points[0]!.y === points[4]!.y;
 
 /** The lanes of a swimlane scene: the frame, and each lane's box between the lines that part them. */
 function laneBoxes(
@@ -232,7 +233,7 @@ function laneBoxes(
     size = vertical ? "width" : "height";
   const separators = scene.lines
     .filter((line) => line !== frameLine && line.points.length === 2)
-    .map((line) => line.points[0][axis])
+    .map((line) => line.points[0]![axis])
     .toSorted((a, b) => a - b);
   const bounds = [frame[axis], ...separators, frame[axis] + frame[size]];
   if (bounds.length !== count + 1) return undefined;
@@ -240,8 +241,8 @@ function laneBoxes(
     .slice(0, -1)
     .map((start, index) =>
       vertical
-        ? { x: start, y: frame.y, width: bounds[index + 1] - start, height: frame.height }
-        : { x: frame.x, y: start, width: frame.width, height: bounds[index + 1] - start },
+        ? { x: start, y: frame.y, width: bounds[index + 1]! - start, height: frame.height }
+        : { x: frame.x, y: start, width: frame.width, height: bounds[index + 1]! - start },
     );
   return { frame, lanes };
 }
@@ -348,7 +349,7 @@ function laneCells(job: Export, taken: Set<string>) {
   const names = LANE_NAMES[vertical ? "vertical" : "horizontal"];
   lanes.forEach((lane, index) => {
     const box = found.lanes[index];
-    job.boxes.set(lane.id, box);
+    job.boxes.set(lane.id, box!);
     job.cells.push(
       cell(
         {
@@ -363,7 +364,7 @@ function laneCells(job: Export, taken: Set<string>) {
             fontSize: FONT_SIZE,
             tamFlow: split.direction,
           },
-          geometry: vertexGeometry(box),
+          geometry: vertexGeometry(box!),
         },
         split.subgraphs.has(lane.id) ? "lane" : "lane-none",
       ),
@@ -399,7 +400,7 @@ function subgraphCell(job: Export, id: string) {
           fontStyle: 1,
           strokeWidth: 1,
           spacingTop: titles.length
-            ? Math.max(0, Math.round(titles[0].box.y - shape.box.y) - 2)
+            ? Math.max(0, Math.round(titles[0]!.box.y - shape.box.y) - 2)
             : 4,
           fillColor: fillOf(shape),
           fontSize: FONT_SIZE,
@@ -877,27 +878,6 @@ function markerAt(style: Style, end: "start" | "end"): Marker | undefined {
   return MARKERS.get(arrow) ?? "arrow";
 }
 
-/** The distance from a point to a path. */
-function distanceTo(path: Point[], point: Point): number {
-  let best = Infinity;
-  for (let i = 1; i < path.length; i++) {
-    const a = path[i - 1],
-      b = path[i];
-    const length = (b.x - a.x) ** 2 + (b.y - a.y) ** 2;
-    const t = length
-      ? Math.max(
-          0,
-          Math.min(1, ((point.x - a.x) * (b.x - a.x) + (point.y - a.y) * (b.y - a.y)) / length),
-        )
-      : 0;
-    best = Math.min(
-      best,
-      Math.hypot(point.x - a.x - t * (b.x - a.x), point.y - a.y - t * (b.y - a.y)),
-    );
-  }
-  return best;
-}
-
 /** The gap between two boxes, 0 when they touch or overlap. */
 const gap = (a: Box, b: Box) =>
   Math.hypot(
@@ -947,10 +927,10 @@ function directionOf(
  * lanes flows that run more down than across.
  */
 function runsInColumns(lanes: Part[], dx: number, dy: number): boolean {
-  if (lanes.length === 1) return lanes[0].box.height >= lanes[0].box.width;
+  if (lanes.length === 1) return lanes[0]!.box.height >= lanes[0]!.box.width;
   if (!lanes.length) return Math.abs(dy) >= Math.abs(dx);
-  const a = centerOf(lanes[0].box),
-    b = centerOf(lanes[1].box);
+  const a = centerOf(lanes[0]!.box),
+    b = centerOf(lanes[1]!.box);
   return Math.abs(b.x - a.x) > Math.abs(b.y - a.y);
 }
 
@@ -1170,7 +1150,7 @@ class ActivityPage {
     if (!text.label) return;
     const near = this.symbolNear(text);
     const line = this.flowNear(text);
-    const fromFlow = () => distanceTo(this.drawing.path(line!), centerOf(text.box));
+    const fromFlow = () => distanceToPath(this.drawing.path(line!), centerOf(text.box));
     if (near && (!line || namesSymbol(text, near, fromFlow()))) near.label = text.label;
     else if (line) this.edgeLabels.set(line.id, text.label);
     else this.warnings.push(`The text “${text.label}” belongs to no node or flow and is left out.`);
@@ -1186,7 +1166,7 @@ class ActivityPage {
   /** The nearest unlabeled flow a text may label. */
   private flowNear(text: Part) {
     const { drawing } = this;
-    const from = (item: Cell) => distanceTo(drawing.path(item), centerOf(text.box));
+    const from = (item: Cell) => distanceToPath(drawing.path(item), centerOf(text.box));
     return this.flowCells
       .filter((item) => !drawing.label(item) && !this.edgeLabels.has(item.id) && from(item) < 30)
       .toSorted((a, b) => from(a) - from(b))[0];
@@ -1365,7 +1345,7 @@ class ActivityPage {
       flow.target = this.realId.get(flow.to) ?? this.idOf.get(flow.to)!;
       lines.push(`  ${flowLine(flow)}`);
     }
-    return lines.join("\n") + "\n";
+    return `${lines.join("\n")}\n`;
   }
 
   private nodeLine(lines: string[], part: Part, indent: string) {
@@ -1508,10 +1488,10 @@ function laneMover(
     const index = laneIndex(lane);
     const share = lane ? (middle[across] - lane.box[across]) / (lane.box[size] || 1) : 0.5;
     const moved = {
-      [across]: laid.laneX[index] + Math.max(0, Math.min(1, share)) * laid.laneWidths[index],
+      [across]: laid.laneX[index]! + Math.max(0, Math.min(1, share)) * laid.laneWidths[index]!,
       [along]: middle[along] - top,
     };
-    return { x: moved.x, y: moved.y };
+    return { x: moved.x!, y: moved.y! };
   };
 }
 

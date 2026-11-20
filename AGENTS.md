@@ -16,10 +16,10 @@ Every function you add or change stays under cyclomatic complexity 10 by `crappe
 
 ## Done
 
-- `npx tsc --noEmit -p .` is clean.
+- `npx tsc --noEmit -p .` is clean, and so is `npm run check:svelte` (svelte-check, run with TypeScript 6 by npx: it does not run on 7).
 - `npx vitest run` is green. `test/tam-placed-routing.test.ts` › "FMC travel agency" fails now and then under full-suite load: rerun it alone before believing it.
 - Every sample renders with a clean layout audit: the sample tests check it, so a layout change that moves a wire into an element shows up there.
-- A changed guide is regenerated: `docs/guides/*.md` and `tam-diagrams guide` are written from `editor/reference.ts`; `UPDATE_GUIDES=1 npx vitest run test/editor-reference.test.ts` rewrites the files.
+- A changed guide is regenerated: `docs/guides/*.md` and `tam-diagrams guide` are written from `src/reference.ts` (by `src/guide-text.ts`); `UPDATE_GUIDES=1 npx vitest run test/editor-reference.test.ts` rewrites the files.
 - `npm run build` makes both the command line (`dist/cli.js`) and the editor (`dist/editor`), which `tam-diagrams edit` serves.
 - A changed command keeps `.agents/skills/tam-diagrams/SKILL.md` true: it is how agents learn to draw with the command line.
 

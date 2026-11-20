@@ -179,7 +179,7 @@ class XmlParser {
     const { text } = this;
     const tag = /^<([A-Za-z_:][\w:.-]*)/.exec(text.slice(lt, lt + 200));
     if (!tag) return fail(`\`${text.slice(lt, lt + 20)}\` is no tag`);
-    const element: XmlElement = { name: tag[1], attributes: {}, children: [], text: "" };
+    const element: XmlElement = { name: tag[1]!, attributes: {}, children: [], text: "" };
     let index = lt + tag[0].length;
     for (;;) {
       ATTRIBUTE.lastIndex = index;
@@ -190,7 +190,7 @@ class XmlParser {
         if (match[5] === ">") this.open.push(element);
         return index;
       }
-      element.attributes[match[1]] = decodeEntities(match[3] ?? match[4]);
+      element.attributes[match[1]!] = decodeEntities(match[3] ?? match[4]!);
     }
   }
 }
@@ -813,21 +813,21 @@ export class Drawing {
   /** The point at a share (0 to 1) of a path's length, and the normal draw.io moves a label along with its y. */
   along(path: Point[], share: number): { point: Point; normal: Point } {
     if (path.length < 2) return { point: path[0] ?? { x: 0, y: 0 }, normal: { x: 0, y: -1 } };
-    const lengths = path.slice(1).map((p, i) => Math.hypot(p.x - path[i].x, p.y - path[i].y));
+    const lengths = path.slice(1).map((p, i) => Math.hypot(p.x - path[i]!.x, p.y - path[i]!.y));
     let left = Math.max(0, Math.min(1, share)) * lengths.reduce((a, b) => a + b, 0);
     for (let i = 0; i < lengths.length; i++) {
-      if (left <= lengths[i] || i === lengths.length - 1) {
+      if (left <= lengths[i]! || i === lengths.length - 1) {
         const a = path[i],
           b = path[i + 1],
           length = lengths[i] || 1,
           t = Math.min(1, left / length);
-        const d = { x: (b.x - a.x) / length, y: (b.y - a.y) / length };
+        const d = { x: (b!.x - a!.x) / length, y: (b!.y - a!.y) / length };
         return {
-          point: { x: a.x + d.x * t * length, y: a.y + d.y * t * length },
+          point: { x: a!.x + d.x * t * length, y: a!.y + d.y * t * length },
           normal: { x: d.y, y: -d.x },
         };
       }
-      left -= lengths[i];
+      left -= lengths[i]!;
     }
     return { point: path.at(-1)!, normal: { x: 0, y: -1 } };
   }
@@ -978,15 +978,15 @@ function elbow(from: Box, to: Box, vertical: boolean): Point[] {
   const point = (at: number, side: number): Point =>
     vertical ? { x: side, y: at } : { x: at, y: side };
   const middle = (axis: "x" | "y") => gapMiddle(from, to, axis);
-  const at = middle(along);
+  const at = middle(along!);
   const size = across === "x" ? "width" : "height";
   const points = [
-    point(at, from[across] + from[size] / 2),
-    point(at, to[across] + to[size] / 2),
+    point(at, from[across!] + from[size] / 2),
+    point(at, to[across!] + to[size] / 2),
   ].filter(outside);
   if (points.length < 2) {
-    const extra = point(at, middle(across));
-    if (outside(extra) && !points.some((item) => item[across] === extra[across]))
+    const extra = point(at, middle(across!));
+    if (outside(extra) && !points.some((item) => item[across!] === extra[across!]))
       points.push(extra);
   }
   return points;

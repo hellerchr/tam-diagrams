@@ -1,6 +1,6 @@
 # Entity relationship diagram guide
 
-<!-- Written by guideMarkdown in editor/reference.ts: change the guide there, not here. -->
+<!-- Written by guideMarkdown in src/guide-text.ts from src/reference.ts: change the guide there, not here. -->
 
 Entity types with their attributes and keys, and the cardinalities of their relationships.
 

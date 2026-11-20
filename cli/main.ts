@@ -1,5 +1,6 @@
 import { type Command, parseCommand, USAGE, UsageError } from "./args.ts";
-import { GUIDES, guideOf, guideText } from "../editor/reference.ts";
+import { GUIDES, guideOf } from "../src/reference.ts";
+import { guideText } from "../src/guide-text.ts";
 import { runEdit } from "./edit.ts";
 import { checkSource, convertSource, isDiagramError, renderSource, sourceOf } from "./diagram.ts";
 import { diagramMessage, inputName, internalMessage, ioMessage, warningLines } from "./report.ts";

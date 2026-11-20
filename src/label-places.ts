@@ -21,13 +21,32 @@ const wireOfLabel = (owner: string) => owner.replace(/#node$/, "");
 
 /**
  * The middle of the line a wire draws: the circle of a channel, where it has one; else the point
- * halfway along its points, across the pieces it is drawn in. Undefined for no wire of the scene.
+ * halfway along its points, across the pieces it is drawn in. A reads/writes loop is drawn there and
+ * back, one piece each way: its middle lies between the middles of the two. Undefined for no wire
+ * of the scene.
  */
 export function lineMiddle(scene: Scene, wire: string): Point | undefined {
   const circle = scene.shapes.find((shape) => shape.id === `${wire}#node`);
   if (circle) return centerOf(circle.box);
-  const points = scene.wires.filter((item) => item.edge === wire).flatMap((item) => item.points);
-  if (!points.length) return undefined;
+  const pieces = scene.wires.filter((item) => item.edge === wire).map((item) => item.points);
+  if (!pieces.length) return undefined;
+  if (thereAndBack(pieces)) {
+    const [p, q] = pieces.map(halfway) as [Point, Point];
+    return { x: (p.x + q.x) / 2, y: (p.y + q.y) / 2 };
+  }
+  return halfway(pieces.flat());
+}
+
+/** Whether a wire's two pieces run between the same two places, one each way: a loop's sides. */
+function thereAndBack(pieces: Point[][]): boolean {
+  if (pieces.length !== 2) return false;
+  const [a, b] = pieces as [Point[], Point[]];
+  const near = (p: Point, q: Point) => Math.hypot(p.x - q.x, p.y - q.y) < 40;
+  return near(a[0]!, b.at(-1)!) && near(a.at(-1)!, b[0]!);
+}
+
+/** The point halfway along a run of points. */
+function halfway(points: Point[]): Point {
   const steps = points
       .slice(1)
       .map((point, index) => Math.hypot(point.x - points[index].x, point.y - points[index].y)),

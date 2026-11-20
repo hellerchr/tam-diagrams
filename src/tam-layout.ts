@@ -19,6 +19,7 @@ import { bestScene, cachedLayout, COFFMAN, STRAIGHT } from "./best.ts";
 import type { ElkNode } from "elkjs/lib/elk-api";
 import { type DiagramColors, drawScene } from "./draw.ts";
 import { placeLabels } from "./label-places.ts";
+import { withSourceCorners } from "./title-mark.ts";
 
 export type { Scene };
 
@@ -53,9 +54,11 @@ export async function layoutTam(
 /**
  * Lays out a diagram whose source places its elements (`@x,y`): they stand where it says, the wires
  * run between them, and the scene is drawn like any other. There is nothing to search or to wait
- * for, so an editor can lay a diagram out again on every move.
+ * for, so an editor can lay a diagram out again on every move. A `draft` routes each wire once,
+ * without untangling those that chose their lines alike: the same boxes, a fifth of the time, for
+ * a drag's preview.
  */
-export function layoutPlaced(source: TamDiagram, measure: Measure): Scene {
+export function layoutPlaced(source: TamDiagram, measure: Measure, draft = false): Scene {
   // Placed by hand, a pointer between two storages is a wire like any other: they need not share a row.
   const diagram = {
     ...source,
@@ -64,7 +67,7 @@ export function layoutPlaced(source: TamDiagram, measure: Measure): Scene {
   const prepared = tamGraph(diagram, measure, {});
   const fallbacks = new Map<string, number>();
   collectFallbacks(fallbacks);
-  const geometry = placedGeometry(prepared, placeElements(prepared, measure), measure);
+  const geometry = placedGeometry(prepared, placeElements(prepared, measure), measure, draft);
   const scene = tamScene(prepared, geometry, measure);
   collectFallbacks(undefined);
   scene.fallbacks = fallbacks;
@@ -83,10 +86,16 @@ function withLabels(scene: Scene, diagram: TamDiagram): Scene {
   );
 }
 
-/** Lays a parsed diagram out: as its source places it, or else the best of the layouts by ELK. */
-export const layoutDiagram = (diagram: TamDiagram, measure: Measure, layout?: ElkLayout) =>
+/** Lays a parsed diagram out: as its source places it (a `draft` of it: layoutPlaced), or else the best of the
+ *  layouts by ELK. */
+export const layoutDiagram = (
+  diagram: TamDiagram,
+  measure: Measure,
+  layout?: ElkLayout,
+  draft = false,
+) =>
   isPlaced(diagram)
-    ? Promise.resolve(layoutPlaced(diagram, measure))
+    ? Promise.resolve(layoutPlaced(diagram, measure, draft))
     : bestLayout(diagram, measure, layout);
 
 /**
@@ -149,19 +158,25 @@ export function bestLayout(
 /**
  * Parses, lays out and draws a TAM source. Layouts are cached per source and font, so redrawing in
  * other colors is cheap. `measure` replaces the canvas text metrics (Node); such layouts are not
- * cached.
+ * cached, nor is a `draft` (a drag's preview: layoutPlaced), which the drop draws again in full.
  */
 export async function renderTam(
   source: string,
   colors: DiagramColors,
-  options: { layout?: ElkLayout; measure?: Measure } = {},
+  options: { layout?: ElkLayout; measure?: Measure; draft?: boolean } = {},
 ): Promise<TamPicture> {
   const diagram = parseTam(source);
-  const scene = await (options.measure
-    ? layoutDiagram(diagram, options.measure, options.layout)
+  const laidOut = await (options.measure || options.draft
+    ? layoutDiagram(
+        diagram,
+        options.measure ?? textMeasure(colors.font),
+        options.layout,
+        options.draft,
+      )
     : cachedLayout(`tam\u0000${colors.font}\u0000${source}`, () =>
         layoutDiagram(diagram, textMeasure(colors.font), options.layout),
       ));
+  const scene = withSourceCorners(laidOut, source);
   const description = diagram.title || "TAM block diagram";
   const svg = drawScene(scene, colors, description, "tam");
   return { svg, width: scene.bounds.width, height: scene.bounds.height, description, scene };

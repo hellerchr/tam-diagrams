@@ -1,6 +1,6 @@
 # Class diagram guide
 
-<!-- Written by guideMarkdown in editor/reference.ts: change the guide there, not here. -->
+<!-- Written by guideMarkdown in src/guide-text.ts from src/reference.ts: change the guide there, not here. -->
 
 Classes with their attributes and operations, and the relations between them.
 

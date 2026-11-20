@@ -165,6 +165,8 @@ export interface Scene {
   bounds: Box;
   /** Wires drawn straight run horizontally or vertically only. */
   orthogonal?: boolean;
+  /** Wires bend round at their corners, as draw.io rounds them (`%% @corners round`, title-mark.ts); square without. */
+  rounded?: boolean;
   /** Safety nets and fallbacks that fired while laying the scene out, by name. */
   fallbacks?: Map<string, number>;
 }

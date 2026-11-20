@@ -51,7 +51,8 @@ export {
   unmarked,
 } from "./uml-places.ts";
 export { labelGroups, labelKey, labelOffset, lineMiddle, placeLabels } from "./label-places.ts";
-export { laneFrame, type LaneFrame, placeable, placeScene, placesOf } from "./uml-placed.ts";
+export { placeable, placeScene, placesOf } from "./uml-placed.ts";
+export { laneFrame, type LaneFrame } from "./uml-lanes.ts";
 export {
   COLORS,
   type Connection,

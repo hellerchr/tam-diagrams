@@ -7,6 +7,7 @@
 import { type Box, centerOf, type Point } from "./scene.ts";
 import { lies, type Side, sidePoint } from "./tam-placed.ts";
 import { type Line, outward } from "./tam-placed-detour.ts";
+import { portsAlong } from "./tam-ports.ts";
 
 const SIDES: Side[] = ["bottom", "top", "right", "left"];
 
@@ -48,10 +49,11 @@ const STEP = 20,
 /** How far a simple line reaches past the elements it joins at most. */
 export const REACH = AROUND_MARKED;
 
-/** Where along a side a bent line may leave: the middle first. */
-const SHARES = [0.5, 0.25, 0.75];
+/** How far a bent line's end is from the plain one at one of its side's other two ports (tam-ports.ts), in parts of
+ *  OFF_MIDDLE (tam-placed-wires.ts). */
+export const PORT = 0.25;
 
-/** A spot on a side for a wire end, and how far it is from the plain one: 0 for the middle, 1 for a spot off it. */
+/** A spot on a side for a wire end, and how far it is from the plain one: 0 for the middle, PORT for another port, 1 for a spot off them. */
 export interface Spot {
   at: number;
   off: number;
@@ -60,9 +62,33 @@ export interface Spot {
 /** The spots on each side of an element a line may end at. */
 export type Spots = (end: End, side: Side) => Spot[];
 
-/** The middle of a side and its quarters, for an element no other wire ends on. */
+/** The ports of a side nearest its middle, the middle first, for an element no other wire ends on. */
 export const plainSpots: Spots = (end, side) =>
-  SHARES.map((of) => ({ at: share(range(end, side), of), off: +(of !== 0.5) }));
+  inRange(end, side, portsAlong(end.box, side))
+    .slice(0, SPOTS)
+    .map((at, index) => ({ at, off: index ? PORT : 0 }));
+
+/** How many of a side's ports a line is tried at: the middle and those nearest it. A long side has many ports, and
+ *  every spot of one end is tried with every spot of the other. */
+export const SPOTS = 3;
+
+/** The ports of a side a wire end may stand at: those clear of the corners (and of a rounded shape's steep part). */
+export function inRange(end: End, side: Side, ports: number[]): number[] {
+  const [low, high] = range(end, side);
+  return ports.filter((at) => at >= low - 0.5 && at <= high + 0.5);
+}
+
+/**
+ * How far a straight line at `at` is from the plain one, in parts of OFF_MIDDLE: nothing at the middle of either side
+ * or of what the sides share, a little at another port of either side (tam-ports.ts), more elsewhere. Small, so ports
+ * only choose among straight lines: none of them gets dearer than a line with a corner (a reads/writes loop is drawn
+ * as arcs only when straight).
+ */
+function straightOff(ends: [End, Side][], at: number, shared: number): number {
+  const ports = ends.map(([end, side]) => portsAlong(end.box, side));
+  if (Math.abs(at - shared) < 1 || ports.some(([middle]) => Math.abs(at - middle!) < 1)) return 0;
+  return ports.some((along) => along.some((port) => Math.abs(at - port) < 1)) ? 0.02 : 0.1;
+}
 
 /** The part of a side wires end on: clear of the corners, and of the steep part of round ones. */
 export function range(end: End, side: Side): [number, number] {
@@ -134,7 +160,7 @@ function linesIn(a: End, b: End, part: End, spots: Spots): Line[] {
   return found;
 }
 
-/** Facing sides: straight where they overlap, in the middle of what they share first. */
+/** Facing sides: straight where they overlap, at the ports of either side first, else in the middle of what they share. */
 function straightLines({ a, b, on }: Pair, from: Side, to: Side): Line[] {
   const ra = range(a, from),
     rb = range(b, to);
@@ -154,11 +180,18 @@ function straightLines({ a, b, on }: Pair, from: Side, to: Side): Line[] {
   ])
     if (spot >= low && spot <= high && straight.every((other) => Math.abs(other - spot) >= 4))
       straight.push(spot);
-  return straight.map((at, index) => ({
+  return straight.map((at) => ({
     from,
     to,
     points: [sidePoint(a.box, from, at), sidePoint(b.box, to, at)],
-    off: index ? 0.1 : 0,
+    off: straightOff(
+      [
+        [a, from],
+        [b, to],
+      ],
+      at,
+      straight[0]!,
+    ),
   }));
 }
 

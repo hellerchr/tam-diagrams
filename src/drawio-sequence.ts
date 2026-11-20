@@ -28,6 +28,7 @@ import {
 } from "./drawio-file.ts";
 import type { DrawioType, Imported } from "./drawio.ts";
 import {
+  aroundSome,
   arrowAt,
   cell,
   dashed,
@@ -45,7 +46,6 @@ import {
 } from "./drawio-shapes.ts";
 import type { MarkerKind } from "./markers.ts";
 import {
-  aroundSome,
   type Box,
   centerOf,
   contains,
@@ -258,9 +258,9 @@ const lineBelow = (scene: Scene, head: SceneShape, x: number) =>
   scene.lines.find(
     (item) =>
       item.tone === "boundary" &&
-      Math.abs(item.points[0].x - x) < 0.5 &&
+      Math.abs(item.points[0]!.x - x) < 0.5 &&
       Math.abs(item.points.at(-1)!.x - x) < 0.5 &&
-      item.points[0].y >= head.box.y,
+      item.points[0]!.y >= head.box.y,
   );
 
 /** The box of a lifeline: from its head down to the end of its line or its cross. */
@@ -369,7 +369,7 @@ function lineCell(
   head: Box,
   box: Box,
 ): Cell {
-  const route = edgeRoute([points[0], points.at(-1)!], head, undefined, box);
+  const route = edgeRoute([points[0]!, points.at(-1)!], head, undefined, box);
   return cell(
     {
       id,
@@ -531,7 +531,7 @@ function endOn(lifeline: ExportLifeline | undefined, point: Point): PageCell | u
   if (!lifeline) return undefined;
   const bar = lifeline.bars
     .filter((item) => contains(item.box, point, 1.5))
-    .sort((a, b) => b.depth - a.depth)[0];
+    .toSorted((a, b) => b.depth - a.depth)[0];
   if (bar) return { cell: bar.cell, box: bar.box };
   if (contains(lifeline.head.box, point, 1.5)) return lifeline.head;
   return contains(lifeline.box, point, 0.5)
@@ -549,7 +549,7 @@ function messageCells(
   const wire = scene.wires.find((item) => item.edge === event.id);
   if (!wire) return [];
   const points = wire.points;
-  const from = endOn(lifelines.get(event.from), points[0]),
+  const from = endOn(lifelines.get(event.from), points[0]!),
     to = endOn(lifelines.get(event.to), points.at(-1)!);
   const route = edgeRoute(points, from?.box, to?.box);
   const label = aroundSome(textsOf(scene, event.id, "label").map((text) => text.box));
@@ -677,13 +677,13 @@ const branchLines = (scene: Scene, box: Box) =>
       (line) =>
         line.tone === "ink" &&
         line.dashed &&
-        Math.abs(line.points[0].x - box.x) < 0.5 &&
+        Math.abs(line.points[0]!.x - box.x) < 0.5 &&
         Math.abs(line.points.at(-1)!.x - (box.x + box.width)) < 0.5 &&
-        line.points[0].y > box.y &&
-        line.points[0].y < box.y + box.height,
+        line.points[0]!.y > box.y &&
+        line.points[0]!.y < box.y + box.height,
     )
-    .map((line) => line.points[0].y)
-    .sort((a, b) => a - b);
+    .map((line) => line.points[0]!.y)
+    .toSorted((a, b) => a - b);
 
 /** A fragment's dashed branch lines and its conditions, each in brackets in a text of its own. */
 function branchCells(
@@ -887,7 +887,7 @@ class Reader {
   /** The participant a cell stands for, by itself or by one of the cells it is in. */
   participantOf(item: Cell | undefined): number | undefined {
     for (let at = item; at; at = this.drawing.parentOf(at)) {
-      const index = this.lifelines.findIndex((lifeline) => lifeline.cells.has(at!.id));
+      const index = this.lifelines.findIndex((lifeline) => lifeline.cells.has(at.id));
       if (index >= 0) return index;
     }
     return undefined;
@@ -897,7 +897,7 @@ class Reader {
   nearest(x: number): number {
     let best = 0;
     this.lifelines.forEach((lifeline, index) => {
-      if (Math.abs(lifeline.x - x) < Math.abs(this.lifelines[best].x - x)) best = index;
+      if (Math.abs(lifeline.x - x) < Math.abs(this.lifelines[best]!.x - x)) best = index;
     });
     return best;
   }
@@ -912,7 +912,8 @@ function lineDown(path: Point[], least = 30): { top: Point; bottom: Point } | un
   const top = Math.min(...ys),
     bottom = Math.max(...ys);
   if (bottom - top < least) return undefined;
-  return { top: { x: xs[0], y: top }, bottom: { x: xs[0], y: bottom } };
+  const x = xs[0]!;
+  return { top: { x, y: top }, bottom: { x, y: bottom } };
 }
 
 /** Whether a cell is the TAM-BD Human figure: a group holding a circle and lines. */
@@ -1039,7 +1040,7 @@ function nameCellAround(reader: Reader, figure: Box): Cell | undefined {
       const box = reader.box(item);
       return box.height <= 3 * figure.height && inside(figure, box, 1);
     })
-    .sort((a, b) => {
+    .toSorted((a, b) => {
       const one = reader.box(a),
         other = reader.box(b);
       return one.width * one.height - other.width * other.height;
@@ -1142,9 +1143,9 @@ function barPiece(reader: Reader, item: Cell): Bar | undefined {
   const box = reader.box(item);
   const x = box.x + box.width / 2,
     who = reader.participantOf(item) ?? reader.nearest(x);
-  if (Math.abs(reader.lifelines[who].x - x) > 25) return undefined;
+  if (Math.abs(reader.lifelines[who]!.x - x) > 25) return undefined;
   reader.use(item);
-  reader.lifelines[who].cells.add(item.id);
+  reader.lifelines[who]!.cells.add(item.id);
   const fill = fillColor(reader.style(item));
   return { who, top: box.y, bottom: box.y + box.height, x, white: !fill || fill === "#FFFFFF" };
 }
@@ -1216,7 +1217,7 @@ function readNotes(reader: Reader) {
       .filter(({ lifeline }) => lifeline.x > box.x && lifeline.x < box.x + box.width);
     const text = reader.label(item);
     if (over.length) {
-      const who = over.length === 1 ? [over[0].index] : [over[0].index, over.at(-1)!.index];
+      const who = over.length === 1 ? [over[0]!.index] : [over[0]!.index, over.at(-1)!.index];
       reader.notes.push({ placement: "over", who, text, y: box.y });
     } else
       reader.notes.push({
@@ -1238,8 +1239,8 @@ function besideNote(
 ): Pick<Note, "placement" | "who"> {
   const left = reader.lifelines.findLastIndex((lifeline) => lifeline.x <= box.x),
     right = reader.lifelines.findIndex((lifeline) => lifeline.x >= box.x + box.width);
-  const gapLeft = left < 0 ? Infinity : box.x - reader.lifelines[left].x,
-    gapRight = right < 0 ? Infinity : reader.lifelines[right].x - (box.x + box.width);
+  const gapLeft = left < 0 ? Infinity : box.x - reader.lifelines[left]!.x,
+    gapRight = right < 0 ? Infinity : reader.lifelines[right]!.x - (box.x + box.width);
   const rightOf = (said === "right" && left >= 0) || (said !== "left" && gapLeft <= gapRight);
   return rightOf || right < 0
     ? { placement: "right", who: [left] }
@@ -1250,7 +1251,7 @@ function besideNote(
 function frameLabel(label: string): { kind: string; text: string } {
   const match = label.trim().match(/^(\w+)\s*([\s\S]*)$/);
   if (!match) return { kind: "", text: "" };
-  return { kind: match[1].toLowerCase(), text: bare(match[2]) };
+  return { kind: match[1]!.toLowerCase(), text: bare(match[2]!) };
 }
 
 /** A condition without its brackets. */
@@ -1312,7 +1313,7 @@ function readGroup(reader: Reader, item: Cell) {
 function frameAt(reader: Reader, point: Point): Frame | undefined {
   return reader.frames
     .filter((frame) => contains(frame.box, point, 2))
-    .sort((a, b) => a.box.width * a.box.height - b.box.width * b.box.height)[0];
+    .toSorted((a, b) => a.box.width * a.box.height - b.box.width * b.box.height)[0];
 }
 
 /** Branch lines across fragments. */
@@ -1345,10 +1346,10 @@ function branchOf(reader: Reader, edge: Cell): { frame: Frame; y: number } | und
     xs = path.map((point) => point.x);
   if (Math.max(...ys) - Math.min(...ys) > 4) return undefined;
   const [left, right] = [Math.min(...xs), Math.max(...xs)];
-  const frame = frameAt(reader, { x: (left + right) / 2, y: ys[0] });
+  const frame = frameAt(reader, { x: (left + right) / 2, y: ys[0]! });
   if (!frame || left - frame.box.x > 8 || frame.box.x + frame.box.width - right > 8)
     return undefined;
-  return { frame, y: ys[0] };
+  return { frame, y: ys[0]! };
 }
 
 /** The conditions inside fragments, read once the texts of messages are taken. */
@@ -1368,7 +1369,7 @@ function readConditions(reader: Reader) {
 
 /** A frame's condition and its branches, each with the condition just below its line. */
 function settleBranches(reader: Reader, frame: Frame) {
-  const lines = frame.lines.sort((a, b) => a.y - b.y);
+  const lines = frame.lines.toSorted((a, b) => a.y - b.y);
   const word = BRANCH_WORD[frame.kind];
   if (lines.length && !word)
     reader.warnings.push(
@@ -1378,20 +1379,20 @@ function settleBranches(reader: Reader, frame: Frame) {
     frame.box.y,
     ...(word ? lines.map((line) => line.y) : []),
   ]);
-  if (!frame.text) frame.text = texts[0].join(" ");
+  if (!frame.text) frame.text = texts[0]!.join(" ");
   if (word)
     frame.branches = lines.map((line, index) => ({
       y: line.y,
-      text: line.text || texts[index + 1].join(" "),
+      text: line.text || texts[index + 1]!.join(" "),
     }));
 }
 
 /** The texts of each stretch of a frame that starts at a stop: those just below the stop. */
 function conditionTexts(reader: Reader, frame: Frame, stops: number[]): string[][] {
   const texts = stops.map(() => [] as string[]);
-  for (const guard of frame.guards.sort((a, b) => a.box.y - b.box.y)) {
+  for (const guard of frame.guards.toSorted((a, b) => a.box.y - b.box.y)) {
     const index = stops.findLastIndex((y) => y <= guard.box.y + 4);
-    if (index >= 0 && guard.box.y - stops[index] <= 40) texts[index].push(guard.text);
+    if (index >= 0 && guard.box.y - stops[index]! <= 40) texts[index]!.push(guard.text);
     else
       reader.warnings.push(
         `The text “${guard.text}” in a fragment is no condition of it and is left out.`,
@@ -1405,7 +1406,7 @@ function headOf(style: Style, end: "start" | "end"): MarkerKind | null {
   const arrow = arrowAt(style, end);
   if (arrow === "none") return null;
   if (arrow === "cross") return "cross";
-  if (/^open/.test(arrow)) return "open";
+  if (arrow.startsWith("open")) return "open";
   return style.get(`${end}Fill`) === "0" ? "open" : "arrow";
 }
 
@@ -1436,17 +1437,17 @@ function readMessages(reader: Reader) {
       const connected = reader.participantOf(id ? drawing.cells.get(id) : undefined);
       if (connected !== undefined) return connected;
       const nearest = reader.nearest(point.x);
-      if (Math.abs(reader.lifelines[nearest].x - point.x) > 60)
+      if (Math.abs(reader.lifelines[nearest]!.x - point.x) > 60)
         reader.warnings.push(
-          `The message “${text}” ends far from every lifeline; it is read as ending at “${reader.lifelines[nearest].label}”, the nearest.`,
+          `The message “${text}” ends far from every lifeline; it is read as ending at “${reader.lifelines[nearest]!.label}”, the nearest.`,
         );
       return nearest;
     };
-    let from = end(edge.source, path[0]),
+    let from = end(edge.source, path[0]!),
       to = end(edge.target, path.at(-1)!),
       head = headOf(style, "end"),
       tail = headOf(style, "start"),
-      start = path[0];
+      start = path[0]!;
     // An edge drawn backwards, its only head at its start, goes the other way.
     if (!head && tail) [from, to, head, tail, start] = [to, from, tail, null, path.at(-1)!];
     const xs = path.map((point) => point.x);
@@ -1486,7 +1487,7 @@ const exchangeCalls = (reader: Reader, group: Cell) =>
     .children(group.id)
     .filter((item) => item.edge && !reader.used.has(item.id))
     .map((edge) => ({ edge, y: Math.min(...reader.drawing.path(edge).map((point) => point.y)) }))
-    .sort((a, b) => a.y - b.y);
+    .toSorted((a, b) => a.y - b.y);
 
 function readExchange(reader: Reader, group: Cell) {
   const calls = exchangeCalls(reader, group);
@@ -1497,7 +1498,7 @@ function readExchange(reader: Reader, group: Cell) {
       texts.set(edge.id, [...(texts.get(edge.id) ?? []), text]);
   };
   reader.use(group);
-  add(calls[0].edge, reader.label(group));
+  add(calls[0]!.edge, reader.label(group));
   for (const item of reader.drawing.children(group.id)) {
     if (!item.vertex || reader.used.has(item.id)) continue;
     reader.use(item, true);
@@ -1505,7 +1506,7 @@ function readExchange(reader: Reader, group: Cell) {
       y = box.y + box.height / 2;
     // A label stands on or just above the line it names.
     const nearest = calls.toSorted((a, b) => Math.abs(a.y - y) - Math.abs(b.y - y))[0];
-    add(nearest.edge, reader.label(item));
+    add(nearest!.edge, reader.label(item));
   }
   for (const [id, lines] of texts) reader.exchangeTexts.set(id, lines.join("\n"));
 }
@@ -1541,7 +1542,7 @@ function messageUnder(reader: Reader, box: Box): Message | undefined {
         candidate.y - bottom >= -box.height / 2 &&
         candidate.y - bottom <= 12,
     )
-    .sort((a, b) => Math.abs(a.y - bottom) - Math.abs(b.y - bottom))[0];
+    .toSorted((a, b) => Math.abs(a.y - bottom) - Math.abs(b.y - bottom))[0];
 }
 
 /** How draw.io's perimeter of a shape meets a message: a lifeline's, a bar's of its UML library, or another. */
@@ -1635,7 +1636,7 @@ function selfCallBends(reader: Reader, source: Cell, { start, end }: Ends, bends
 }
 
 /** Where a self call comes back: at its second bend, else 30px below where it leaves. */
-const selfCallBottom = (bends: Point[], top: number) => (bends.length > 1 ? bends[1].y : top + 30);
+const selfCallBottom = (bends: Point[], top: number) => (bends.length > 1 ? bends[1]!.y : top + 30);
 
 /** Where a self call leaves its shape: a lifeline's dashed line, or the right side of a bar. */
 const selfCallSide = (reader: Reader, source: Cell, box: Box) =>
@@ -1775,7 +1776,7 @@ function withLevelEnds(
   target: Cell | undefined,
 ): Point[] {
   if (meetsLevel(reader, target)) path[path.length - 1] = floatingEnd(reader, target, path.at(-2)!);
-  if (meetsLevel(reader, source)) path[0] = floatingEnd(reader, source, path[1]);
+  if (meetsLevel(reader, source)) path[0] = floatingEnd(reader, source, path[1]!);
   return path;
 }
 
@@ -1797,7 +1798,7 @@ function readNumbers(reader: Reader) {
         distance: Math.hypot(candidate.start.x - center.x, candidate.start.y - center.y),
       }))
       .filter(({ distance }) => distance < 40)
-      .sort((a, b) => a.distance - b.distance)[0];
+      .toSorted((a, b) => a.distance - b.distance)[0];
     if (message && /^\d+$/.test(number)) message.candidate.number = Number(number);
     else reader.warnings.push(`The number “${number}” stands at no message and is left out.`);
   }
@@ -1853,8 +1854,8 @@ function arrowOf(message: Message): { arrow: string; odd: boolean } {
     return { arrow: message.dashed ? "<<-->>" : "<<->>", odd: message.tail !== message.head };
   const arrows = ARROWS[message.head ?? "none"] ?? ARROWS.none;
   return {
-    arrow: message.dashed ? arrows.dashed : arrows.solid,
-    odd: message.dashed && arrows.odd === "dashed",
+    arrow: message.dashed ? arrows!.dashed : arrows!.solid,
+    odd: message.dashed && arrows!.odd === "dashed",
   };
 }
 
@@ -1918,7 +1919,7 @@ function activation(reader: Reader, bar: Bar, name: (index: number) => string): 
 
 /** Where a bar ends: the `-` of the message from it there, else a `deactivate`; none at the lifeline's end. */
 function deactivation(reader: Reader, bar: Bar, name: (index: number) => string): Placed[] {
-  const end = reader.lifelines[bar.who].bottom;
+  const end = reader.lifelines[bar.who]!.bottom;
   if (end !== undefined && bar.bottom >= end - 7) return [];
   const last = reader.messages.find(
     (message) =>
@@ -1979,12 +1980,12 @@ function creation(
   const message = reader.messages.find(
     (item) =>
       item.to === index &&
-      item.y >= lifeline.head.y - 4 &&
-      item.y <= lifeline.head.y + lifeline.head.height + 4,
+      item.y >= lifeline!.head.y - 4 &&
+      item.y <= lifeline!.head.y + lifeline!.head.height + 4,
   );
   if (!message) {
     reader.warnings.push(
-      `The participant “${lifeline.label}” stands below the others, but no message creates it; it stands with them.`,
+      `The participant “${lifeline!.label}” stands below the others, but no message creates it; it stands with them.`,
     );
     return [];
   }
@@ -1994,7 +1995,7 @@ function creation(
       y: message.y,
       rank: -1,
       order: index,
-      lines: [`create ${declaration(lifeline, name(index))}`],
+      lines: [`create ${declaration(lifeline!, name(index))}`],
     },
   ];
 }
@@ -2083,7 +2084,7 @@ function frameEvents(reader: Reader): Placed[] {
 
 /** The events of the source in the order the page shows them, and the participants created on the way. */
 function events(reader: Reader, ids: string[]): { placed: Placed[]; created: Set<number> } {
-  const name = (index: number) => ids[index];
+  const name = (index: number) => ids[index]!;
   const created = new Set<number>();
   // Activations first: they put the signs on the messages.
   const placed = [
@@ -2153,9 +2154,9 @@ function participantLines(reader: Reader, ids: string[], created: Set<number>): 
     if (lifeline.group !== group) {
       if (group !== undefined) lines.push("  end");
       group = lifeline.group;
-      if (group !== undefined) lines.push(boxLine(reader.groups[group].label));
+      if (group !== undefined) lines.push(boxLine(reader.groups[group]!.label));
     }
-    lines.push(`${group !== undefined ? "    " : "  "}${declaration(lifeline, ids[index])}`);
+    lines.push(`${group !== undefined ? "    " : "  "}${declaration(lifeline, ids[index]!)}`);
   });
   if (group !== undefined) lines.push("  end");
   return lines;

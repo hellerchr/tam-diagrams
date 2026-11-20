@@ -1,0 +1,155 @@
+/* Design tokens: every size, font, radius, layer and motion value in the app. Colors come from the theme
+   (theme.ts sets --c-<role> and --ansi-<n> on :root); the derived colors below are the only mixes allowed. The
+   settings set --text-base (the type scale follows it), --text-code and --reading-width on :root, and point the
+   Reading tokens (--read-*) at their choices. */
+:root {
+  /* Type */
+  --font-ui: "Inter", "Inter Variable", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-code: "JetBrains Mono", "JetBrainsMono Nerd Font", ui-monospace, "SF Mono", Menlo, monospace;
+  --font-display: "Instrument Serif", "Iowan Old Style", Georgia, serif;
+  --text-base: 13px;
+  --text-2xs: calc(var(--text-base) - 3px);
+  --text-xs: calc(var(--text-base) - 2px); /* meta: ages, counts, hints */
+  --text-sm: calc(var(--text-base) - 1px); /* secondary */
+  --text-md: var(--text-base); /* body: rows, controls */
+  --text-lg: calc(var(--text-base) + 2px); /* reading: messages, composer (chat apps read at 15-16) */
+  --text-xl: calc(var(--text-base) + 4px); /* titles */
+  --text-code: 13px; /* code: the editor, diffs, code in the chat */
+  --text-display: 32px;
+  --weight-regular: 400;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+  --leading-tight: 1.3;
+  --leading-snug: 1.45;
+  --leading-normal: 1.6;
+  --tracking-tight: -0.01em;
+
+  /* Reading: a Markdown file set for reading at length (features/files/MarkdownPreview.svelte), as an e-reader sets a
+     book. The Reading settings (lib/settings.svelte.ts) set --read-size and point --read-font, --read-char,
+     --read-leading, --read-measure, --read-align and --read-hyphens at one of the values below. */
+  --read-font-sans: var(--font-ui);
+  --read-font-serif: "Literata", "Iowan Old Style", Georgia, serif;
+  --read-font-mono: var(--font-code);
+  /* The average width of a character of each, in ems: a measure of so many characters is that wide. */
+  --read-char-sans: 0.465;
+  --read-char-serif: 0.475;
+  --read-char-mono: 0.6;
+  --read-leading-compact: 1.45;
+  --read-leading-normal: 1.6;
+  --read-leading-relaxed: 1.75;
+  /* Characters a line: 66 the classic book measure, 88 and 110 for screens and text with code in it. */
+  --read-measure-narrow: 66;
+  --read-measure-medium: 88;
+  --read-measure-wide: 110;
+  --read-align-left: start;
+  --read-align-justify: justify;
+  /* Justified text hyphenates, so it opens no rivers of space. */
+  --read-hyphens-left: manual;
+  --read-hyphens-justify: auto;
+  /* The defaults, until the settings apply. */
+  --read-size: 16px;
+  --read-font: var(--read-font-sans);
+  --read-char: var(--read-char-sans);
+  --read-leading: var(--read-leading-normal);
+  --read-measure: var(--read-measure-medium);
+  --read-align: var(--read-align-left);
+  --read-hyphens: var(--read-hyphens-left);
+  --read-column: calc(var(--read-measure) * var(--read-char) * var(--read-size));
+
+  /* Space (4px grid) */
+  --space-1: 2px;
+  --space-2: 4px;
+  --space-3: 6px;
+  --space-4: 8px;
+  --space-5: 12px;
+  --space-6: 16px;
+  --space-7: 24px;
+  --space-8: 32px;
+  --space-9: 48px;
+
+  /* Shape */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 10px;
+  --radius-full: 999px;
+  --border-width: 1px;
+  --rule-width: 2px; /* focus rings, quote bars, marked lines */
+
+  /* Control sizes */
+  --control-sm: 24px;
+  --control-md: 28px;
+  --control-lg: 34px;
+  --row-height: 30px;
+  --bar-height: 40px;
+  --icon-sm: 14px;
+  --icon-md: 16px;
+  --kbd-size: 18px;
+  --indent: 12px; /* per tree or outline level */
+  --resizer-hit: 5px; /* a resize handle's grab width; its line is one border wide */
+
+  /* Layout */
+  --sidebar-width: 264px;
+  --reading-width: 760px;
+  --column-min: 320px;
+  --menu-min: 180px;
+  --menu-max: 320px;
+  --toast-width: 380px;
+  --dialog-width: 440px;
+  --palette-width: 680px;
+  --palette-input: 48px;
+
+  /* Layers */
+  --z-sticky: 10;
+  --z-drawer: 50; /* the sidebar over the narrow layout */
+  --z-popover: 100;
+  --z-dialog: 200;
+  --z-toast: 300;
+
+  /* Motion: one curve for everything, an expo-out glide that is almost there at once and settles softly (swift,
+     then unhurried). Short, and never on the hot path (scrolling, typing, streaming); nothing animates out. */
+  --ease: cubic-bezier(0.16, 1, 0.3, 1);
+  --dur-fast: 80ms; /* hover and press feedback */
+  --dur-base: 120ms; /* small state changes: a switch, a fade */
+  --dur-enter: 180ms; /* something arriving: a menu, dialog, palette, toast, drawer, side panel */
+  --enter-rise: 6px; /* how far a surface glides up as it arrives */
+  --enter-scale: 0.97;
+  /* The arrivals, for `animation:` (keyframes in base.css): a floating surface with `--enter`, its backdrop with
+     `--enter-fade` (a side panel too: it never moves). The effect ends with the animation (`backwards`), so no
+     transform lingers to trap fixed children. */
+  --enter: enter var(--dur-enter) var(--ease) backwards;
+  --enter-fade: enter-fade var(--dur-enter) var(--ease) backwards;
+
+  /* Derived colors */
+  --c-accent-soft: color-mix(in srgb, var(--c-accent) 16%, transparent);
+  --c-blocked-soft: color-mix(in srgb, var(--c-blocked) 16%, transparent);
+  --c-danger: var(--ansi-1);
+  --c-stop: #e8763a; /* the busy composer's Stop: orange in every theme */
+  --c-danger-soft: color-mix(in srgb, var(--ansi-1) 14%, transparent);
+  --c-added: var(--ansi-2);
+  --c-added-soft: color-mix(in srgb, var(--ansi-2) 13%, transparent);
+  --c-removed-soft: color-mix(in srgb, var(--ansi-1) 13%, transparent);
+  --c-focus: color-mix(in srgb, var(--c-accent) 60%, transparent);
+  --c-scrim: color-mix(in srgb, var(--c-canvas) 60%, transparent);
+  --shadow-popover: 0 8px 24px color-mix(in srgb, black 30%, transparent), 0 0 0 var(--border-width) var(--c-border);
+
+  /* Code syntax (--syn-keyword, --syn-string, …) is set with the theme: styles/syntax.ts. */
+}
+
+/* Touch screens: controls big enough for a finger. */
+@media (pointer: coarse) {
+  :root {
+    --control-sm: 32px;
+    --control-md: 36px;
+    --control-lg: 44px;
+    --row-height: 40px;
+    --bar-height: 48px;
+  }
+}
+
+/* Reduced motion keeps the fade and drops the movement. */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --enter-rise: 0px;
+    --enter-scale: 1;
+  }
+}

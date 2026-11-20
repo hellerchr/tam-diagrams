@@ -1,6 +1,6 @@
 # Use case diagram guide
 
-<!-- Written by guideMarkdown in editor/reference.ts: change the guide there, not here. -->
+<!-- Written by guideMarkdown in src/guide-text.ts from src/reference.ts: change the guide there, not here. -->
 
 The functional scope of a subject: actors, use cases and the system boundary.
 

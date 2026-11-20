@@ -874,7 +874,7 @@ const tam: StreamParser<SyntaxState> = {
 const boundary = "(?![\\w-])";
 
 /** The tokenizer of each diagram type. */
-const TOKENIZERS: Record<DiagramType, StreamParser<SyntaxState>> = {
+export const TOKENIZERS: Record<DiagramType, StreamParser<SyntaxState>> = {
   tam,
   class: mermaid(new RegExp(`^classDiagram(-v2)?${boundary}`), false, classStatement, /^\s*\}$/),
   state: mermaid(new RegExp(`^stateDiagram(-v2)?${boundary}`), false, stateStatement, /^\s*\}$/),

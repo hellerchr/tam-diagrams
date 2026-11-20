@@ -173,7 +173,10 @@ export function tamScene(prepared: TamGraph, geometry: TamGeometry, measure: Mea
   for (const upright of geometry.upright ? [true, false] : [vertical])
     drawBoundaries(drawing, upright);
   // Bounds cover every shape with its stack shadow, wire, socket and text, plus the title above.
-  finishBounds(drawing.scene, measure, diagram.title, { shape: shadowed, marker: socketBox });
+  finishBounds(drawing.scene, measure, diagram.titleHidden ? undefined : diagram.title, {
+    shape: shadowed,
+    marker: socketBox,
+  });
   return drawing.scene;
 }
 

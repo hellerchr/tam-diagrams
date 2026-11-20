@@ -8,7 +8,8 @@ import {
 import { EditorState } from "@codemirror/state";
 import { filled, type Known, option } from "../editor/completion.ts";
 import { completeSource, continues, declarationLines } from "../editor/completion-uml.ts";
-import { typeOf, TYPES } from "../editor/types.ts";
+import { TYPES } from "../editor/diagram/diagram-types.ts";
+import { typeOf } from "../editor/types.ts";
 
 const KNOWN: Known[] = [
   { id: "user", kind: "human", label: "User" },
@@ -41,7 +42,7 @@ const stays = (text: string, typed: string) => {
   return validFor(state.sliceDoc(found.from), found.from, state.doc.length, state);
 };
 
-const starter = (type: string) => TYPES.find((item) => item.type === type)!.starter;
+const starter = (type: string) => TYPES.find((item) => item.kind === type)!.starter;
 
 describe("the order of a completion list", () => {
   it("has the usual directions first", () => {
@@ -280,7 +281,7 @@ describe("the line that declares an element", () => {
       declarationLines("usecase", "usecase-beta\n  User --> pay\n  actor User").get("User"),
     ).toBe(3);
     for (const info of TYPES)
-      if (info.type !== "tam")
-        expect(declarationLines(info.type, info.starter).size, info.type).toBeGreaterThan(2);
+      if (info.kind !== "tam")
+        expect(declarationLines(info.kind, info.starter).size, info.kind).toBeGreaterThan(2);
   });
 });

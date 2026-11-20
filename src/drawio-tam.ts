@@ -21,15 +21,18 @@ import {
 } from "./drawio-file.ts";
 import type { DrawioType, Imported } from "./drawio.ts";
 import {
+  aroundSome,
   arrowAt,
   cell,
   dashed,
+  distanceToPath,
   edgeRoute,
   fillOf,
   FONT_SIZE,
   Ids,
   isDark,
   labelAt,
+  legAt,
   markOnEdge,
   pageTitle,
   paletteColor,
@@ -44,7 +47,6 @@ import {
 import {
   areaOf,
   around,
-  aroundSome,
   type Box,
   centerOf,
   inside,
@@ -62,12 +64,17 @@ import {
   type TamEdge,
   type TamNode,
 } from "./tam.ts";
-import { holdsDeep } from "./scene-tree.ts";
 import { holder } from "./tam-edit.ts";
 import { SMALL } from "./text.ts";
 
 // ---------------------------------------------------------------------------------------------
 // Export
+
+/** Whether `outer` holds `inner` at any depth, in a tree whose parts know their parent. */
+function holdsDeep<T extends { parent?: T | null }>(outer: T, inner: T): boolean {
+  for (let up = inner.parent; up; up = up.parent) if (up === outer) return true;
+  return false;
+}
 
 /** A TAM label as an HTML value: its `<br>`s stay line breaks, the rest is text. */
 const html = (label: string) =>
@@ -203,7 +210,7 @@ function noteText(scene: Scene, id: string, box: Box) {
   const lines = scene.texts.filter((text) => text.owner === id);
   if (!lines.length) return { fontSize: SMALL };
   return {
-    fontSize: lines[0].size,
+    fontSize: lines[0]!.size,
     boundedLbl: 0,
     spacingTop: Math.max(0, Math.round(Math.min(...lines.map((line) => line.box.y)) - box.y - 2)),
     spacingLeft: Math.max(0, Math.round(Math.min(...lines.map((line) => line.box.x)) - box.x - 2)),
@@ -274,7 +281,7 @@ const distanceOr0 = (point: Point, box: Box | undefined) => (box ? distanceTo(bo
 
 /** A leg oriented to start at the box. */
 const orientedFrom = (points: Point[], box: Box | undefined) =>
-  distanceOr0(points[0], box) <= distanceOr0(points.at(-1)!, box) ? points : points.toReversed();
+  distanceOr0(points[0]!, box) <= distanceOr0(points.at(-1)!, box) ? points : points.toReversed();
 
 /** The scene's wires of an edge, oriented from the source end to the target end and joined. */
 function edgePath(
@@ -285,18 +292,18 @@ function edgePath(
 ): Point[] | undefined {
   const wires = scene.wires.filter((wire) => wire.edge === edge.id && wire.points.length > 1);
   if (!wires.length) return undefined;
-  if (wires.length === 1) return orientedFrom(wires[0].points, from);
+  if (wires.length === 1) return orientedFrom(wires[0]!.points, from);
   // Two legs that meet at a channel's circle or an assembly's ball: the source's leg first.
   const nearFrom = (points: Point[]) =>
-    Math.min(distanceOr0(points[0], from), distanceOr0(points.at(-1)!, from));
+    Math.min(distanceOr0(points[0]!, from), distanceOr0(points.at(-1)!, from));
   const [a, b] = wires.toSorted((p, q) => nearFrom(p.points) - nearFrom(q.points));
-  return [...orientedFrom(a.points, from), ...orientedTo(b.points, to)];
+  return [...orientedFrom(a!.points, from), ...orientedTo(b!.points, to)];
 }
 
 /** A leg oriented to end at the box. */
 function orientedTo(points: Point[], box: Box | undefined): Point[] {
   if (!box) return points;
-  return distanceTo(box, points.at(-1)!) <= distanceTo(box, points[0])
+  return distanceTo(box, points.at(-1)!) <= distanceTo(box, points[0]!)
     ? points
     : points.toReversed();
 }
@@ -729,7 +736,7 @@ function arcCell({ edge, from, to, label }: Wiring, arc: Point[], named: boolean
   const toTarget = orientedTo(arc, to) === arc;
   const points = toTarget ? arc : arc.toReversed();
   const bend = points[Math.floor(points.length / 2)];
-  const route = edgeRoute([points[0], bend, points.at(-1)!], from, to);
+  const route = edgeRoute([points[0]!, bend!, points.at(-1)!], from, to);
   return cell(
     {
       id: named ? edge.id : `${edge.id}#back`,
@@ -761,7 +768,7 @@ function protocolCells(scene: Scene): Cell[] {
       const reach = (text: SceneText) =>
         Math.min(
           ...[start, end].map((p) =>
-            Math.hypot(centerOf(text.box).x - p.x, centerOf(text.box).y - p.y),
+            Math.hypot(centerOf(text.box).x - p!.x, centerOf(text.box).y - p!.y),
           ),
         );
       const name = names.toSorted((a, b) => reach(a) - reach(b))[0];
@@ -1052,25 +1059,6 @@ const distanceTo = (box: Box, point: Point) =>
     Math.max(box.y - point.y, 0, point.y - box.y - box.height),
   );
 
-/** The distance from a point to a polyline. */
-function distanceToPath(path: Point[], point: Point): number {
-  let best = Infinity;
-  for (let i = 1; i < path.length; i++) {
-    const a = path[i - 1],
-      b = path[i],
-      length = Math.hypot(b.x - a.x, b.y - a.y) || 1;
-    const t = Math.max(
-      0,
-      Math.min(1, ((point.x - a.x) * (b.x - a.x) + (point.y - a.y) * (b.y - a.y)) / length ** 2),
-    );
-    best = Math.min(
-      best,
-      Math.hypot(point.x - a.x - t * (b.x - a.x), point.y - a.y - t * (b.y - a.y)),
-    );
-  }
-  return best;
-}
-
 /**
  * The texts that stand on their own on a page: drawn by hand, a label is often a text beside the
  * shape or connection it names. Each is taken once, by what stands nearest; the rest are left over.
@@ -1260,7 +1248,7 @@ class TamPage {
       });
     const statements = this.connections.map((connection) => this.statement(connection));
     this.warnUnknown();
-    const source = [...this.header(), ...this.body(), ...new Set(statements)].join("\n") + "\n";
+    const source = `${[...this.header(), ...this.body(), ...new Set(statements)].join("\n")}\n`;
     try {
       parseTam(source);
     } catch (error) {
@@ -1646,7 +1634,7 @@ class TamPage {
     const circleCell = this.drawing.cells.get(circle)!;
     const ends = legs.map((leg) => this.legEnd(circle, leg));
     const [a, b] = ends;
-    if (ends.length !== 2 || !a.element || !b.element) {
+    if (ends.length !== 2 || !a!.element || !b!.element) {
       this.warnings.push(
         `The channel ${this.named(circleCell)} does not join two elements; it is left out.`,
       );
@@ -1656,10 +1644,10 @@ class TamPage {
       this.drawing.label(circleCell) ||
       ends.map((end) => this.drawing.label(end.leg)).find(Boolean) ||
       undefined;
-    const { word, swap } = this.circleWay(circleCell, a, b);
+    const { word, swap } = this.circleWay(circleCell, a!, b!);
     this.connections.push({
-      from: swap ? b.element : a.element,
-      to: swap ? a.element : b.element,
+      from: swap ? b!.element : a!.element,
+      to: swap ? a!.element : b!.element,
       word,
       both: false,
       label,
@@ -1729,7 +1717,7 @@ class TamPage {
 
   /** A modifying access drawn on its own: the elements nearest its two ends are what it joins. */
   private readModifySymbol(symbol: { cell: Cell; path: Point[] }) {
-    const a = this.nearest(symbol.path[0]),
+    const a = this.nearest(symbol.path[0]!),
       b = a && this.nearest(symbol.path.at(-1)!, a);
     const storage = [a, b].find((end) => end && this.passive(end)),
       agent = [a, b].find((end) => end && !this.passive(end));
@@ -2079,7 +2067,7 @@ function readMarks(drawing: Drawing, elements: Map<string, Element>, marks: Cell
 
 /** Drawn by hand, a stack is an unnamed outline of the same size a little behind and below an element. */
 function readStacks(elements: Map<string, Element>) {
-  for (const [id, back] of [...elements]) {
+  for (const [id, back] of elements) {
     if (back.label) continue;
     const front = [...elements.values()].find((other) => isBehind(back, other));
     if (front) {
@@ -2157,7 +2145,7 @@ const toOutline = (box: Box, point: Point) =>
 function middleOfMiddle(path: Point[]): Point {
   const first = path.length > 2 ? Math.floor(path.length / 2) - 1 : 0;
   const [a, b] = [path[first], path[first + 1] ?? path[first]];
-  return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+  return { x: (a!.x + b!.x) / 2, y: (a!.y + b!.y) / 2 };
 }
 
 /** Whether a box holds a point. */
@@ -2173,7 +2161,7 @@ function crosses(line: Point[], route: Point[][]): boolean {
     return d1 * d2 < 0 && d3 * d4 < 0;
   };
   return route.some((path) =>
-    path.slice(1).some((q, j) => line.slice(1).some((b, i) => cut(line[i], b, path[j], q))),
+    path.slice(1).some((q, j) => line.slice(1).some((b, i) => cut(line[i]!, b, path[j]!, q))),
   );
 }
 
@@ -2184,17 +2172,20 @@ function nearestShare(path: Point[], point: Point): number {
   for (let i = 1; i < path.length; i++) {
     const a = path[i - 1],
       b = path[i],
-      length = Math.hypot(b.x - a.x, b.y - a.y);
+      length = Math.hypot(b!.x - a!.x, b!.y - a!.y);
     const t = length
       ? Math.max(
           0,
           Math.min(
             1,
-            ((point.x - a.x) * (b.x - a.x) + (point.y - a.y) * (b.y - a.y)) / length ** 2,
+            ((point.x - a!.x) * (b!.x - a!.x) + (point.y - a!.y) * (b!.y - a!.y)) / length ** 2,
           ),
         )
       : 0;
-    const distance = Math.hypot(point.x - a.x - t * (b.x - a.x), point.y - a.y - t * (b.y - a.y));
+    const distance = Math.hypot(
+      point.x - a!.x - t * (b!.x - a!.x),
+      point.y - a!.y - t * (b!.y - a!.y),
+    );
     if (distance < best.distance) best = { distance, at: total + t * length };
     total += length;
   }
@@ -2203,16 +2194,12 @@ function nearestShare(path: Point[], point: Point): number {
 
 /** The direction of a path at a share of its length. */
 function tangentAt(path: Point[], share: number): Point {
-  const lengths = path.slice(1).map((p, i) => Math.hypot(p.x - path[i].x, p.y - path[i].y));
-  let left = share * lengths.reduce((a, b) => a + b, 0);
-  for (let i = 0; i < lengths.length; i++) {
-    if (left <= lengths[i] || i === lengths.length - 1) {
-      const length = lengths[i] || 1;
-      return { x: (path[i + 1].x - path[i].x) / length, y: (path[i + 1].y - path[i].y) / length };
-    }
-    left -= lengths[i];
-  }
-  return { x: 1, y: 0 };
+  const leg = legAt(path, share);
+  if (!leg) return { x: 1, y: 0 };
+  const a = path[leg.index]!,
+    b = path[leg.index + 1]!,
+    length = leg.length || 1;
+  return { x: (b.x - a.x) / length, y: (b.y - a.y) / length };
 }
 
 /** The roles this package writes that only a TAM block diagram has. */

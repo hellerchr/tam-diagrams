@@ -5,7 +5,7 @@ import { arialMeasure } from "../src/arial-measure.ts";
 import { parseUml } from "../src/index.ts";
 import type { Scene } from "../src/scene.ts";
 import { activityStructure } from "../src/uml-activity-edit.ts";
-import { laneFrame } from "../src/uml-placed.ts";
+import { laneFrame } from "../src/uml-lanes.ts";
 import {
   followPlaces,
   hasMarks,
@@ -18,7 +18,6 @@ import {
   unmarked,
   unplaced,
 } from "../src/uml-places.ts";
-import { editorAt } from "./editor-at.ts";
 
 const LANES = `swimlane-beta TB
   subgraph Customer
@@ -121,58 +120,5 @@ describe("the width of a lane", () => {
     expect(readLanes(followPlaces(activityStructure.read, before, `${before}\n`))).toEqual(
       new Map([["Shop", 300]]),
     );
-  });
-});
-
-describe("dragging a lane's border on the canvas", () => {
-  /** The far border of a lane in the picture on show, halfway down the lanes. */
-  const border = (scene: Scene, index: number) => {
-    const lanes = laneFrame(scene)!;
-    return { x: lanes.bounds[index + 1], y: lanes.frame.y + lanes.frame.height / 2 };
-  };
-
-  it("gives the lane between the lines the width it is dragged to, in one step to undo", async () => {
-    const { doc, drag, settled } = await editorAt(LANES),
-      before = widths(doc.picture!.scene),
-      at = border(doc.picture!.scene, 0);
-    await drag(at, { x: at.x + 100, y: at.y });
-    await settled();
-    const width = before.get("Customer")! + 100;
-    expect(doc.source).toBe(`${LANES}\n%% @lane:Customer ${width}\n`);
-    expect(widths(doc.picture!.scene).get("Customer")).toBe(width);
-    // The outer edge is the last lane's.
-    const edge = border(doc.picture!.scene, 1);
-    await drag(edge, { x: edge.x + 60, y: edge.y });
-    await settled();
-    expect(readLanes(doc.source).get("Shop")).toBe(before.get("Shop")! + 60);
-    doc.undo();
-    doc.undo();
-    await settled();
-    expect(doc.source).toBe(LANES);
-    doc.redo();
-    await settled();
-    expect(readLanes(doc.source)).toEqual(new Map([["Customer", width]]));
-  });
-
-  it("writes the width the nodes need when the lane is dragged narrower", async () => {
-    const { doc, drag, settled } = await editorAt(LANES),
-      at = border(doc.picture!.scene, 0);
-    await drag(at, { x: 30, y: at.y });
-    await settled();
-    const written = readLanes(doc.source).get("Customer")!;
-    expect(written).toBeGreaterThan(30);
-    expect(widths(doc.picture!.scene).get("Customer")).toBe(written);
-    expect(inLanes(doc.picture!.scene, parents)).toBe(true);
-  });
-
-  it("moves the placed nodes of the lanes after the border with it", async () => {
-    const placed = setPlaces(LANES, { check: { x: 230, y: 120 }, order: { x: 40, y: 120 } });
-    const { doc, drag, settled } = await editorAt(placed),
-      at = border(doc.picture!.scene, 0);
-    await drag(at, { x: at.x + 80, y: at.y });
-    await settled();
-    expect(readPlaces(doc.source).get("check")).toEqual({ x: 310, y: 120 });
-    expect(readPlaces(doc.source).get("order")).toEqual({ x: 40, y: 120 });
-    expect(inLanes(doc.picture!.scene, parents)).toBe(true);
   });
 });

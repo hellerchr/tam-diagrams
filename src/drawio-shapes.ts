@@ -20,9 +20,13 @@ import {
   type Style,
   textToHtml,
 } from "./drawio-file.ts";
-import type { Box, Point, Scene, SceneShape } from "./scene.ts";
+import { around, type Box, type Point, type Scene, type SceneShape } from "./scene.ts";
 import { FONT } from "./text.ts";
 import { numberedId } from "./source-text.ts";
+
+/** The box around some boxes; none around none. */
+export const aroundSome = (boxes: Box[]): Box | undefined =>
+  boxes.length ? around(boxes) : undefined;
 
 /** The "R ▾" of a request/response channel: R above a triangle pointing down; rotated, it points elsewhere. */
 export const REQUEST_STENCIL =
@@ -281,7 +285,7 @@ export function edgeRoute(
   const first = points[0],
     last = points.at(-1)!;
   if (from) {
-    const at = pin(first, from);
+    const at = pin(first!, from);
     Object.assign(style, {
       exitX: at.x,
       exitY: at.y,
@@ -289,7 +293,7 @@ export function edgeRoute(
       exitDy: at.dy,
       exitPerimeter: 0,
     });
-  } else geometry.sourcePoint = shift(first);
+  } else geometry.sourcePoint = shift(first!);
   if (to) {
     const at = pin(last, to);
     Object.assign(style, {
@@ -300,7 +304,7 @@ export function edgeRoute(
       entryPerimeter: 0,
     });
   } else geometry.targetPoint = shift(last);
-  const bends = dropStraight(points.slice(1, -1), first, last);
+  const bends = dropStraight(points.slice(1, -1), first!, last);
   if (bends.length) geometry.points = bends.map(shift);
   return { style, geometry };
 }
@@ -312,8 +316,9 @@ function dropStraight(bends: Point[], first: Point, last: Point): Point[] {
     const before = all[index],
       after = all[index + 2];
     const cross =
-      (point.x - before.x) * (after.y - before.y) - (point.y - before.y) * (after.x - before.x);
-    return Math.abs(cross) > 0.5 * Math.hypot(after.x - before.x, after.y - before.y);
+      (point.x - before!.x) * (after!.y - before!.y) -
+      (point.y - before!.y) * (after!.x - before!.x);
+    return Math.abs(cross) > 0.5 * Math.hypot(after!.x - before!.x, after!.y - before!.y);
   });
 }
 
@@ -321,7 +326,7 @@ function dropStraight(bends: Point[], first: Point, last: Point): Point[] {
 function shareAlong(path: Point[], point: Point): number {
   let total = 0,
     best = { distance: Infinity, at: 0 };
-  const lengths = path.slice(1).map((p, i) => Math.hypot(p.x - path[i].x, p.y - path[i].y));
+  const lengths = legLengths(path);
   for (let i = 0; i < lengths.length; i++) {
     const a = path[i],
       b = path[i + 1],
@@ -331,33 +336,67 @@ function shareAlong(path: Point[], point: Point): number {
           0,
           Math.min(
             1,
-            ((point.x - a.x) * (b.x - a.x) + (point.y - a.y) * (b.y - a.y)) / length ** 2,
+            ((point.x - a!.x) * (b!.x - a!.x) + (point.y - a!.y) * (b!.y - a!.y)) / length ** 2,
           ),
         )
       : 0;
-    const near = { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t };
+    const near = { x: a!.x + (b!.x - a!.x) * t, y: a!.y + (b!.y - a!.y) * t };
     const distance = Math.hypot(point.x - near.x, point.y - near.y);
-    if (distance < best.distance) best = { distance, at: total + t * length };
-    total += length;
+    if (distance < best.distance) best = { distance, at: total + t * length! };
+    total += length!;
   }
   return total ? best.at / total : 0.5;
 }
 
+/** The lengths of a path's legs. */
+const legLengths = (path: Point[]) =>
+  path.slice(1).map((p, i) => Math.hypot(p.x - path[i]!.x, p.y - path[i]!.y));
+
+/** The leg a share of a path's length falls on: its index, its length, and how far along it the share lies (0 to 1). */
+export function legAt(
+  path: Point[],
+  share: number,
+): { index: number; length: number; t: number } | undefined {
+  const lengths = legLengths(path);
+  let left = share * lengths.reduce((a, b) => a + b, 0);
+  for (let index = 0; index < lengths.length; index++) {
+    const length = lengths[index]!;
+    if (left <= length || index === lengths.length - 1)
+      return { index, length, t: length ? Math.min(1, left / length) : 0 };
+    left -= length;
+  }
+  return undefined;
+}
+
+/** The distance from a point to a polyline. */
+export function distanceToPath(path: Point[], point: Point): number {
+  let best = Infinity;
+  for (let i = 1; i < path.length; i++) {
+    const a = path[i - 1],
+      b = path[i],
+      length = Math.hypot(b!.x - a!.x, b!.y - a!.y) || 1;
+    const t = Math.max(
+      0,
+      Math.min(
+        1,
+        ((point.x - a!.x) * (b!.x - a!.x) + (point.y - a!.y) * (b!.y - a!.y)) / length ** 2,
+      ),
+    );
+    best = Math.min(
+      best,
+      Math.hypot(point.x - a!.x - t * (b!.x - a!.x), point.y - a!.y - t * (b!.y - a!.y)),
+    );
+  }
+  return best;
+}
+
 /** The point at a share of a path's length. */
 function pointAlong(path: Point[], share: number): Point {
-  const lengths = path.slice(1).map((p, i) => Math.hypot(p.x - path[i].x, p.y - path[i].y));
-  let left = share * lengths.reduce((a, b) => a + b, 0);
-  for (let i = 0; i < lengths.length; i++) {
-    if (left <= lengths[i] || i === lengths.length - 1) {
-      const t = lengths[i] ? Math.min(1, left / lengths[i]) : 0;
-      return {
-        x: path[i].x + (path[i + 1].x - path[i].x) * t,
-        y: path[i].y + (path[i + 1].y - path[i].y) * t,
-      };
-    }
-    left -= lengths[i];
-  }
-  return path[0];
+  const leg = legAt(path, share);
+  if (!leg) return path[0]!;
+  const a = path[leg.index]!,
+    b = path[leg.index + 1]!;
+  return { x: a.x + (b.x - a.x) * leg.t, y: a.y + (b.y - a.y) * leg.t };
 }
 
 /**
@@ -421,7 +460,7 @@ export const roleOf = (drawing: Drawing, cell: Cell) => drawing.style(cell).get(
 export function fillColor(style: Style): string | undefined {
   const fill = style.get("fillColor");
   if (!fill || fill === "none" || fill === "default") return undefined;
-  const hex = fill.length === 4 ? `#${[...fill.slice(1)].map((c) => c + c).join("")}` : fill;
+  const hex = fill.length === 4 ? `#${Array.from(fill.slice(1), (c) => c + c).join("")}` : fill;
   return /^#[0-9a-f]{6}$/i.test(hex) ? hex.toUpperCase() : undefined;
 }
 
@@ -439,7 +478,7 @@ export function isDark(style: Style): boolean {
   const fill = fillColor(style);
   if (!fill) return false;
   const [r, g, b] = [1, 3, 5].map((i) => parseInt(fill.slice(i, i + 2), 16));
-  return r + g + b < 160;
+  return r! + g! + b! < 160;
 }
 
 /**
@@ -450,8 +489,8 @@ export function paletteColor(style: Style): string | undefined {
   const fill = fillColor(style);
   if (!fill) return undefined;
   const [r, g, b] = [1, 3, 5].map((i) => parseInt(fill.slice(i, i + 2), 16) / 255);
-  const max = Math.max(r, g, b),
-    min = Math.min(r, g, b);
+  const max = Math.max(r!, g!, b!),
+    min = Math.min(r!, g!, b!);
   if (max - min < 0.06) return undefined;
   // Hues between ours and draw.io's own fills (#dae8fc, #ffe6cc, #fff2cc, #d5e8d4, #e1d5e7, #f8cecc).
   const HUES: [string, number][] = [
@@ -466,9 +505,9 @@ export function paletteColor(style: Style): string | undefined {
   const hi = max,
     lo = min,
     d = hi - lo;
-  const h = hi === r ? ((g - b) / d) % 6 : hi === g ? (b - r) / d + 2 : (r - g) / d + 4;
+  const h = hi === r ? ((g! - b!) / d) % 6 : hi === g ? (b! - r!) / d + 2 : (r! - g!) / d + 4;
   const own = (h * 60 + 360) % 360;
-  let best = { name: HUES[0][0], distance: Infinity };
+  let best = { name: HUES[0]![0], distance: Infinity };
   for (const [name, hue] of HUES) {
     const difference = Math.abs(hue - own),
       distance = Math.min(difference, 360 - difference);

@@ -8,11 +8,11 @@ A change to what a source may say ripples through every place that reads or writ
    - Mermaid types: `src/uml-<type>-layout.ts`, and `src/uml-placed.ts` for placed parts.
 3. **Editing as text**: `src/tam-edit.ts` or `src/uml-<type>-edit.ts`. Every edit returns the source with one change made and every other line as its author wrote it.
 4. **Editor**:
-   - the palette and type list in `editor/types.ts`
+   - the type list, starters and snippets in `editor/diagram/diagram-types.ts`, the shapes in `editor/diagram/diagram-shapes.ts`
    - completion in `editor/completion.ts` or `completion-uml.ts`
    - the tokenizer in `editor/syntax.ts`
    - the inspector, where the change has a property
-5. **Guide**: `editor/reference.ts`, then regenerate `docs/guides/` (see Done in AGENTS.md).
+5. **Guide**: `src/reference-*.ts`, then regenerate `docs/guides/` (see Done in AGENTS.md).
 6. **draw.io**: the type's `src/drawio-<type>.ts`, both export and import (see [drawio.md](drawio.md)).
 7. **README**: its syntax section.
 

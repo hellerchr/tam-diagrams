@@ -9,7 +9,9 @@ import type { TamDiagram } from "./tam.ts";
 /** Shapes that mark connections rather than stand for elements. */
 const MARKS = new Set<SceneShape["kind"]>(["circle", "pointer", "dots"]);
 
-/** Whether an axis-aligned segment touches the box. */
+/** How far a boundary reaches out past its own channels, step by step, to find room for its name. */
+const EXTENSIONS = [24, 48, 96, 160];
+
 /** Whether an axis-aligned segment touches the closed box. */
 function segmentTouches(a: Point, b: Point, box: Box): boolean {
   return (
@@ -218,7 +220,7 @@ export function protocolBoundaries(
       // Extensions are tried on each side separately; a side extends only where nothing is in the way.
       const reaches = [
         [0, 0],
-        ...[24, 48, 96, 160].flatMap((extra) => [
+        ...EXTENSIONS.flatMap((extra) => [
           [0, extra],
           [extra, 0],
           [extra, extra],
@@ -243,22 +245,14 @@ export function protocolBoundaries(
       }
       if (!chosen) {
         fallback("protocol-name-scan");
-        // Still no spot: scan along the whole line and a little beyond, above and below it.
+        // Still no spot: scan above and below the whole line and as far beyond as it could reach.
         trace = [make(low, level(points[0])), ...points, make(high, level(points.at(-1)!))];
-        const from = Math.min(along(trace[0]), along(trace.at(-1)!)) - width - 40,
-          to = Math.max(along(trace[0]), along(trace.at(-1)!)) + 40;
-        outer: for (const offset of [12, -12, 20, -20, 30, -30]) {
-          for (let at = from; at <= to; at += 8) {
-            const place = vertical
-              ? { x: at, y: level(points[0]) + offset }
-              : { x: level(points[0]) + (offset > 0 ? 6 : -6 - width), y: at };
-            const box = textBox(name, place.x, place.y, SMALL, 400, "start", measure);
-            if (free(grow(box, 2))) {
-              chosen = { place, box };
-              break outer;
-            }
-          }
-        }
+        chosen = scanName(
+          name,
+          { low, high, level: level(points[0]), vertical, width },
+          measure,
+          free,
+        );
       }
       if (!chosen) {
         fallback("protocol-name-least-cover");
@@ -326,4 +320,41 @@ export function protocolBoundaries(
       });
     }
   }
+}
+
+/** A protocol's line along its level, from `low` to `high`, with the width of its name. */
+interface NameLine {
+  low: number;
+  high: number;
+  level: number;
+  vertical: boolean;
+  width: number;
+}
+
+/**
+ * The first free place for a protocol's name above or below its line, nearest the line first, as
+ * far beyond its ends as the line could reach: past a wire that stops the line, too, rather than on
+ * it. Undefined where none is free.
+ */
+function scanName(name: string, line: NameLine, measure: Measure, free: (box: Box) => boolean) {
+  const { low, high, level, vertical, width } = line,
+    reach = EXTENSIONS.at(-1)!;
+  const gap = (box: Box) =>
+    vertical
+      ? Math.max(0, low - box.x - box.width, box.x - high)
+      : Math.max(0, low - box.y - box.height, box.y - high);
+  for (const offset of [12, -12, 20, -20, 30, -30]) {
+    const places = [];
+    for (let at = low - width - reach; at <= high + reach; at += 8) {
+      const place = vertical
+        ? { x: at, y: level + offset }
+        : { x: level + (offset > 0 ? 6 : -6 - width), y: at };
+      places.push({ place, box: textBox(name, place.x, place.y, SMALL, 400, "start", measure) });
+    }
+    const found = places
+      .toSorted((p, q) => gap(p.box) - gap(q.box))
+      .find((candidate) => free(grow(candidate.box, 2)));
+    if (found) return found;
+  }
+  return undefined;
 }

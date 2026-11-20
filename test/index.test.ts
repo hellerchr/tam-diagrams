@@ -11,13 +11,13 @@ const files = (dir: string): string[] =>
       ? []
       : entry.isDirectory()
         ? files(join(dir, entry.name))
-        : /\.tsx?$/.test(entry.name)
+        : /\.(tsx?|svelte)$/.test(entry.name)
           ? [join(dir, entry.name)]
           : [],
   );
 
 describe("package boundary", () => {
-  it("imports only its own files, elkjs and, outside src, vitest, mermaid, node and vite", () => {
+  it("imports only its own files, elkjs and, outside src, vitest, mermaid, node, vite and the editor's Svelte", () => {
     const outside = files(root)
       .flatMap((file) =>
         [...readFileSync(file, "utf8").matchAll(/(?:from\s+|import\s*\(\s*)["']([^"']+)["']/g)].map(
@@ -31,7 +31,10 @@ describe("package boundary", () => {
               spec.startsWith("elkjs/") ||
               (!file.startsWith("src") &&
                 (spec.startsWith("vitest") || spec === "mermaid" || spec.startsWith("node:"))) ||
-              (file === join("editor", "vite.config.ts") && spec === "vite") ||
+              ([join("editor", "vite.config.ts"), "vitest.config.ts"].includes(file) &&
+                (spec === "vite" || spec === "@sveltejs/vite-plugin-svelte")) ||
+              // The editor is Svelte, with Lucide's icons.
+              (/^editor/.test(file) && /^(svelte|lucide)(\/|$)/.test(spec)) ||
               // The editor's source pane is CodeMirror.
               (/^(editor|test)/.test(file) && /^@(codemirror|lezer)\//.test(spec))
             ),

@@ -31,14 +31,18 @@ import {
   beside,
   between,
   type End,
+  inRange,
   lines,
   plainSpots,
+  PORT,
   range,
   REACH,
   runLength,
   type Spot,
   type Spots,
+  SPOTS,
 } from "./tam-placed-lines.ts";
+import { type Port, portAlong, portsAlong, portText } from "./tam-ports.ts";
 import {
   circled,
   HIT,
@@ -64,8 +68,9 @@ const ROOM = 44;
  * too short for the label at its circle, CRAMPED one too short for the circle itself, CROWDED a side
  * with more wire ends than fit, TAKEN a spot on a side another wire ends at, CLOSE one nearer to
  * another wire end than two wires keep apart. A line that leaves or
- * enters across the diagram's direction pays SIDEWAYS, one off the middle of a side OFF_MIDDLE, and
- * only BESIDE of it where another wire holds the middle. A mark that covers something counts like
+ * enters across the diagram's direction pays SIDEWAYS, one off the middle of a side OFF_MIDDLE, a
+ * part of it at another of the side's ports (PORT, tam-placed-lines.ts), all of it beside a middle
+ * that another wire holds where no port is free. A mark that covers something counts like
  * COVER pixels for each point it covers.
  */
 const BEND = 70,
@@ -77,7 +82,6 @@ const BEND = 70,
   CLOSE = 300,
   SIDEWAYS = 80,
   OFF_MIDDLE = 150,
-  BESIDE = 0.1,
   COVER = 60;
 
 /** A line that costs this much more than the one its bundle takes alone is worth another wire's giving way. */
@@ -103,6 +107,8 @@ interface Bundle extends Line {
   traveller: Traveller;
   /** The key of each side of each end, for what the side holds. */
   sides: Record<"a" | "b", Record<Side, string>>;
+  /** The port each end takes where its connections name one (tam-ports.ts): its line ends there and nowhere else. */
+  pins: Record<"a" | "b", Port | undefined>;
   /** Each member's line, and its circle and label. */
   laid: Point[][];
   marks: (Mark | undefined)[];
@@ -144,6 +150,7 @@ export function placedGeometry(
   prepared: TamGraph,
   placed: PlacedElements,
   measure: Measure,
+  draft = false,
 ): TamGeometry {
   const boxes = new Map(placed.boxes),
     elements = elementsOf(prepared, boxes),
@@ -171,7 +178,7 @@ export function placedGeometry(
   const markers = takeInterfaces(wiring, placed);
   const end = (id: string): End => ({ id, box: boxes.get(id)!, radius: round.get(id) ?? 0 });
   const alone = layAll(wiring, bundlesOf(wiring, end));
-  untangle(wiring, alone);
+  if (!draft) untangle(wiring, alone);
   for (const item of remark(wiring)) relay(wiring, item);
   const geometry: TamGeometry = {
     boxes,
@@ -268,11 +275,19 @@ const sidesOf = (id: string) =>
     (["top", "bottom", "left", "right"] as Side[]).map((side) => [side, `${id}\u0000${side}`]),
   ) as Record<Side, string>;
 
+/** The port a connection names for its end at an element (tam-ports.ts). */
+const portAt = (edge: TamEdge, id: string) =>
+  edge.source === id ? edge.sourcePort : edge.targetPort;
+
 /** A bundle of connections between two elements, before it takes a line. */
 function newBundle(wiring: Wiring, key: string, a: End, b: End, members: TamEdge[]): Bundle {
   const { chain } = wiring.prepared,
     nested = chain(a.id).includes(b.id) || chain(b.id).includes(a.id),
-    sides = { a: sidesOf(a.id), b: sidesOf(b.id) };
+    sides = { a: sidesOf(a.id), b: sidesOf(b.id) },
+    // A wire inside its container runs straight in from its border: only the part's port could be said, and is not.
+    pins = nested
+      ? { a: undefined, b: undefined }
+      : { a: portAt(members[0]!, a.id), b: portAt(members[0]!, b.id) };
   return {
     key,
     a,
@@ -294,20 +309,23 @@ function newBundle(wiring: Wiring, key: string, a: End, b: End, members: TamEdge
       sides: [sides.a, sides.b],
     },
     sides,
+    pins,
     laid: [],
     marks: [],
     covered: 0,
   };
 }
 
-/** Connections between one pair of elements share a line: one bundle for each pair. */
+/** Connections between one pair of elements share a line: one bundle for each pair and the ports they name. */
 function bundlesOf(wiring: Wiring, end: (id: string) => End): Map<string, Bundle> {
   const bundles = new Map<string, Bundle>(),
     { boxes } = wiring;
   for (const edge of wiring.prepared.diagram.edges) {
     if (edge.kind === "provided" || edge.kind === "required") continue;
     if (!boxes.has(edge.source) || !boxes.has(edge.target)) continue;
-    const key = [edge.source, edge.target].toSorted().join("\u0000");
+    const key = [edge.source + portText(edge.sourcePort), edge.target + portText(edge.targetPort)]
+      .toSorted()
+      .join("\u0000");
     const found = bundles.get(key);
     if (found) found.members.push(edge);
     else bundles.set(key, newBundle(wiring, key, end(edge.source), end(edge.target), [edge]));
@@ -384,7 +402,8 @@ function reachAt(item: Bundle, which: Which, line: Line = item) {
 /** What a line costs before what it meets: corners, length, no room for a circle, a crowded side. */
 function plain(wiring: Wiring, item: Bundle, line: Line): number {
   const { points } = line;
-  let total = (points.length - 2) * BEND,
+  // A reads/writes loop pays its corners twice: bent, it is two parallel lines with sharp corners, straight two arcs.
+  let total = (points.length - 2) * BEND * (loopRoom(item) ? 2 : 1),
     most = 0;
   for (let index = 0; index < points.length - 1; index++) {
     const length = runLength(points[index], points[index + 1]);
@@ -432,22 +451,35 @@ function endCosts(wiring: Wiring, item: Bundle, which: Which, line: Line): numbe
 
 const windowOf = (item: Bundle, by: number) => grow(around([item.a.box, item.b.box]), by);
 
-/** Where the ends of a bundle may take their spots, for the lines it may take. */
+/** Where the ends of a bundle may take their spots, for the lines it may take: a pinned end only at its port. */
 const spotsOf =
   (wiring: Wiring, item: Bundle): Spots =>
-  (end, side) =>
-    sideSpots(wiring, item, end, side);
+  (end, side) => {
+    const pin = item.pins[end === item.a ? "a" : "b"];
+    if (!pin) return sideSpots(wiring, item, end, side);
+    return pin.side === side ? [{ at: portAlong(end.box, pin), off: 0 }] : [];
+  };
+
+/** Whether a line ends at the ports a bundle's connections name. */
+const pinnedBy = (item: Bundle, line: Line) =>
+  ENDS.every((which) => {
+    const pin = item.pins[which];
+    return (
+      !pin ||
+      (sideOf(which, line) === pin.side &&
+        Math.abs(endAt(which, line) - portAlong(item[which].box, pin)) < 1)
+    );
+  });
 
 /**
- * The spots on a side one end of a bundle may take: the middle and the quarters where no other
- * wire ends near them; beside a middle that is taken, the nearest free spot either way.
+ * The spots on a side one end of a bundle may take: its ports where no other wire ends near them,
+ * the middle first; where every port is taken, the nearest free spot beside the middle either way.
  */
 function sideSpots(wiring: Wiring, item: Bundle, end: End, side: Side): Spot[] {
   const which = end === item.a ? "a" : "b",
     others = othersOn(wiring, item, item.sides[which][side]);
   if (!others.length) return plainSpots(end, side);
   const [low, high] = range(end, side),
-    middle = (low + high) / 2,
     reach = item.reach + (item.members.some(circled) ? CIRCLE : 0);
   const free = (spot: number, gap: number) =>
     others.every((other) => Math.abs(other.at - spot) >= other.half + reach + gap);
@@ -455,13 +487,13 @@ function sideSpots(wiring: Wiring, item: Bundle, end: End, side: Side): Spot[] {
   const add = (at: number, off: number) => {
     if (found.every((spot) => Math.abs(spot.at - at) >= 4)) found.push({ at, off });
   };
-  if (free(middle, GAP)) add(middle, 0);
-  else besideMiddle(free, add, low, high);
-  for (const quarter of [0.25, 0.75]) {
-    const spot = low + (high - low) * quarter;
-    if (free(spot, GAP)) add(spot, 1);
+  // The free ports nearest the middle: a long side has many, and the line is tried at each.
+  for (const at of inRange(end, side, portsAlong(end.box, side))) {
+    if (found.length === SPOTS) break;
+    if (free(at, GAP)) add(at, Math.abs(at - (low + high) / 2) < 1 ? 0 : PORT);
   }
-  if (!found.length) add(middle, 2);
+  if (!found.length) besideMiddle(free, add, low, high);
+  if (!found.length) add((low + high) / 2, 2);
   return found;
 }
 
@@ -478,7 +510,7 @@ function besideMiddle(
     for (const way of [-1, 1]) {
       const spot = nearestFree(middle, way, low, high, (spot) => free(spot, gap));
       if (spot === undefined) continue;
-      add(spot, gap === GAP ? BESIDE : 2);
+      add(spot, gap === GAP ? 1 : 2);
       added = true;
     }
     if (added) break;
@@ -525,9 +557,18 @@ function apart(wiring: Wiring, item: Bundle, line: Line, which: Which): Line {
   const side = sideOf(which, line),
     [low, high] = range(item[which], side),
     others = othersOn(wiring, item, sideKey(item, which, line));
-  if (!others.length || line.points.length < 3) return line;
+  if (!others.length || line.points.length < 3 || item.pins[which]) return line;
   const moving: Moving = { item, line, which, others, met: 0 };
   const start = endAt(which, line);
+  // A free port first, the nearest one; then the nearest free spot.
+  const ports = inRange(item[which], side, portsAlong(item[which].box, side)).toSorted(
+    (p, q) => Math.abs(p - start) - Math.abs(q - start),
+  );
+  for (const spot of ports) {
+    if (!endFree(moving, spot, GAP, true)) continue;
+    if (Math.abs(spot - start) < 1) return line;
+    if (passes(wiring, moving, spot)) return { ...line, points: movedEnd(moving, spot) };
+  }
   for (const [gap, circle] of SQUEEZES)
     for (const spot of outward(start, towardOther(item, which, side, start), low, high)) {
       if (!endFree(moving, spot, gap, circle)) continue;
@@ -640,6 +681,7 @@ function cheapest(wiring: Wiring, item: Bundle, count: number): Priced[] {
     spotsOf(wiring, item),
     item.half,
   )
+    .filter((line) => pinnedBy(item, line))
     .map((line) => ({ line, cost: plain(wiring, item, line) }))
     .toSorted((p, q) => p.cost - q.cost))
     consider(found, count, line, cost, scope);
@@ -658,7 +700,10 @@ function considerDetours(wiring: Wiring, item: Bundle, found: Priced[], count: n
   for (const window of [home ? grow(home, 16) : windowOf(item, 180), undefined]) {
     const wide = scopeOf(wiring.field, item.traveller, window),
       { blocked, terrain } = terrainOf(wide),
-      way = detour(item.a.box, item.b.box, blocked, terrain);
+      way = detour(item.a.box, item.b.box, blocked, {
+        ...terrain,
+        ports: [item.pins.a, item.pins.b],
+      });
     if (!way) continue;
     // It leaves and enters at the middle of a side: beside the wire ends that lie there already.
     const spread = apart(wiring, item, apart(wiring, item, way, "a"), "b");
@@ -819,8 +864,10 @@ function layAll(wiring: Wiring, bundles: Map<string, Bundle>) {
     alone.set(item, cheapest(wiring, item, 1)[0]);
   }
   const direct = (item: Bundle) => +(alone.get(item)!.line.points.length === 2);
+  // Wires pinned to their ports lie first: the others keep off the ports they hold.
+  const pinned = (item: Bundle) => +!!(item.pins.a || item.pins.b);
   const queue = [...bundles.values()].toSorted(
-    (p, q) => direct(q) - direct(p) || span(p) - span(q),
+    (p, q) => pinned(q) - pinned(p) || direct(q) - direct(p) || span(p) - span(q),
   );
   wiring.queue = queue;
   for (let index = 0; index < queue.length; index++) {

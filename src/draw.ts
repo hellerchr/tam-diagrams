@@ -26,7 +26,7 @@ export interface DiagramColors {
   series: string[];
   font: string;
   dark: boolean;
-  /** Connections bend round at their corners, as draw.io rounds them; square corners without it. */
+  /** Connections bend round at their corners, as draw.io rounds them, as `%% @corners round` does. */
   rounded?: boolean;
 }
 
@@ -157,8 +157,9 @@ export function drawScene(
   const { line, boundary, ink } = painter;
   const lineColors = { ink, line, boundary };
   const shapeSvg = (shape: SceneShape) => drawShape(painter, shape);
-  /** A wire's path: a polyline, its corners bent round when the colors ask for it. */
-  const wirePath = (points: Point[]) => (colors.rounded ? roundedPath(points) : polyline(points));
+  /** A wire's path: a polyline, its corners bent round when the source or the colors ask for it. */
+  const wirePath = (points: Point[]) =>
+    scene.rounded || colors.rounded ? roundedPath(points) : polyline(points);
 
   // Paint order: containers outside-in, lines, wires, leaves, markers, text on top.
   const parts = [

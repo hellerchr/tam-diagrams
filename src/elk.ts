@@ -5,7 +5,13 @@ import type { Box, Point } from "./scene.ts";
 import type { Geometry } from "./route.ts";
 import { straighten } from "./route-straighten.ts";
 import { balanceElements, spreadJogs } from "./route-spread.ts";
-import { alignLayers, centerElements, centerEnds, centerFans, centerWires } from "./route-center.ts";
+import {
+  alignLayers,
+  centerElements,
+  centerEnds,
+  centerFans,
+  centerWires,
+} from "./route-center.ts";
 
 /**
  * Layered graph layout with ELK for every graph-shaped diagram type, handling ELK's quirks the way
@@ -28,9 +34,13 @@ export type ElkLayout = (graph: ElkNode) => Promise<ElkNode>;
 
 let inProcess: Promise<ElkLayout> | undefined;
 
-/** ELK running in-process (elkjs's bundled build, loaded on first use): the default layout. */
+/**
+ * ELK running in-process (elkjs's bundled build, loaded on first use): the default layout. Node
+ * hands the CommonJS module over as `default.default`, a bundler (the editor's worker) as `default`.
+ */
 export const bundledElk = () =>
-  (inProcess ??= import("elkjs/lib/elk.bundled.js").then(({ default: ELK }) => {
+  (inProcess ??= import("elkjs/lib/elk.bundled.js").then(({ default: module }) => {
+    const ELK = (module as typeof module & { default?: typeof module }).default ?? module;
     const elk = new ELK();
     return (graph) => elk.layout(graph);
   }));

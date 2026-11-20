@@ -59,7 +59,8 @@ export function pin(source: string, scene: Scene, measure: Measure): string {
   }
   const placed = place(source, places);
   // Leaves that came out smaller move to the middle of where they were, and their copies with them.
-  const again = elementBoxes(parseTam(placed), layoutPlaced(parseTam(placed), measure));
+  // Only the boxes are read, which the wires never move: a draft of them will do.
+  const again = elementBoxes(parseTam(placed), layoutPlaced(parseTam(placed), measure, true));
   for (const [id, box] of again) {
     const was = drawn.get(id)!,
       at = places.get(id)!;

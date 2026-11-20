@@ -1,6 +1,6 @@
 # Activity diagram guide
 
-<!-- Written by guideMarkdown in editor/reference.ts: change the guide there, not here. -->
+<!-- Written by guideMarkdown in src/guide-text.ts from src/reference.ts: change the guide there, not here. -->
 
 Actions and control flow: decision, merge, fork, join, initial and final nodes, and lanes for the agents responsible.
 

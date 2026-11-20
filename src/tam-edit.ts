@@ -22,6 +22,7 @@ import {
   type TamNode,
 } from "./tam.ts";
 import type { Direction } from "./elk.ts";
+import { type Port, portText } from "./tam-ports.ts";
 
 /** The kinds of elements a source declares. */
 export type ElementKind = (typeof ELEMENT_KINDS)[number];
@@ -151,9 +152,16 @@ function writeConnection(connection: Connection): string {
   return writeLink(connection) + labelPlace(connection.labelAt);
 }
 
+/** A connection's ends as its statement writes them: each id with the port it takes (tam-ports.ts). */
+const endsOf = (connection: Connection) => [
+  connection.from + portText(connection.fromPort),
+  connection.to + portText(connection.toPort),
+];
+
 /** A connection as a statement, without the place of its label. */
 function writeLink(connection: Connection): string {
-  const { from, to, word } = connection,
+  const { word } = connection,
+    [from, to] = endsOf(connection),
     { label, protocol, at } = wireTexts(connection);
   if (word === "anchor") return `${from} -.- ${to}`;
   if (word === "dependency") return `${from} -. ${label ?? "use"} .-> ${to}`;
@@ -173,7 +181,8 @@ function wireTexts(connection: Connection) {
 
 /** A connection with an arrowhead and a word: an access, a call, a request, a socket's line. */
 function writeArrow(connection: Connection): string {
-  const { from, to, word, both } = connection,
+  const { word, both } = connection,
+    [from, to] = endsOf(connection),
     { label, at } = wireTexts(connection);
   if (word === "requires") return `${from} -- requires${label ? ` ${label}` : ""}${at} --> ${to}`;
   return `${from} ${both ? "<--" : "--"} ${word}${label ? `: ${label}` : ""}${at} --> ${to}`;
@@ -576,10 +585,15 @@ export function fitConnection(
  */
 export function connect(source: string, from: string, to: string, change: Wording = {}): string {
   const diagram = parseTam(source),
-    lines = linesOf(source);
-  const connection: Connection = change.word
-    ? { from, to, word: change.word, both: false, ...change }
-    : { ...defaultConnection(diagram, from, to), ...change };
+    lines = linesOf(source),
+    { fromPort, toPort, ...wording } = change;
+  const connection: Connection = wording.word
+    ? { from, to, word: wording.word, both: false, ...wording }
+    : { ...defaultConnection(diagram, from, to), ...wording };
+  // The ports go with their elements, where the fitting word turned the connection round.
+  const turned = connection.from !== from;
+  connection.fromPort = turned ? toPort : fromPort;
+  connection.toPort = turned ? fromPort : toPort;
   // A note written without an id (`note [text]`) gets one, so a line can name it.
   for (const end of ["from", "to"] as const) {
     const node = declared(diagram, connection[end]),
@@ -603,6 +617,9 @@ export interface ConnectionChange {
   /** Another element at an end. */
   from?: string;
   to?: string;
+  /** The port an end takes (tam-ports.ts); null: the layout chooses. An end at another element leaves its port. */
+  fromPort?: Port | null;
+  toPort?: Port | null;
 }
 
 /** Changes one connection; a statement that holds several is written out as one line each. */
@@ -610,10 +627,15 @@ export function setConnection(source: string, edge: string, change: ConnectionCh
   const lines = linesOf(source),
     found = findConnection(parseTam(source), lines, edge);
   if (!found) return source;
-  const { reverse, ...rest } = change,
+  const { reverse, fromPort, toPort, ...rest } = change,
     old = found.connections[found.index];
   const next: Connection = { ...old, ...rest };
-  if (reverse) [next.from, next.to] = [old.to, old.from];
+  if (reverse)
+    [next.from, next.to, next.fromPort, next.toPort] = [old.to, old.from, old.toPort, old.fromPort];
+  if (next.from !== (reverse ? old.to : old.from)) next.fromPort = undefined;
+  if (next.to !== (reverse ? old.from : old.to)) next.toPort = undefined;
+  if (fromPort !== undefined) next.fromPort = fromPort ?? undefined;
+  if (toPort !== undefined) next.toPort = toPort ?? undefined;
   if (next.word !== "calls" && next.word !== "sends data") next.both = false;
   fitWord(next, old, change.label !== undefined);
   rewrite(
@@ -717,8 +739,9 @@ function renameIn(lines: string[], index: number, id: string, next: string) {
 function renamedEnds(line: string, connection: Connection, id: string, next: string) {
   const [left, ...rest] = line.split(/(?=\s(?:<--|--|-\.|---))/),
     tail = rest.join("");
+  // Not a port's letter behind a colon (`a:R`), which names no element.
   const renamed = (text: string) =>
-    text.replace(new RegExp(`(^|[^\\w])${id}(?![\\w])`, "g"), `$1${next}`);
+    text.replace(new RegExp(`(^|[^\\w:])${id}(?![\\w])`, "g"), `$1${next}`);
   const end = tail.match(/(-->|---|\.->|-\.-)\s*\w+(?:\s+@\s*[-+\d.]+\s*,\s*[-+\d.]+)?\s*(%%.*)?$/);
   if (!end || left === undefined) return undefined;
   const at = tail.lastIndexOf(end[0]) + end[1].length;

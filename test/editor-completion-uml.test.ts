@@ -3,7 +3,8 @@ import { CompletionContext } from "@codemirror/autocomplete";
 import { EditorState } from "@codemirror/state";
 import type { Known } from "../editor/completion.ts";
 import { completeSource, idsOf } from "../editor/completion-uml.ts";
-import { typeOf, TYPES } from "../editor/types.ts";
+import { TYPES } from "../editor/diagram/diagram-types.ts";
+import { typeOf } from "../editor/types.ts";
 
 /** The options at the `|` of a text, or at its end; the type is the one its header says. */
 const options = (text: string, explicit = false, known: Known[] = []) => {
@@ -60,10 +61,10 @@ describe("completing the first line of a source", () => {
 
   it("knows every type the editor has", () => {
     for (const info of TYPES) {
-      if (info.type === "tam") continue;
-      expect(HEADERS, info.type).toContain(info.starter.split(/\s/)[0]);
+      if (info.kind === "tam") continue;
+      expect(HEADERS, info.kind).toContain(info.starter.split(/\s/)[0]);
       // The elements of a starter are found in its text.
-      expect(idsOf(info.type, info.starter).length, info.type).toBeGreaterThan(2);
+      expect(idsOf(info.kind, info.starter).length, info.kind).toBeGreaterThan(2);
     }
   });
 });

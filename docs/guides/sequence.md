@@ -1,6 +1,6 @@
 # Sequence diagram guide
 
-<!-- Written by guideMarkdown in editor/reference.ts: change the guide there, not here. -->
+<!-- Written by guideMarkdown in src/guide-text.ts from src/reference.ts: change the guide there, not here. -->
 
 Messages between the lifelines of agents, ordered in time.
 

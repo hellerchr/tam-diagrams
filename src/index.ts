@@ -33,9 +33,10 @@ import { placedLayout, placeScene } from "./uml-placed.ts";
 import { layoutUseCaseDiagram } from "./uml-usecase-layout.ts";
 import { parseErDiagram } from "./uml-er.ts";
 import { layoutErDiagram } from "./uml-er-layout.ts";
+import { titleHidden, withSourceCorners } from "./title-mark.ts";
 
 export { SourceError } from "./source-error.ts";
-export { parseTam, TamError, type TamDiagram } from "./tam.ts";
+export { isPlaced, parseTam, TamError, type TamDiagram } from "./tam.ts";
 export { renderTam, type TamPicture } from "./tam-layout.ts";
 export { detectUml, UmlError, type UmlKind } from "./uml.ts";
 export { drawScene, type DiagramColors } from "./draw.ts";
@@ -81,6 +82,10 @@ export interface ParsedUml {
   layout(measure: Measure, layout?: ElkLayout): Promise<Scene>;
 }
 
+/** A parsed diagram as it lays out: without its title when the source hides it (title-mark.ts). */
+const drawnTitle = <T extends { title?: string }>(source: string, diagram: T): T =>
+  titleHidden(source) ? { ...diagram, title: undefined } : diagram;
+
 /** What each diagram type is called: the SVG's description when the source has no title. */
 const UML_NAMES: Record<UmlKind, string> = {
   class: "Class diagram",
@@ -117,16 +122,17 @@ export function parseUml(source: string): ParsedUml {
   };
 }
 
-/** A source parsed for its automatic layout. */
+/** A source parsed for its automatic layout; one that hides its title lays out without it (title-mark.ts). */
 function parseAutomatic(source: string): ParsedUml {
   const kind = detectUml(source);
+  const drawn = <T extends { title?: string }>(diagram: T) => drawnTitle(source, diagram);
   switch (kind) {
     case "class": {
       const diagram = parseClassDiagram(source);
       return {
         kind,
         title: diagram.title,
-        layout: (measure, layout) => layoutClassDiagram(diagram, measure, { layout }),
+        layout: (measure, layout) => layoutClassDiagram(drawn(diagram), measure, { layout }),
       };
     }
     case "usecase": {
@@ -134,7 +140,7 @@ function parseAutomatic(source: string): ParsedUml {
       return {
         kind,
         title: diagram.title,
-        layout: (measure) => layoutUseCaseDiagram(diagram, measure),
+        layout: (measure) => layoutUseCaseDiagram(drawn(diagram), measure),
       };
     }
     case "state": {
@@ -142,7 +148,7 @@ function parseAutomatic(source: string): ParsedUml {
       return {
         kind,
         title: diagram.title,
-        layout: (measure, layout) => layoutStateDiagram(diagram, measure, { layout }),
+        layout: (measure, layout) => layoutStateDiagram(drawn(diagram), measure, { layout }),
       };
     }
     case "sequence": {
@@ -150,7 +156,7 @@ function parseAutomatic(source: string): ParsedUml {
       return {
         kind,
         title: diagram.title,
-        layout: (measure) => layoutSequenceDiagram(diagram, measure, readPlaces(source)),
+        layout: (measure) => layoutSequenceDiagram(drawn(diagram), measure, readPlaces(source)),
       };
     }
     case "er": {
@@ -158,7 +164,7 @@ function parseAutomatic(source: string): ParsedUml {
       return {
         kind,
         title: diagram.title,
-        layout: (measure, layout) => layoutErDiagram(diagram, measure, { layout }),
+        layout: (measure, layout) => layoutErDiagram(drawn(diagram), measure, { layout }),
       };
     }
     case "swimlane": {
@@ -167,7 +173,7 @@ function parseAutomatic(source: string): ParsedUml {
       return {
         kind,
         title: chart.title,
-        layout: (measure) => layoutSwimlanes(chart, measure, lanes),
+        layout: (measure) => layoutSwimlanes(drawn(chart), measure, lanes),
       };
     }
     case "flowchart": {
@@ -175,7 +181,7 @@ function parseAutomatic(source: string): ParsedUml {
       return {
         kind,
         title: chart.title,
-        layout: (measure, layout) => layoutFlowchart(chart, measure, { layout }),
+        layout: (measure, layout) => layoutFlowchart(drawn(chart), measure, { layout }),
       };
     }
     case null:
@@ -219,7 +225,12 @@ export async function renderUml(
     : cachedLayout(`uml\u0000${colors.font}\u0000${source}`, () =>
         parsed.layout(textMeasure(colors.font), options.layout),
       ));
-  return picture(scene, colors, parsed.title || UML_NAMES[parsed.kind], parsed.kind);
+  return picture(
+    withSourceCorners(scene, source),
+    colors,
+    parsed.title || UML_NAMES[parsed.kind],
+    parsed.kind,
+  );
 }
 
 /** A class diagram drawn in one view of an interactive viewer, with what hit tests need. */
@@ -244,7 +255,7 @@ export async function renderClassView(
 ): Promise<ClassPicture> {
   const full = parseClassDiagram(source);
   const shown = view ?? overview(full);
-  const diagram = foldClassDiagram(full, shown);
+  const diagram = drawnTitle(source, foldClassDiagram(full, shown));
   const key = [
     "uml-class-view",
     colors.font,
@@ -265,7 +276,7 @@ export async function renderClassView(
     ? laidOut(options.measure)
     : cachedLayout(key, () => laidOut(textMeasure(colors.font))));
   return {
-    ...picture(scene, colors, full.title || UML_NAMES.class, "class"),
+    ...picture(withSourceCorners(scene, source), colors, full.title || UML_NAMES.class, "class"),
     diagram,
     view: shown,
     all: { collapsed: new Set(), bare: new Set() },

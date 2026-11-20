@@ -3,6 +3,8 @@
 import type { Direction } from "./elk.ts";
 import { SourceError } from "./source-error.ts";
 import { expandMultiples, rowDots, rowPointers } from "./tam-rows.ts";
+import { titleHidden } from "./title-mark.ts";
+import { PORT, type Port, splitEnd } from "./tam-ports.ts";
 import { rejectUnsupported } from "./uml-header.ts";
 
 /**
@@ -86,12 +88,17 @@ export interface TamEdge {
   aside?: boolean;
   /** Where the source places the label: its middle's offset from the middle of the line (`@+dx,-dy`). */
   labelAt?: { x: number; y: number };
+  /** The ports its ends take where the source names them (`a:R -- calls --> b:L1`, tam-ports.ts). */
+  sourcePort?: Port;
+  targetPort?: Port;
   line: number;
 }
 
 /** A parsed TAM source: its elements by id, the top-level ones in order, and the connections. */
 export interface TamDiagram {
   title?: string;
+  /** The source says `%% @title hidden`: the title draws no heading (title-mark.ts). */
+  titleHidden?: boolean;
   direction: Direction;
   level?: "conceptual" | "design";
   nodes: Map<string, TamNode>;
@@ -193,7 +200,7 @@ const KEYWORDS: Record<string, string> = {
   import: "import",
 };
 
-const ENDS = new RegExp(`^${ID}(?:\\s*&\\s*${ID})*$`);
+const ENDS = new RegExp(`^${ID}(?:${PORT})?(?:\\s*&\\s*${ID}(?:${PORT})?)*$`);
 
 const MAX_TAM_CHARS = 20_000;
 
@@ -267,6 +274,7 @@ export function parseTam(source: string): TamDiagram {
   expandMultiples(diagram, parsing.multiples);
   rowDots(diagram);
   rowPointers(diagram);
+  if (titleHidden(source)) diagram.titleHidden = true;
   return diagram;
 }
 
@@ -579,7 +587,11 @@ function connectionFields(
   checkWord(diagram, word, a, b, protocol, line, both);
   checkEnds(diagram, word, a, b, line);
   // checkWord has settled which kinds of elements each word connects.
-  return edgeFields(entry, a, b);
+  return {
+    ...edgeFields(entry, a, b),
+    ...(entry.fromPort ? { sourcePort: entry.fromPort } : {}),
+    ...(entry.toPort ? { targetPort: entry.toPort } : {}),
+  };
 }
 
 /** Nested elements share their container's connections; packages connect only through dependencies. */
@@ -717,6 +729,9 @@ export type Connection = {
   protocol?: string;
   /** Where its label stands: the offset of the label's middle from the middle of the line. */
   labelAt?: { x: number; y: number };
+  /** The ports its ends take, where it names them (tam-ports.ts). */
+  fromPort?: Port;
+  toPort?: Port;
 };
 
 /**
@@ -740,9 +755,20 @@ export function readConnections(text: string, line: number): Connection[] | null
   split.links.forEach((link, index) => {
     const { word, label, protocol } = readLink(link, line),
       both = link[1] === "<--";
-    for (const from of split.ends[index])
-      for (const to of split.ends[index + 1])
-        connections.push({ from, to, word, both, label, protocol });
+    for (const a of split.ends[index])
+      for (const b of split.ends[index + 1]) {
+        const [from, to] = [splitEnd(a), splitEnd(b)];
+        connections.push({
+          from: from.id,
+          to: to.id,
+          word,
+          both,
+          label,
+          protocol,
+          ...(from.port ? { fromPort: from.port } : {}),
+          ...(to.port ? { toPort: to.port } : {}),
+        });
+      }
   });
   // A label's place names one label: the statement says one connection.
   if (labelAt) {

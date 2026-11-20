@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
 import { type CliIo, main } from "../cli/main.ts";
-import { guideText } from "../editor/reference.ts";
+import { guideText } from "../src/guide-text.ts";
 
 const TAM = "agent web[Web Server]\nstorage db[Orders]\nweb -- reads/writes --> db";
 const BAD_TAM = "agent a\nagent b\nx -- reads --> a";

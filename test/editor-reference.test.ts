@@ -2,7 +2,7 @@
 // source pane completes, and the pages under docs/guides are what the guides write.
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { type Completion, CompletionContext } from "@codemirror/autocomplete";
 import { EditorState } from "@codemirror/state";
 import { arialMeasure } from "../src/arial-measure.ts";
@@ -14,14 +14,17 @@ import {
   type GuideRow,
   type GuideSection,
   GUIDES,
-  guideMarkdown,
   guideOf,
-  guideText,
   rowSource,
-} from "../editor/reference.ts";
-import { type GuideHost, GuideSheet } from "../editor/reference-dialog.ts";
+} from "../src/reference.ts";
+import { guideMarkdown, guideText } from "../src/guide-text.ts";
 import { scanSource } from "../editor/syntax.ts";
-import { type DiagramType, sameType, TYPES, typeOf } from "../editor/types.ts";
+import { TYPES } from "../editor/diagram/diagram-types.ts";
+import { type DiagramType, typeOf } from "../editor/types.ts";
+
+/** Whether two types share a guide: an activity diagram with lanes is one. */
+const sameType = (a: string, b: string) =>
+  a === b || [a, b].every((type) => type === "flowchart" || type === "swimlane");
 
 const parse = (guide: Guide, source: string) =>
   guide.type === "tam" ? parseTam(source) : parseUml(source);
@@ -35,7 +38,9 @@ const rowsOf = (guide: Guide): [GuideSection, GuideRow][] =>
 describe("the guides", () => {
   it("has one for every diagram type of the editor", () => {
     expect(GUIDES.map((guide) => guide.type).toSorted()).toEqual(
-      TYPES.map((info) => info.type).toSorted(),
+      TYPES.map((info) => info.kind)
+        .filter((kind) => kind !== "swimlane")
+        .toSorted(),
     );
   });
 
@@ -304,175 +309,4 @@ describe("the guides as pages", () => {
       expect(tokens(text)).toBeLessThan(tokens(guideMarkdown(type)) * 0.85);
     },
   );
-});
-
-describe("the guide sheet", () => {
-  /** A sheet in the page, with what it asked of its host. */
-  const sheetOf = (type: DiagramType) => {
-    const asked: string[] = [];
-    const host: GuideHost = {
-      type: () => type,
-      insert: (text) => asked.push(`insert ${text}`),
-      example: (source) => asked.push(`example ${source.split("\n")[0]}`),
-      notify: (message) => asked.push(`notify ${message}`),
-      shown: (open) => asked.push(open ? "open" : "closed"),
-    };
-    const sheet = new GuideSheet(host);
-    document.body.append(sheet.element);
-    return { sheet, asked };
-  };
-  const all = (sheet: GuideSheet, selector: string) => [
-    ...sheet.element.querySelectorAll<HTMLElement>(selector),
-  ];
-  const shown = (sheet: GuideSheet, selector: string) =>
-    all(sheet, selector).filter((item) => !item.hidden && !item.closest("[hidden]"));
-  const press = (target: HTMLElement, key: string) =>
-    target.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }));
-  const type = (sheet: GuideSheet, text: string) => {
-    const field = sheet.element.querySelector("input")!;
-    field.value = text;
-    field.dispatchEvent(new Event("input"));
-    return field;
-  };
-
-  afterEach(() => document.body.replaceChildren());
-
-  it.each(GUIDES.map((guide) => [guide.type, guide] as const))(
-    "%s: shows every section, with a link to each, and the code as it is written",
-    (_, guide) => {
-      const { sheet } = sheetOf(guide.type);
-      sheet.open();
-      expect(sheet.type).toBe(guide.type);
-      expect(all(sheet, "section").map((item) => item.id)).toEqual(
-        guide.sections.map((section) => `guide-${section.id}`),
-      );
-      expect(all(sheet, ".guide-link").length).toBe(guide.sections.length);
-      // Coloring leaves every character of a row and of the example where it was.
-      expect(all(sheet, ".guide-row > code").map((item) => item.textContent)).toEqual(
-        rowsOf(guide).map(([, item]) => item.write),
-      );
-      expect(sheet.element.querySelector(".guide-example code")!.textContent).toBe(
-        guide.sections.find((section) => section.id === "example")!.example,
-      );
-      expect(sheet.element.querySelector(".guide-example .tok-keyword")).not.toBeNull();
-    },
-  );
-
-  it("opens the guide of the diagram on show, takes the focus and gives it back", () => {
-    const { sheet, asked } = sheetOf("state");
-    const before = document.body.appendChild(document.createElement("button"));
-    before.focus();
-    expect(sheet.isOpen).toBe(false);
-    sheet.toggle();
-    expect([sheet.isOpen, sheet.type]).toEqual([true, "state"]);
-    expect(document.activeElement).toBe(sheet.element.querySelector("input"));
-    // The same key closes it; Escape does too.
-    sheet.toggle();
-    expect(sheet.isOpen).toBe(false);
-    expect(document.activeElement).toBe(before);
-    sheet.open("class");
-    expect(sheet.type).toBe("class");
-    // Another guide than the diagram's is on show: the key brings the diagram's.
-    sheet.toggle();
-    expect(sheet.type).toBe("state");
-    press(document.activeElement as HTMLElement, "Escape");
-    expect(sheet.isOpen).toBe(false);
-    expect(asked).toEqual(["open", "closed", "open", "closed"]);
-  });
-
-  it("lists all guides, and opens the one that is picked", () => {
-    const { sheet } = sheetOf("tam");
-    sheet.open("all");
-    expect(sheet.type).toBeUndefined();
-    const entries = all(sheet, ".guide-entry");
-    expect(entries.map((entry) => entry.querySelector("strong")!.textContent)).toEqual(
-      GUIDES.map((guide) => guide.name),
-    );
-    expect(shown(sheet, "input")).toEqual([]);
-    entries[2].click();
-    expect(sheet.type).toBe(GUIDES[2].type);
-    expect(shown(sheet, "input").length).toBe(1);
-  });
-
-  it("narrows the rows to what the filter says, across the sections", () => {
-    const { sheet } = sheetOf("tam");
-    sheet.open();
-    const rows = shown(sheet, ".guide-row").length;
-    const field = type(sheet, "protocol");
-    const left = shown(sheet, ".guide-row");
-    expect(left.length).toBeGreaterThan(3);
-    expect(left.length).toBeLessThan(rows / 4);
-    for (const item of left) expect(item.dataset.text).toContain("protocol");
-    expect(shown(sheet, "section").length).toBeGreaterThan(2);
-    expect(sheet.element.querySelector(".guide-count")!.textContent).toBe(`${left.length} rows`);
-    // Every word is asked for; a section's title brings the whole section.
-    type(sheet, "calls bidirectional");
-    expect(shown(sheet, ".guide-row").map((item) => item.dataset.text!.split("\n")[0])).toEqual([
-      "a <-- calls --> b",
-    ]);
-    type(sheet, "dependencies");
-    expect(shown(sheet, ".guide-row").length).toBe(3);
-    type(sheet, "no such thing");
-    expect(shown(sheet, "section")).toEqual([]);
-    expect(sheet.element.querySelector(".guide-count")!.textContent).toBe("Nothing");
-    // Escape clears the filter first, and closes the sheet then.
-    press(field, "Escape");
-    expect([sheet.isOpen, field.value, shown(sheet, ".guide-row").length]).toEqual([
-      true,
-      "",
-      rows,
-    ]);
-    press(field, "Escape");
-    expect(sheet.isOpen).toBe(false);
-  });
-
-  it("goes from row to row by the arrow keys, and writes a row into the source by Enter", () => {
-    const { sheet, asked } = sheetOf("tam");
-    sheet.open();
-    const field = sheet.element.querySelector("input")!,
-      rows = shown(sheet, ".guide-row");
-    // One row is the stop of Tab.
-    expect(rows.filter((item) => item.tabIndex === 0)).toEqual([rows[0]]);
-    press(field, "ArrowDown");
-    expect(document.activeElement).toBe(rows[0]);
-    press(rows[0], "ArrowDown");
-    expect(document.activeElement).toBe(rows[1]);
-    expect(rows.filter((item) => item.tabIndex === 0)).toEqual([rows[1]]);
-    press(rows[1], "End");
-    expect(document.activeElement).toBe(rows.at(-1));
-    press(rows.at(-1)!, "Home");
-    press(rows[0], "ArrowUp");
-    expect(document.activeElement).toBe(field);
-    asked.length = 0;
-    press(rows[0], "Enter");
-    expect(asked).toEqual(["insert title Order system"]);
-    // A row the parser refuses, and a sign on its own, are not written.
-    press(sheet.element.querySelector<HTMLElement>(".refused .guide-row")!, "Enter");
-    expect(asked.length).toBe(1);
-    expect(
-      all(sheet, ".refused .guide-acts button").every((item) => item.dataset.tip === "Copy"),
-    ).toBe(true);
-    // A key pressed in the sheet does not reach the canvas.
-    let reached = 0;
-    const count = () => reached++;
-    window.addEventListener("keydown", count);
-    press(rows[0], "Delete");
-    window.removeEventListener("keydown", count);
-    expect(reached).toBe(0);
-  });
-
-  it("writes only into a diagram of the guide's type, and hands the example to the window", () => {
-    const { sheet, asked } = sheetOf("class");
-    sheet.open("state");
-    asked.length = 0;
-    press(shown(sheet, ".guide-row")[0], "Enter");
-    expect(asked).toEqual([
-      "notify This is state machine diagram syntax; the diagram on show is a class diagram.",
-    ]);
-    const open = all(sheet, ".guide-example button").find(
-      (item) => item.textContent === "Open as diagram",
-    )!;
-    open.click();
-    expect(asked.at(-1)).toBe("example stateDiagram-v2");
-  });
 });

@@ -6,6 +6,7 @@
 
 import { type Box, centerOf, grow, type Point, segmentHits, simplifyPath } from "./scene.ts";
 import { type Side, sidePoint } from "./tam-placed.ts";
+import { type Port, portAlong } from "./tam-ports.ts";
 
 /** A wire's line from one element to another, and the sides it leaves and enters by. */
 export interface Line {
@@ -45,6 +46,8 @@ export interface Terrain {
   sides?: [Record<Side, string>, Record<Side, string>];
   /** Half of the room the wire takes across: it passes everything that much further out. */
   half?: number;
+  /** The ports the line leaves `a` and enters `b` by, where its connection names them (tam-ports.ts). */
+  ports?: [Port | undefined, Port | undefined];
 }
 
 /** Which way a side faces along its axis: down and right count up. */
@@ -207,10 +210,10 @@ interface Near {
   wires: Run[];
 }
 
-/** Where a line leaves an element by a side: `on` the middle of the side, `out` PASS out from there. */
-function gatePoints(box: Box, side: Side, pass: number) {
+/** Where a line leaves an element by a side: `on` the middle of the side (or `along` it), `out` PASS out from there. */
+function gatePoints(box: Box, side: Side, pass: number, along?: number) {
   const center = centerOf(box),
-    on = sidePoint(box, side, side === "top" || side === "bottom" ? center.x : center.y),
+    on = sidePoint(box, side, along ?? (side === "top" || side === "bottom" ? center.x : center.y)),
     move = STEPS[SIDES.indexOf(side)];
   return { on, out: { x: on.x + move.x * pass, y: on.y + move.y * pass } };
 }
@@ -306,6 +309,7 @@ class Search {
         box[pos] - pass,
         box[pos] - tight,
         centerOf(box)[pos],
+        ...this.portLine(box, pos),
         box[pos] + box[size] + tight,
         box[pos] + box[size] + pass,
       ]),
@@ -324,6 +328,25 @@ class Search {
         ),
       ],
     );
+  }
+
+  /** The port an end is pinned to: the line leaves or enters by it alone. */
+  private portOf(box: Box): Port | undefined {
+    const ports = this.terrain.ports;
+    return box === this.a ? ports?.[0] : box === this.b ? ports?.[1] : undefined;
+  }
+
+  /** Where along a side a line leaves or enters an end: at its port, else the middle (undefined). */
+  private alongOf(box: Box, side: Side): number | undefined {
+    const port = this.portOf(box);
+    return port?.side === side ? portAlong(box, port) : undefined;
+  }
+
+  /** The line of the grid along one axis through an end's port, which its gate needs. */
+  private portLine(box: Box, pos: "x" | "y"): number[] {
+    const port = this.portOf(box);
+    if (!port || (port.side === "top" || port.side === "bottom") !== (pos === "x")) return [];
+    return [portAlong(box, port)];
   }
 
   /** Readies the grid for the search: what each of its lines meets, and no cost found yet. */
@@ -427,9 +450,11 @@ class Search {
     return tolls[key];
   }
 
-  /** Where a line leaves an element by a side: PASS out from the side's middle, on the grid. */
+  /** Where a line leaves an element by a side: PASS out from its middle (or the port it is pinned to), on the grid. */
   gate(box: Box, side: Side) {
-    const { on, out } = gatePoints(box, side, this.pass);
+    const port = this.portOf(box);
+    if (port && port.side !== side) return undefined;
+    const { on, out } = gatePoints(box, side, this.pass, this.alongOf(box, side));
     const i = this.column.get(Math.round(out.x * 2) / 2),
       j = this.row.get(Math.round(out.y * 2) / 2);
     // The gate is free when only its own element is near.
@@ -450,7 +475,7 @@ class Search {
 
   /** What leaving or entering an element by a gate costs: the piece between the side and the gate. */
   private entry(box: Box, side: Side, key?: string): number {
-    const { on, out } = gatePoints(box, side, this.pass),
+    const { on, out } = gatePoints(box, side, this.pass, this.alongOf(box, side)),
       { home } = this;
     let cost = 0;
     for (const item of this.costly)

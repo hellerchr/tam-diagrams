@@ -1,6 +1,12 @@
+import { svelte } from "@sveltejs/vite-plugin-svelte";
 import { defineConfig } from "vitest/config";
 
-// Run inside the package (`npm test`); repli's own vitest run includes these tests too.
+// Run inside the package (`npm test`): the library's tests in test/, the editor's beside its code.
 export default defineConfig({
-  test: { environment: "jsdom", globals: true, include: ["test/**/*.test.ts"] },
+  plugins: [svelte()],
+  test: {
+    environment: "jsdom",
+    globals: true,
+    include: ["test/**/*.test.ts", "editor/**/*.test.ts"],
+  },
 });

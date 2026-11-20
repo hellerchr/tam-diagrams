@@ -123,12 +123,20 @@ let context: Context | null | undefined,
   current = "";
 
 const cache = new Map<string, Map<string, number>>();
+const measures = new Map<string, Measure>();
 
 /**
- * Canvas text metrics for the diagram font. Where no canvas exists (tests) or the canvas rejects the
- * font, a generous average glyph width keeps labels inside their boxes.
+ * Canvas text metrics for the diagram font, one function per font: layouts kept by measure
+ * (uml-placed.ts) find each other. Where no canvas exists (tests) or the canvas rejects the font, a
+ * generous average glyph width keeps labels inside their boxes.
  */
 export function textMeasure(family: string): Measure {
+  let measure = measures.get(family);
+  if (!measure) measures.set(family, (measure = newMeasure(family)));
+  return measure;
+}
+
+function newMeasure(family: string): Measure {
   if (context === undefined) {
     context = null;
     try {

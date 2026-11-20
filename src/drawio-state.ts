@@ -329,8 +329,8 @@ class StateCells {
           width: 0,
           height: 0,
           relative: true,
-          sourcePoint: shift(points[0]),
-          targetPoint: shift(points[1]),
+          sourcePoint: shift(points[0]!),
+          targetPoint: shift(points[1]!),
         },
         style: { endArrow: "none", startArrow: "none", dashed: 1, html: 1, strokeWidth: 1 },
       },
@@ -592,7 +592,7 @@ function groupKind(drawing: Drawing, group: Cell): Kind {
 function kindOf(drawing: Drawing, vertex: Cell): Kind {
   const role = roleOf(drawing, vertex);
   return role !== undefined && role in ROLE_KINDS
-    ? ROLE_KINDS[role]
+    ? ROLE_KINDS[role]!
     : kindByPicture(drawing, vertex);
 }
 
@@ -900,7 +900,7 @@ class PageReader {
   private readSeparator(path: Point[], role: string | undefined, style: Style, drawn: boolean) {
     if (role !== ROLE.separator && !(dashed(style) && drawn)) return false;
     if (path.length >= 2)
-      this.separators.push({ points: [path[0], path.at(-1)!], role: role === ROLE.separator });
+      this.separators.push({ points: [path[0]!, path.at(-1)!], role: role === ROLE.separator });
     return true;
   }
 
@@ -908,11 +908,11 @@ class PageReader {
   private readRule(path: Point[], style: Style) {
     const [first, last] = [path[0], path.at(-1)!];
     if (hasArrow(style, "start") || hasArrow(style, "end")) return false;
-    if (!isLevel(first, last) || !this.stateHolds(first, last)) return false;
+    if (!isLevel(first!, last) || !this.stateHolds(first!, last)) return false;
     this.rules.push({
-      x: Math.min(first.x, last.x),
-      y: (first.y + last.y) / 2,
-      width: Math.abs(first.x - last.x),
+      x: Math.min(first!.x, last.x),
+      y: (first!.y + last.y) / 2,
+      width: Math.abs(first!.x - last.x),
       height: 0,
     });
     return true;
@@ -1129,7 +1129,7 @@ class PageReader {
       );
     if (boxes.length < 2) boxes = this.cutRegions(composite);
     if (boxes.length < 2) return;
-    composite.regionStart = regionNumber(boxes[0]) || undefined;
+    composite.regionStart = regionNumber(boxes[0]!) || undefined;
     const used = new Set<number>();
     for (const member of composite.members) {
       member.region = nearestRegion(centerOf(member.box), boxes);
@@ -1154,8 +1154,8 @@ class PageReader {
     const cuts = { x: [] as number[], y: [] as number[] };
     for (const { points } of this.separators) {
       const [a, b] = points;
-      if (this.stateAt(centerOf(around([pointBox(a), pointBox(b)]))) !== composite) continue;
-      const cut = cutAcross(a, b, box);
+      if (this.stateAt(centerOf(around([pointBox(a!), pointBox(b!)]))) !== composite) continue;
+      const cut = cutAcross(a!, b!, box);
       if (cut) cuts[cut.along].push(cut.at);
     }
     const along = cuts.x.length >= cuts.y.length ? "x" : "y";
@@ -1165,7 +1165,7 @@ class PageReader {
     return edges.slice(1).map((end, index) => ({
       cell: composite.cell,
       kind: "region" as Kind,
-      box: { ...box, [along]: edges[index], [size]: end - edges[index] },
+      box: { ...box, [along]: edges[index], [size]: end - edges[index]! },
       label: "",
       descriptions: [],
       members: [],
@@ -1241,7 +1241,7 @@ function nearestRegion(middle: Point, regions: Part[]): number {
     );
   let best = 0;
   regions.forEach((region, index) => {
-    if (distance(region.box) < distance(regions[best].box)) best = index;
+    if (distance(region.box) < distance(regions[best]!.box)) best = index;
   });
   return best;
 }
@@ -1278,14 +1278,14 @@ function pathGap(box: Box, path: Point[]): number {
   for (let i = 1; i < path.length; i++) {
     const a = path[i - 1],
       b = path[i];
-    const straight = segmentGap(box, a, b);
+    const straight = segmentGap(box, a!, b!);
     const across = Math.min(
-      segmentGap(box, a, { x: b.x, y: a.y }),
-      segmentGap(box, { x: b.x, y: a.y }, b),
+      segmentGap(box, a!, { x: b!.x, y: a!.y }),
+      segmentGap(box, { x: b!.x, y: a!.y }, b!),
     );
     const down = Math.min(
-      segmentGap(box, a, { x: a.x, y: b.y }),
-      segmentGap(box, { x: a.x, y: b.y }, b),
+      segmentGap(box, a!, { x: a!.x, y: b!.y }),
+      segmentGap(box, { x: a!.x, y: b!.y }, b!),
     );
     best = Math.min(best, straight, across, down);
   }
@@ -1332,7 +1332,7 @@ function directionOf(reader: PageReader): Direction {
   const keys = candidates(
     reader.parts.filter((part) => part.kind === "fork" || part.kind === "join"),
   );
-  return keys.reduce((best, key) => (votes[key] > votes[best] ? key : best), keys[0]);
+  return keys.reduce((best, key) => (votes[key] > votes[best] ? key : best), keys[0]!);
 }
 
 /** The way a transition leads, unless it leads to its own state or into or out of one around it. */
@@ -1389,7 +1389,7 @@ class SourceWriter {
     for (const transition of this.ordered(reader.transitions))
       if (transition.source.id && transition.target.id) this.transition(transition, 1);
     this.writeNotes(order, direction);
-    return this.lines.join("\n") + "\n";
+    return `${this.lines.join("\n")}\n`;
   }
 
   private idOf(part: Part) {
@@ -1658,7 +1658,7 @@ function readPage(drawing: Drawing): Imported {
   }
   const places = new Placer(reader, writer, diagram).places();
   return {
-    source: places.length ? source + places.join("\n") + "\n" : source,
+    source: places.length ? `${source}${places.join("\n")}\n` : source,
     kind: "state",
     warnings: reader.warnings,
   };

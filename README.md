@@ -126,7 +126,7 @@ are offered as the text declares them, before the picture shows them.
 beside the source: its rules, every statement the parser reads, an example, and what is refused,
 with a filter and a click that writes a row into the source. The same guides are the pages under
 [docs/guides](docs/guides); `UPDATE_GUIDES=1 npx vitest run test/editor-reference.test.ts` writes
-them anew from `editor/reference.ts`.
+them anew from `src/reference.ts` (by `src/guide-text.ts`).
 
 The window has a menu bar (File, Edit, View, Arrange, Help) with the document's title, a rail with
 the pointer tools, a left panel (Shapes and Outline), a right panel (Properties above Source, with a
@@ -452,6 +452,10 @@ classDiagram
 | File                         | Contents                                                                             |
 | ---------------------------- | ------------------------------------------------------------------------------------ |
 | `src/index.ts`               | Public API: `renderTam`, `renderUml`, `renderClassView` and the UML type dispatch    |
+| `src/title-mark.ts`          | Marks for the whole diagram: `%% @title hidden`, `%% @corners round`                 |
+| `src/reference.ts`           | The syntax guides of every type as data (`reference-*.ts` hold the sections)         |
+| `src/guide-text.ts`          | The guides as Markdown pages (docs/guides) and as compact text (`guide`)             |
+| `src/examples.ts`            | Example diagrams of every type, for the editor's chooser and guides                  |
 | `src/layout.ts`              | The `tam-diagrams/layout` entry point: building blocks for further diagram types     |
 | `src/tam.ts`                 | TAM block and package diagrams: the parser                                           |
 | `src/tam-rows.ts`            | TAM multiplicity: multiple elements as rows of copies, with dots and pointers        |
@@ -468,6 +472,7 @@ classDiagram
 | `src/tam-placed-detour.ts`   | TAM layout by hand: a wire's way around the elements between its ends                |
 | `src/tam-edit.ts`            | Edits of a TAM source as text: place, add, change, connect, remove, nest, copy       |
 | `src/tam-pin.ts`             | Positions for every element from a layout                                            |
+| `src/tam-ports.ts`           | The ports of a side wires end at, and a connection's end naming one (`api:L25`)      |
 | `src/edit.ts`                | The `tam-diagrams/edit` entry point                                                  |
 | `src/tam-protocols.ts`       | TAM protocol boundaries: dashed lines through the channels of one protocol           |
 | `src/uml.ts`                 | What the UML parsers share: type detection, errors, source preparation, vertex ports |
@@ -483,6 +488,7 @@ classDiagram
 | `src/uml-usecase-label.ts`   | Use case line labels: beside the middle of the line, on the side with room           |
 | `src/uml-places.ts`          | Positions in a Mermaid source as text: read, set, remove, follow an edit             |
 | `src/uml-placed.ts`          | Mermaid types laid out by hand: parts at their places, containers, lanes             |
+| `src/uml-lanes.ts`           | The lanes of an activity read back from its scene: frame, borders and titles         |
 | `src/uml-placed-wires.ts`    | Mermaid types laid out by hand: the wires of moved parts, markers, labels            |
 | `src/scene-tree.ts`          | What holds what in a scene, read from its geometry                                   |
 | `src/uml-activity.ts`        | Flowcharts and activity diagrams: the parser                                         |
@@ -541,42 +547,21 @@ classDiagram
 | `src/drawio-activity.ts`     | Activity diagrams (flowchart, swimlane) as draw.io pages and back                    |
 | `src/drawio-state.ts`        | State machine diagrams as draw.io pages and back                                     |
 | `src/drawio-sequence.ts`     | Sequence diagrams as draw.io pages and back                                          |
-| `editor/document.ts`         | The editor's document: the source, its picture, previews and history                 |
-| `editor/editor.ts`           | Selection, tools, gestures on the canvas and the commands of panels and keyboard     |
-| `editor/gesture.ts`          | The gestures on the canvas from press to release, and when a press becomes one       |
-| `editor/keys.ts`             | The keys of the canvas: which key runs which command, and when keys go elsewhere     |
-| `editor/overlay.ts`          | What is drawn over the picture: hover, selection, handles, a gesture under way       |
-| `editor/placing.ts`          | Where the editor places elements: on the grid, at their size, in room of their own   |
-| `editor/hit.ts`              | What of a picture lies at a point, in a frame, or under a dragged element            |
-| `editor/guides.ts`           | Alignment help: snapping to edges, middles and gaps; align, spread, same size        |
-| `editor/view.ts`             | The canvas: viewport, grid, the picture as an image, and the overlay                 |
-| `editor/ui.ts`               | The window: bar, tool rail, the two panels and what lies over the canvas             |
-| `editor/menus.ts`            | The commands as menus: File, Edit, View, Arrange, Help and the right click           |
-| `editor/menu.ts`             | Popup menus with submenus, ticks, keys and arrow-key movement                        |
-| `editor/palette.ts`          | The Shapes tab: shapes to drag onto the canvas, or snippets for a text diagram       |
-| `editor/outline.ts`          | The Outline tab: the elements as a tree that selects, names and nests                |
-| `editor/inspector.ts`        | The Properties section: what is selected, in groups that keep their order            |
-| `editor/statusbar.ts`        | The status bar: hint, problems, selection, pointer, layout mode, snap, zoom          |
-| `editor/dialogs.ts`          | The chooser of diagram types, the question before a replace, the help sheets         |
-| `editor/reference-dialog.ts` | The guide sheet: a type's reference guide in a panel beside the source               |
-| `editor/minimap.ts`          | The minimap: the whole diagram small, with the part on show framed                   |
-| `editor/tooltip.ts`          | Tooltips with the keys of a control, and why a control is off                        |
-| `editor/dom.ts`              | Elements, icons and icon buttons the panels are built from                           |
-| `editor/types.ts`            | The diagram types: mode, shapes or snippets, starter and examples of each            |
+| `editor/App.svelte`          | The page: the diagram editor, its source in the code pane, the guide and the export  |
+| `editor/main.ts`             | Starts the page: the theme, and the file of `tam-diagrams edit` when it has one      |
+| `editor/history.ts`          | The history of the source: every edit a step, typing within a statement one          |
+| `editor/diagram/`            | The diagram editor in Svelte: bar, rail, Shapes and Outline, canvas, Properties      |
+| `editor/lib/`                | Drawing a source for the canvas, menus and toasts, keys, zoom, the theme on show     |
+| `editor/ui/`                 | The controls the panels are built from: buttons, segments, dialogs, menus            |
+| `editor/styles/`             | Design tokens, the base styles, the light and dark themes and their code colors      |
 | `editor/source.ts`           | The source pane: a code editor with the notation's colors and completions            |
 | `editor/syntax.ts`           | The tokenizer and indent rules of every diagram type's syntax                        |
 | `editor/completion.ts`       | Completion of a block diagram source from its notation                               |
 | `editor/completion-uml.ts`   | Completion of the Mermaid types' sources, and of the header on the first line        |
-| `editor/structures.ts`       | The `Structure` of each type edited by its structure, and the drawings of its pieces |
-| `editor/icons.ts`            | The editor's icons as SVG                                                            |
-| `editor/main.ts`             | The page put together: document, canvas, panels, and the source kept and followed    |
-| `editor/session.ts`          | The diagram on show and its file: open, save, replace, the diagrams shown lately     |
+| `editor/types.ts`            | The type of diagram a source draws                                                   |
 | `editor/served.ts`           | The file of `tam-diagrams edit`: read, and written back in its own format            |
-| `editor/disk.ts`             | The disk as the browser reaches it: file pickers, files written back, downloads      |
-| `editor/exporting.ts`        | The diagram leaving the editor: a picture as SVG or PNG, or a draw.io file           |
-| `editor/theme.ts`            | The look: light and dark colors, which of them shows, rounded connectors             |
+| `editor/disk.ts`             | Downloads, and the message of what was thrown                                        |
 | `editor/storage.ts`          | What the editor remembers across visits, in the browser's local storage              |
-| `editor/follow.ts`           | The view following the edits: it keeps on what an edit changed                       |
 | `editor/starter.ts`          | The diagram a first visit starts with                                                |
 | `editor/files.ts`            | File names, the diagram in an opened file, export backgrounds, recent diagrams       |
 | `rolldown.config.mjs`        | The build: bundles `cli/bin.ts` into `dist/cli.js`, the package's `bin`              |
